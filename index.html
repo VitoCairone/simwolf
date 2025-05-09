@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>SimWolf Isometric Grid</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body, html {
+      height: 100%;
+      overflow: hidden;
+      font-family: sans-serif;
+    }
+
+    #app {
+      display: flex;
+      height: 100%;
+    }
+
+    #sidebar {
+      width: 120px;
+      background: #333;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      padding: 10px;
+    }
+
+    #field-wrapper {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      background-color: #9dd4f3;
+    }
+
+    #field {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 3000px;
+      height: 3000px;
+      transform: translate(0, 0);
+    }
+
+    .tile {
+      position: absolute;
+      width: 100px;
+      height: 100px;
+      background: transparent;
+      border: 2px solid black;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="sidebar">
+      <button>Tool 1</button>
+      <button>Tool 2</button>
+    </div>
+    <div id="field-wrapper">
+      <div id="field"></div>
+    </div>
+  </div>
+
+  <script>
+    const field = document.getElementById("field");
+    const tileSize = 100;
+    const gridWidth = 30;
+    const gridHeight = 30;
+
+    // Create isometric grid
+    for (let y = 0; y < gridHeight; y++) {
+      for (let x = 0; x < gridWidth; x++) {
+        const tile = document.createElement("div");
+        tile.classList.add("tile");
+
+        const isoX = (x - y) * (tileSize / 2) + 1500;
+        const isoY = (x + y) * (tileSize / 4);
+
+        tile.style.left = isoX + "px";
+        tile.style.top = isoY + "px";
+
+        field.appendChild(tile);
+      }
+    }
+
+    let cameraX = 0;
+    let cameraY = 0;
+    const speed = 10;
+    const keysPressed = {};
+
+    function updateCamera() {
+      field.style.transform = `translate(${-cameraX}px, ${-cameraY}px)`;
+    }
+
+    function cameraHasRoom(direction) {
+      const wrapper = document.getElementById("field-wrapper");
+      const wrapperWidth = wrapper.offsetWidth;
+      const wrapperHeight = wrapper.offsetHeight;
+
+      const maxCameraX = field.offsetWidth - wrapperWidth + 3 * tileSize;
+      const maxCameraY = field.offsetHeight - wrapperHeight + 3 * tileSize;
+      const minCameraVal = -3 * tileSize;
+
+      switch (direction) {
+        case 'up':
+          return cameraY >= minCameraVal;
+        case 'down':
+          return cameraY <= 1000; // cameraY <= maxCameraY;
+        case 'left':
+          return cameraX >= minCameraVal;
+        case 'right':
+          return cameraX <= maxCameraX;
+        default:
+          console.log('cameraHasRoom invalid input');
+          return false;
+      }
+    }
+
+    function gameLoop() {
+      if (keysPressed["ArrowUp"] && cameraHasRoom('up')) cameraY -= speed;
+      if (keysPressed["ArrowDown"] && cameraHasRoom('down')) cameraY += speed;
+      if (keysPressed["ArrowLeft"] && cameraHasRoom('left')) cameraX -= speed;
+      if (keysPressed["ArrowRight"] && cameraHasRoom('right')) cameraX += speed;
+
+      updateCamera();
+      requestAnimationFrame(gameLoop);
+    }
+
+    document.addEventListener("keydown", (e) => {
+      keysPressed[e.key] = true;
+    });
+
+    document.addEventListener("keyup", (e) => {
+      keysPressed[e.key] = false;
+    });
+
+    requestAnimationFrame(gameLoop);
+  </script>
+</body>
+</html>
