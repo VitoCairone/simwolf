@@ -3,17 +3,19 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SimWolf Isometric Grid</title>
+  <title>SimWolf</title>
   <style>
     * {
       margin: 0;
       padding: 0;
+      box-sizing: border-box;
     }
 
     body, html {
       height: 100%;
       overflow: hidden;
       font-family: sans-serif;
+      background-color: #222;
     }
 
     #app {
@@ -22,12 +24,29 @@
     }
 
     #sidebar {
-      width: 120px;
+      width: 150px;
       background: #333;
       color: white;
       display: flex;
       flex-direction: column;
+      padding: 15px;
+      gap: 10px;
+      border-right: 2px solid #444;
+    }
+
+    #sidebar button {
       padding: 10px;
+      background-color: #555;
+      color: white;
+      border: 1px solid #666;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 14px;
+      transition: background-color 0.3s;
+    }
+
+    #sidebar button:hover {
+      background-color: #777;
     }
 
     #field-wrapper {
@@ -44,7 +63,7 @@
       width: 3000px;
       height: 3000px;
       will-change: transform;
-      transform: translate(0, 0);
+      transform: translate(0px, 0px);
     }
 
     .tile {
@@ -55,7 +74,28 @@
       background-repeat: no-repeat;
       background-size: auto;
       image-rendering: pixelated;
-      overflow: visible;
+    }
+
+    #wolf {
+      position: absolute;
+      width: 64px;
+      height: 64px;
+      background-image: url('./images_raw/wolf-all.png');
+      background-repeat: no-repeat;
+      image-rendering: pixelated;
+    }
+
+    #tile-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+    }
+    #sprite-layer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 2;
     }
   </style>
 </head>
@@ -64,78 +104,123 @@
     <div id="sidebar">
       <button>Tool 1</button>
       <button>Tool 2</button>
-    </div>
+      </div>
     <div id="field-wrapper">
-      <div id="field"></div>
+      <div id="field">
+        <div id="tile-layer"></div>
+        <div id="sprite-layer"><div id="wolf"></div></div>
+      </div>
     </div>
   </div>
 
   <script>
-    const field = document.getElementById("field");
+    const tileLayer = document.getElementById("tile-layer");
+    const wolfElement = document.getElementById('wolf');
+
     const tileSize = 32;
     const gridWidth = 128;
     const gridHeight = 128;
 
-    const SPRITE_WIDTH = 32;
-    const SPRITE_HEIGHT = 32;
-    const SPRITE_ROWS = 4; //7;
-    const SPRITE_COLS = 11;
+    const TILE_SPRITE_WIDTH = 32;
+    const TILE_SPRITE_HEIGHT = 32;
+    const TILE_SPRITE_SHEET_ROWS = 7;
+    const TILE_SPRITE_SHEET_COLS = 4;
 
-    for (let y = 0; y < gridHeight; y++) {
-      for (let x = 0; x < gridWidth; x++) {
-        const tile = document.createElement("div");
-        tile.classList.add("tile");
+    const WOLF_SPRITE_WIDTH = 64;
+    const WOLF_SPRITE_HEIGHT = 64;
+    const WOLF_SPRITE_SHEET_COLS = 15;
+    const WOLF_SPRITE_SHEET_ROWS = 16;
+    const WOLF_TOTAL_FRAMES = WOLF_SPRITE_SHEET_COLS * WOLF_SPRITE_SHEET_ROWS;
 
-        const isoX = (x - y) * (tileSize / 2);// + 1500;
-        const isoY = (x + y) * (tileSize / 4);
-
-        tile.style.left = isoX + "px";
-        tile.style.top = isoY + "px";
-        tile.style.zIndex = x + y;
-
-        // Choose random sprite
-        const spriteI = Math.floor(Math.random() * SPRITE_COLS);
-        const spriteJ = Math.floor(Math.random() * SPRITE_ROWS);
-        console.log(spriteI, spriteJ);
-
-        tile.style.backgroundPosition = `-${spriteI * SPRITE_WIDTH}px -${spriteJ * SPRITE_HEIGHT}px`;
-
-        field.appendChild(tile);
-      }
-    }
+    let wolfGridX = Math.floor(gridWidth / 2);
+    let wolfGridY = Math.floor(gridHeight / 2);
+    let currentWolfFrame = 0;
+    let wolfAnimTimer = 0;
+    const wolfAnimSpeed = 5;
 
     let cameraX = 0;
     let cameraY = 0;
-    const speed = 10;
+    const cameraSpeed = 10;
     const keysPressed = {};
 
+    function generateField() {
+      const fieldContentWidth = (gridWidth + gridHeight) * (tileSize / 2);
+      const fieldContentHeight = (gridWidth + gridHeight) * (tileSize / 4);
+
+      const initialWolfIsoX = (wolfGridX - wolfGridY) * (tileSize / 2);
+      const initialWolfIsoY = (wolfGridX + wolfGridY) * (tileSize / 4);
+
+      const viewportWidth = document.getElementById('field-wrapper').clientWidth;
+      const viewportHeight = document.getElementById('field-wrapper').clientHeight;
+
+      cameraX = initialWolfIsoX - viewportWidth / 2;
+      cameraY = initialWolfIsoY + (tileSize / 2) - (WOLF_SPRITE_HEIGHT / 2) - viewportHeight / 2;
+
+      for (let r = 0; r < gridHeight; r++) {
+        for (let c = 0; c < gridWidth; c++) {
+          const tile = document.createElement("div");
+          tile.classList.add("tile");
+
+          const isoX = (c - r) * (tileSize / 2);
+          const isoY = (c + r) * (tileSize / 4);
+
+          tile.style.left = isoX + "px";
+          tile.style.top = isoY + "px";
+          tile.style.zIndex = c + r;
+
+          const spriteCol = Math.floor(Math.random() * TILE_SPRITE_SHEET_COLS);
+          const spriteRow = Math.floor(Math.random() * TILE_SPRITE_SHEET_ROWS);
+          tile.style.backgroundPosition = `-${spriteCol * TILE_SPRITE_WIDTH}px -${spriteRow * TILE_SPRITE_HEIGHT}px`;
+
+          tileLayer.appendChild(tile);
+        }
+      }
+      updateCamera();
+    }
+
+    function initializeWolf() {
+      const wolfIsoX_raw = (wolfGridX - wolfGridY) * (tileSize / 2);
+      const wolfIsoY_raw = (wolfGridX + wolfGridY) * (tileSize / 4);
+
+      wolfElement.style.left = (wolfIsoX_raw - WOLF_SPRITE_WIDTH / 2) + "px";
+      wolfElement.style.top = (wolfIsoY_raw - WOLF_SPRITE_HEIGHT + (tileSize / 2)) + "px";
+
+      wolfElement.style.zIndex = wolfGridX + wolfGridY + 0.5;
+    }
+
     function updateCamera() {
+      const minCameraX = -1500;
+      const maxCameraX = 1500;
+      const minCameraY = -1000;
+      const maxCameraY = 1000;
+
+      cameraX = Math.max(minCameraX, Math.min(maxCameraX, cameraX));
+      cameraY = Math.max(minCameraY, Math.min(maxCameraY, cameraY));
+
       field.style.transform = `translate(${-cameraX}px, ${-cameraY}px)`;
     }
 
-    function cameraHasRoom(direction) {
-      switch (direction) {
-        case 'up':
-          return cameraY >= -1000;
-        case 'down':
-          return cameraY <= 1000; // cameraY <= maxCameraY;
-        case 'left':
-          return cameraX >= -1000;
-        case 'right':
-          return cameraX <= 1000;
-        default:
-          console.log('cameraHasRoom invalid input');
-          return false;
-      }
-    }
-
     function gameLoop() {
-      if (keysPressed["ArrowUp"] && cameraHasRoom('up')) cameraY -= speed;
-      if (keysPressed["ArrowDown"] && cameraHasRoom('down')) cameraY += speed;
-      if (keysPressed["ArrowLeft"] && cameraHasRoom('left')) cameraX -= speed;
-      if (keysPressed["ArrowRight"] && cameraHasRoom('right')) cameraX += speed;
+      if (keysPressed["ArrowUp"]) cameraY -= cameraSpeed;
+      if (keysPressed["ArrowDown"]) cameraY += cameraSpeed;
+      if (keysPressed["ArrowLeft"]) cameraX -= cameraSpeed;
+      if (keysPressed["ArrowRight"]) cameraX += cameraSpeed;
 
-      updateCamera();
+      if (keysPressed["ArrowUp"] || keysPressed["ArrowDown"] || keysPressed["ArrowLeft"] || keysPressed["ArrowRight"]) {
+        updateCamera();
+      }
+
+      wolfAnimTimer++;
+      if (wolfAnimTimer >= wolfAnimSpeed) {
+        wolfAnimTimer = 0;
+        currentWolfFrame = (currentWolfFrame + 1) % WOLF_TOTAL_FRAMES;
+
+        const frameCol = currentWolfFrame % WOLF_SPRITE_SHEET_COLS;
+        const frameRow = Math.floor(currentWolfFrame / WOLF_SPRITE_SHEET_COLS);
+
+        wolfElement.style.backgroundPosition = `-${frameCol * WOLF_SPRITE_WIDTH}px -${frameRow * WOLF_SPRITE_HEIGHT}px`;
+      }
+
       requestAnimationFrame(gameLoop);
     }
 
@@ -147,7 +232,11 @@
       keysPressed[e.key] = false;
     });
 
-    requestAnimationFrame(gameLoop);
+    window.onload = function() {
+      generateField();
+      initializeWolf();
+      gameLoop();
+    };
   </script>
 </body>
 </html>
