@@ -5,24 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SimWolf</title>
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
-
-    body, html {
-      height: 100%;
-      overflow: hidden;
-      font-family: sans-serif;
-      background-color: #222;
-    }
-
-    #app {
-      display: flex;
-      height: 100%;
-    }
-
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body, html { height: 100%; overflow: hidden; background-color: #222; }
+    #app { display: flex; height: 100%; }
     #sidebar {
       width: 150px;
       background: #333;
@@ -33,7 +18,6 @@
       gap: 10px;
       border-right: 2px solid #444;
     }
-
     #sidebar button {
       padding: 10px;
       background-color: #555;
@@ -44,18 +28,13 @@
       font-size: 14px;
       transition: background-color 0.3s;
     }
-
-    #sidebar button:hover {
-      background-color: #777;
-    }
-
+    #sidebar button:hover { background-color: #777; }
     #field-wrapper {
       flex: 1;
       position: relative;
       overflow: hidden;
       background-color: #9dd4f3;
     }
-
     #field {
       position: absolute;
       top: 0;
@@ -65,7 +44,6 @@
       will-change: transform;
       transform: translate(0px, 0px);
     }
-
     .tile {
       position: absolute;
       width: 32px;
@@ -75,28 +53,21 @@
       background-size: auto;
       image-rendering: pixelated;
     }
-
     #wolf {
       position: absolute;
       width: 64px;
       height: 64px;
-      background-image: url('./images_raw/wolf-all.png');
+      background-image: url('./images/wolf-run-stand.png');
       background-repeat: no-repeat;
       image-rendering: pixelated;
     }
-
-    #tile-layer {
+    #tile-layer, #sprite-layer {
       position: absolute;
       top: 0;
       left: 0;
-      z-index: 1;
     }
-    #sprite-layer {
-      position: absolute;
-      top: 0;
-      left: 0;
-      z-index: 2;
-    }
+    #tile-layer { z-index: 1; }
+    #sprite-layer { z-index: 2; }
   </style>
 </head>
 <body>
@@ -104,7 +75,7 @@
     <div id="sidebar">
       <button>Tool 1</button>
       <button>Tool 2</button>
-      </div>
+    </div>
     <div id="field-wrapper">
       <div id="field">
         <div id="tile-layer"></div>
@@ -124,29 +95,44 @@
     const TILE_SPRITE_WIDTH = 32;
     const TILE_SPRITE_HEIGHT = 32;
     const TILE_SPRITE_SHEET_ROWS = 7;
-    const TILE_SPRITE_SHEET_COLS = 4;
+    const TILE_SPRITE_SHEET_COLS = 11;
 
-    const WOLF_SPRITE_WIDTH = 64;
-    const WOLF_SPRITE_HEIGHT = 64;
-    const WOLF_SPRITE_SHEET_COLS = 15;
-    const WOLF_SPRITE_SHEET_ROWS = 16;
-    const WOLF_TOTAL_FRAMES = WOLF_SPRITE_SHEET_COLS * WOLF_SPRITE_SHEET_ROWS;
+    const WOLF_FRAME_WIDTH = 64;
+    const WOLF_FRAME_HEIGHT = 64;
+    const WOLF_DIRECTIONS = ['SW', 'SE', 'NW', 'NE'];
+    const WOLF_FRAMES_PER_ROW = 12;
+    const WOLF_RUN_FRAMES = 8;
+    const WOLF_IDLE_FRAMES = 4;
 
     let wolfGridX = Math.floor(gridWidth / 2);
     let wolfGridY = Math.floor(gridHeight / 2);
+
+    let wolfX = wolfGridX * tileSize;
+    let wolfY = wolfGridY * tileSize;
+
+    let wolfVelocityX = 0;
+    let wolfVelocityY = 0;
+    let currentDirection = 0;
+    let isMoving = false;
+
+    const wolfMovementSpeed = 300 / 60;
+
     let currentWolfFrame = 0;
     let wolfAnimTimer = 0;
-    const wolfAnimSpeed = 5;
 
     let cameraX = 0;
     let cameraY = 0;
     const cameraSpeed = 10;
     const keysPressed = {};
 
-    function generateField() {
-      const fieldContentWidth = (gridWidth + gridHeight) * (tileSize / 2);
-      const fieldContentHeight = (gridWidth + gridHeight) * (tileSize / 4);
+    const movementDirections = [
+      { dx: 0, dy: 1, dir: 0 },  // SW
+      { dx: 1, dy: 0, dir: 1 },  // SE
+      { dx: -1, dy: 0, dir: 2 },   // NW
+      { dx: 0, dy: -1, dir: 3 }    // NE
+    ];
 
+    function generateField() {
       const initialWolfIsoX = (wolfGridX - wolfGridY) * (tileSize / 2);
       const initialWolfIsoY = (wolfGridX + wolfGridY) * (tileSize / 4);
 
@@ -154,7 +140,7 @@
       const viewportHeight = document.getElementById('field-wrapper').clientHeight;
 
       cameraX = initialWolfIsoX - viewportWidth / 2;
-      cameraY = initialWolfIsoY + (tileSize / 2) - (WOLF_SPRITE_HEIGHT / 2) - viewportHeight / 2;
+      cameraY = initialWolfIsoY + (tileSize / 2) - (WOLF_FRAME_HEIGHT / 2) - viewportHeight / 2;
 
       for (let r = 0; r < gridHeight; r++) {
         for (let c = 0; c < gridWidth; c++) {
@@ -178,26 +164,10 @@
       updateCamera();
     }
 
-    function initializeWolf() {
-      const wolfIsoX_raw = (wolfGridX - wolfGridY) * (tileSize / 2);
-      const wolfIsoY_raw = (wolfGridX + wolfGridY) * (tileSize / 4);
-
-      wolfElement.style.left = (wolfIsoX_raw - WOLF_SPRITE_WIDTH / 2) + "px";
-      wolfElement.style.top = (wolfIsoY_raw - WOLF_SPRITE_HEIGHT + (tileSize / 2)) + "px";
-
-      wolfElement.style.zIndex = wolfGridX + wolfGridY + 0.5;
-    }
-
     function updateCamera() {
-      const minCameraX = -1500;
-      const maxCameraX = 1500;
-      const minCameraY = -1000;
-      const maxCameraY = 1000;
-
-      cameraX = Math.max(minCameraX, Math.min(maxCameraX, cameraX));
-      cameraY = Math.max(minCameraY, Math.min(maxCameraY, cameraY));
-
-      field.style.transform = `translate(${-cameraX}px, ${-cameraY}px)`;
+      cameraX = Math.max(-1500, Math.min(1500, cameraX));
+      cameraY = Math.max(-1000, Math.min(1000, cameraY));
+      document.getElementById("field").style.transform = `translate(${-cameraX}px, ${-cameraY}px)`;
     }
 
     function gameLoop() {
@@ -205,36 +175,74 @@
       if (keysPressed["ArrowDown"]) cameraY += cameraSpeed;
       if (keysPressed["ArrowLeft"]) cameraX -= cameraSpeed;
       if (keysPressed["ArrowRight"]) cameraX += cameraSpeed;
+      updateCamera();
 
-      if (keysPressed["ArrowUp"] || keysPressed["ArrowDown"] || keysPressed["ArrowLeft"] || keysPressed["ArrowRight"]) {
-        updateCamera();
-      }
-
+      // Animate
       wolfAnimTimer++;
-      if (wolfAnimTimer >= wolfAnimSpeed) {
+      if (wolfAnimTimer >= (isMoving ? 5 : 12)) {
         wolfAnimTimer = 0;
-        currentWolfFrame = (currentWolfFrame + 1) % WOLF_TOTAL_FRAMES;
+        currentWolfFrame++;
+        const maxFrame = isMoving ? WOLF_RUN_FRAMES : WOLF_IDLE_FRAMES;
+        currentWolfFrame %= maxFrame;
 
-        const frameCol = currentWolfFrame % WOLF_SPRITE_SHEET_COLS;
-        const frameRow = Math.floor(currentWolfFrame / WOLF_SPRITE_SHEET_COLS);
-
-        wolfElement.style.backgroundPosition = `-${frameCol * WOLF_SPRITE_WIDTH}px -${frameRow * WOLF_SPRITE_HEIGHT}px`;
+        const frameCol = isMoving ? currentWolfFrame : (currentWolfFrame + WOLF_RUN_FRAMES);
+        const frameRow = currentDirection;
+        wolfElement.style.backgroundPosition = `-${frameCol * WOLF_FRAME_WIDTH}px -${frameRow * WOLF_FRAME_HEIGHT}px`;
       }
+
+      const nextX = wolfX + wolfVelocityX;
+      const nextY = wolfY + wolfVelocityY;
+      const gridX = nextX / tileSize;
+      const gridY = nextY / tileSize;
+
+      if (gridX >= 0 && gridX < gridWidth && gridY >= 0 && gridY < gridHeight) {
+        wolfX = nextX;
+        wolfY = nextY;
+        isMoving = (wolfVelocityX !== 0 || wolfVelocityY !== 0);
+      } else {
+        wolfVelocityX = 0;
+        wolfVelocityY = 0;
+        isMoving = false;
+      }
+
+      const isoX = (wolfX / tileSize - wolfY / tileSize) * (tileSize / 2);
+      const isoY = (wolfX / tileSize + wolfY / tileSize) * (tileSize / 4);
+      wolfElement.style.left = (isoX - WOLF_FRAME_WIDTH / 2) + "px";
+      wolfElement.style.top = (isoY - WOLF_FRAME_HEIGHT + (tileSize / 2)) + "px";
+      wolfElement.style.zIndex = Math.floor(gridX + gridY) + 0.5;
 
       requestAnimationFrame(gameLoop);
     }
 
-    document.addEventListener("keydown", (e) => {
-      keysPressed[e.key] = true;
-    });
+    setInterval(() => {
+      if (Math.random() < 0.2) {
+        wolfVelocityX = 0;
+        wolfVelocityY = 0;
+        isMoving = false;
+        return;
+      }
 
-    document.addEventListener("keyup", (e) => {
-      keysPressed[e.key] = false;
-    });
+      const dir = movementDirections[Math.floor(Math.random() * movementDirections.length)];
+      const testX = (wolfX / tileSize) + dir.dx;
+      const testY = (wolfY / tileSize) + dir.dy;
 
-    window.onload = function() {
+      if (testX >= 0 && testX < gridWidth && testY >= 0 && testY < gridHeight) {
+        wolfVelocityX = dir.dx * wolfMovementSpeed;
+        wolfVelocityY = dir.dy * wolfMovementSpeed;
+        currentDirection = dir.dir;
+        isMoving = true;
+      } else {
+        wolfVelocityX = 0;
+        wolfVelocityY = 0;
+        isMoving = false;
+      }
+    }, 2000);
+
+    document.addEventListener("keydown", (e) => { keysPressed[e.key] = true; });
+    document.addEventListener("keyup", (e) => { keysPressed[e.key] = false; });
+
+    window.onload = function () {
       generateField();
-      initializeWolf();
       gameLoop();
     };
   </script>
