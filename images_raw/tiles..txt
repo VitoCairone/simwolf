@@ -1,0 +1,7 @@
+dirt        dirt        dirt        dirt        dirt        dirt        dirt        dirt        dirt        dirt        dirt
+crakd-dirt  crakd-dirt  crakd-dirt  crakd-dirt  crakd-dirt  crakd-dirt  crakd-mud   crakd-mud   mud-leaves  mud-leaves  mud
+grass       tall-grass  short-grass crakd-dirt  crakd-moss  moss        moss        bush        bush        bush        bush
+bush        bush        short-bush  bush        short-grass tall-grass  tall-grass  min-grass  +flowers     +flower     +bush
++flowers    +plant      +flowers    +flowers    +log        +logs       +log        +grass-log +grass-log   +rock       +boulder
++boulder    +boulder    +boulder    +boulder    +boulder    +boulder    crakd-rock  +rock-pad  rock         +boulder    +boulder
++boulder    +boulder    wtr-rock    wtr-rock    wtr-rockpad wtr-rockpad wtr-boldr   wtr-boldr  wtr-boldr    wtr-boldr   wtr-rockstp
