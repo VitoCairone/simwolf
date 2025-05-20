@@ -86,6 +86,9 @@
     <div id="sidebar">
       <button>Tool 1</button>
       <button>Tool 2</button>
+      <div id="cursor-coords" style="margin-top: auto; font-size: 12px; color: #aaa;">
+        x: –, y: –
+      </div>
     </div>
     <div id="field-wrapper">
       <div id="field">
@@ -226,6 +229,34 @@
       requestAnimationFrame(gameLoop);
     }
 
+    function addCursorTracker() {
+      const fieldWrapper = document.getElementById("field-wrapper");
+      const cursorCoords = document.getElementById("cursor-coords");
+
+      fieldWrapper.addEventListener("mousemove", (e) => {
+        const rect = fieldWrapper.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left + cameraX;
+        const mouseY = e.clientY - rect.top + cameraY;
+
+        // Convert screen coordinates to isometric grid coordinates
+        const isoX = (mouseX / (tileSize / 2) + mouseY / (tileSize / 4)) / 2;
+        const isoY = (mouseY / (tileSize / 4) - mouseX / (tileSize / 2)) / 2;
+
+        const gridX = isoX.toFixed(3);
+        const gridY = isoY.toFixed(3);
+
+        if (gridX >= 0 && gridX < gridWidth && gridY >= 0 && gridY < gridHeight) {
+          cursorCoords.textContent = `x: ${gridX}, y: ${gridY}`;
+        } else {
+          cursorCoords.textContent = `x: –, y: –`;
+        }
+      });
+
+      fieldWrapper.addEventListener("mouseleave", () => {
+        cursorCoords.textContent = `x: –, y: –`;
+      });
+    }
+
     setInterval(() => {
       if (Math.random() < 0.2) {
         wolfVelocityX = 0;
@@ -266,6 +297,7 @@
     window.onload = function () {
       generateField();
       gameLoop();
+      addCursorTracker();
     };
   </script>
 </body>
