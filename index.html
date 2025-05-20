@@ -68,6 +68,17 @@
     }
     #tile-layer { z-index: 1; }
     #sprite-layer { z-index: 2; }
+
+    /* Tile types */
+    .tile.dirt      { background-position:   0px     0px; }
+    .tile.grass     { background-position:   0px   -64px; }
+    .tile.bush      { background-position:   0px   -96px; }
+    .tile.tallgrass { background-position: -160px  -96px; }
+    .tile.flower    { background-position: -256px  -96px; }
+    .tile.rock      { background-position: -288px -128px; }
+    .tile.stone     { background-position: -192px -160px; }
+    .tile.water     { background-position:   0px  -256px; }
+    .tile.ice       { background-position:   0px  -320px; }
   </style>
 </head>
 <body>
@@ -85,6 +96,13 @@
   </div>
 
   <script>
+    const tileLayer = document.getElementById("tile-layer");
+    const wolfElement = document.getElementById('wolf');
+
+    const tileSize = 32;
+    const gridWidth = 128;
+    const gridHeight = 128;
+
     // when source becomes multiple files, read this sort of fixed data from its own file
     const tileMap = [
       ["dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt"],
@@ -100,24 +118,9 @@
       ["ice", "ice", "ice", "ice", "ice", "ice", "ice", "ice", "ice", "ice", "ice"]
     ];
 
-    const tileLayer = document.getElementById("tile-layer");
-    const wolfElement = document.getElementById('wolf');
-
-    const tileSize = 32;
-    const gridWidth = 128;
-    const gridHeight = 128;
-
-    const TILE_SPRITE_WIDTH = 32;
-    const TILE_SPRITE_HEIGHT = 32;
-    const TILE_SPRITE_SHEET_ROWS = 7;
-    const TILE_SPRITE_SHEET_COLS = 11;
-
-    const WOLF_FRAME_WIDTH = 64;
-    const WOLF_FRAME_HEIGHT = 64;
-    const WOLF_DIRECTIONS = ['SW', 'SE', 'NW', 'NE'];
-    const WOLF_FRAMES_PER_ROW = 12;
-    const WOLF_RUN_FRAMES = 8;
-    const WOLF_IDLE_FRAMES = 4;
+    const terrainTypes = [
+      "dirt", "grass", "bush", "tallgrass", "flower", "rock", "stone", "water", "ice"
+    ];
 
     let wolfGridX = Math.floor(gridWidth / 2);
     let wolfGridY = Math.floor(gridHeight / 2);
@@ -131,7 +134,6 @@
     let isMoving = false;
 
     const wolfMovementSpeed = 300 / 60;
-
     let currentWolfFrame = 0;
     let wolfAnimTimer = 0;
 
@@ -141,21 +143,20 @@
     const keysPressed = {};
 
     const movementDirections = [
-      { dx: 0, dy: 1, dir: 0 },  // SW
-      { dx: 1, dy: 0, dir: 1 },  // SE
-      { dx: -1, dy: 0, dir: 2 },   // NW
-      { dx: 0, dy: -1, dir: 3 }    // NE
+      { dx: 0, dy: 1, dir: 0 },
+      { dx: 1, dy: 0, dir: 1 },
+      { dx: -1, dy: 0, dir: 2 },
+      { dx: 0, dy: -1, dir: 3 }
     ];
 
     function generateField() {
       const initialWolfIsoX = (wolfGridX - wolfGridY) * (tileSize / 2);
       const initialWolfIsoY = (wolfGridX + wolfGridY) * (tileSize / 4);
-
       const viewportWidth = document.getElementById('field-wrapper').clientWidth;
       const viewportHeight = document.getElementById('field-wrapper').clientHeight;
 
       cameraX = initialWolfIsoX - viewportWidth / 2;
-      cameraY = initialWolfIsoY + (tileSize / 2) - (WOLF_FRAME_HEIGHT / 2) - viewportHeight / 2;
+      cameraY = initialWolfIsoY + (tileSize / 2) - (64 / 2) - viewportHeight / 2;
 
       for (let r = 0; r < gridHeight; r++) {
         for (let c = 0; c < gridWidth; c++) {
@@ -164,14 +165,13 @@
 
           const isoX = (c - r) * (tileSize / 2);
           const isoY = (c + r) * (tileSize / 4);
-
           tile.style.left = isoX + "px";
           tile.style.top = isoY + "px";
           tile.style.zIndex = c + r;
 
-          const spriteCol = Math.floor(Math.random() * TILE_SPRITE_SHEET_COLS);
-          const spriteRow = Math.floor(Math.random() * TILE_SPRITE_SHEET_ROWS);
-          tile.style.backgroundPosition = `-${spriteCol * TILE_SPRITE_WIDTH}px -${spriteRow * TILE_SPRITE_HEIGHT}px`;
+          const randomType = terrainTypes[Math.floor(Math.random() * terrainTypes.length)];
+          tile.classList.add(randomType);
+          tile.dataset.type = randomType;
 
           tileLayer.appendChild(tile);
         }
@@ -192,17 +192,14 @@
       if (keysPressed["ArrowRight"]) cameraX += cameraSpeed;
       updateCamera();
 
-      // Animate
       wolfAnimTimer++;
       if (wolfAnimTimer >= (isMoving ? 5 : 12)) {
         wolfAnimTimer = 0;
         currentWolfFrame++;
-        const maxFrame = isMoving ? WOLF_RUN_FRAMES : WOLF_IDLE_FRAMES;
+        const maxFrame = isMoving ? 8 : 4;
         currentWolfFrame %= maxFrame;
-
-        const frameCol = isMoving ? currentWolfFrame : (currentWolfFrame + WOLF_RUN_FRAMES);
-        const frameRow = currentDirection;
-        wolfElement.style.backgroundPosition = `-${frameCol * WOLF_FRAME_WIDTH}px -${frameRow * WOLF_FRAME_HEIGHT}px`;
+        const frameCol = isMoving ? currentWolfFrame : (currentWolfFrame + 8);
+        wolfElement.style.backgroundPosition = `-${frameCol * 64}px -${currentDirection * 64}px`;
       }
 
       const nextX = wolfX + wolfVelocityX;
@@ -222,8 +219,8 @@
 
       const isoX = (wolfX / tileSize - wolfY / tileSize) * (tileSize / 2);
       const isoY = (wolfX / tileSize + wolfY / tileSize) * (tileSize / 4);
-      wolfElement.style.left = (isoX - WOLF_FRAME_WIDTH / 2) + "px";
-      wolfElement.style.top = (isoY - WOLF_FRAME_HEIGHT + (tileSize / 2)) + "px";
+      wolfElement.style.left = (isoX - 32) + "px";
+      wolfElement.style.top = (isoY - 64 + (tileSize / 2)) + "px";
       wolfElement.style.zIndex = Math.floor(gridX + gridY) + 0.5;
 
       requestAnimationFrame(gameLoop);
@@ -238,10 +235,20 @@
       }
 
       const dir = movementDirections[Math.floor(Math.random() * movementDirections.length)];
-      const testX = (wolfX / tileSize) + dir.dx;
-      const testY = (wolfY / tileSize) + dir.dy;
+      const testGridX = Math.round(wolfX / tileSize + dir.dx);
+      const testGridY = Math.round(wolfY / tileSize + dir.dy);
 
-      if (testX >= 0 && testX < gridWidth && testY >= 0 && testY < gridHeight) {
+      const tiles = document.elementsFromPoint(
+        (testGridX - testGridY) * (tileSize / 2) - cameraX,
+        (testGridX + testGridY) * (tileSize / 4) - cameraY
+      );
+
+      const nextTile = tiles.find(el => el.classList.contains("tile"));
+      const terrain = nextTile?.dataset.type || "unknown";
+
+      const impassable = ["rock", "stone", "wstone", "wrock", "splash", "water", "ice"];
+
+      if (!impassable.includes(terrain)) {
         wolfVelocityX = dir.dx * wolfMovementSpeed;
         wolfVelocityY = dir.dy * wolfMovementSpeed;
         currentDirection = dir.dir;
