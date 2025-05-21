@@ -45,6 +45,7 @@
       transform: translate(0px, 0px);
     }
     .tile {
+      /* border: 1px solid green; */
       position: absolute;
       width: 32px;
       height: 32px;
@@ -103,6 +104,7 @@
     const wolfElement = document.getElementById('wolf');
 
     const tileSize = 32;
+    const tileRiserPx = 8;
     const gridWidth = 128;
     const gridHeight = 128;
 
@@ -153,8 +155,7 @@
     ];
 
     function generateField() {
-      const initialWolfIsoX = (wolfGridX - wolfGridY) * (tileSize / 2);
-      const initialWolfIsoY = (wolfGridX + wolfGridY) * (tileSize / 4);
+      const [initialWolfIsoX, initialWolfIsoY] = isoPxProject(wolfGridX, wolfGridY);
       const viewportWidth = document.getElementById('field-wrapper').clientWidth;
       const viewportHeight = document.getElementById('field-wrapper').clientHeight;
 
@@ -168,8 +169,14 @@
 
           const isoX = (c - r) * (tileSize / 2);
           const isoY = (c + r) * (tileSize / 4);
+
+          // the tile would now be placed by its top-left corner... if it were a 32 x 32 diamond
+          // but the tile surface is actually 32 x 16, with space for pixels above and for the platform
+          // below. We can ignore the above but need to drop our tiles down by the riser (platform) amount
+          // so that the planar X,Y will map correctly to the visual SURFACE of each tiles as we expect.
+
           tile.style.left = isoX + "px";
-          tile.style.top = isoY + "px";
+          tile.style.top = (isoY + tileRiserPx) + "px" ;
           tile.style.zIndex = c + r;
 
           const randomType = terrainTypes[Math.floor(Math.random() * terrainTypes.length)];
@@ -186,6 +193,12 @@
       cameraX = Math.max(-1500, Math.min(1500, cameraX));
       cameraY = Math.max(-1000, Math.min(1000, cameraY));
       document.getElementById("field").style.transform = `translate(${-cameraX}px, ${-cameraY}px)`;
+    }
+
+    function isoPxProject(x, y) {
+      const isoX = (x / tileSize - y / tileSize) * (tileSize / 2);
+      const isoY = (x / tileSize + y / tileSize) * (tileSize / 4);
+      return [isoX, isoY];
     }
 
     function gameLoop() {
@@ -220,8 +233,7 @@
         isMoving = false;
       }
 
-      const isoX = (wolfX / tileSize - wolfY / tileSize) * (tileSize / 2);
-      const isoY = (wolfX / tileSize + wolfY / tileSize) * (tileSize / 4);
+      const [isoX, isoY] = isoPxProject(wolfX, wolfY);
       wolfElement.style.left = (isoX - 32) + "px";
       wolfElement.style.top = (isoY - 64 + (tileSize / 2)) + "px";
       wolfElement.style.zIndex = Math.floor(gridX + gridY) + 0.5;
@@ -238,7 +250,8 @@
         const mouseX = e.clientX - rect.left + cameraX;
         const mouseY = e.clientY - rect.top + cameraY;
 
-        // Convert screen coordinates to isometric grid coordinates
+        // This does not use isoPxProject because the input is not a world grid coordinate,
+        // it's a screen coordinate, which has a slightly different formula
         const isoX = (mouseX / (tileSize / 2) + mouseY / (tileSize / 4)) / 2;
         const isoY = (mouseY / (tileSize / 4) - mouseX / (tileSize / 2)) / 2;
 
