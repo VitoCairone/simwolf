@@ -103,10 +103,18 @@
     const tileLayer = document.getElementById("tile-layer");
     const wolfElement = document.getElementById('wolf');
 
+    // parameters
     const tileSize = 32;
     const tileRiserPx = 8;
-    const gridWidth = 128;
-    const gridHeight = 128;
+    const gridWidthN = 128;
+    const gridHeightN = 128;
+    const wolfFramePx = 64;
+    const wolfFrameShadowPY = 39;
+
+    // derived constants, set once on startup
+    const halfTile = tileSize / 2;
+    const qtrTile = tileSize / 4;
+    const [gridRadHoriz, gridDiamVert] = isoPxProject(gridWidthN, gridHeightN);
 
     // when source becomes multiple files, read this sort of fixed data from its own file
     const tileMap = [
@@ -127,23 +135,20 @@
       "dirt", "grass", "bush", "tallgrass", "flower", "rock", "stone", "water", "ice"
     ];
 
-    let wolfGridX = Math.floor(gridWidth / 2);
-    let wolfGridY = Math.floor(gridHeight / 2);
+    let wolfGX = Math.floor(gridWidthN / 2) + 0.5;
+    let wolfGY = Math.floor(gridHeightN / 2) + 0.5;
 
-    let wolfX = wolfGridX * tileSize;
-    let wolfY = wolfGridY * tileSize;
-
-    let wolfVelocityX = 0;
-    let wolfVelocityY = 0;
+    let wolfVelocityGX = 0;
+    let wolfVelocityGY = 0;
     let currentDirection = 0;
     let isMoving = false;
 
-    const wolfMovementSpeed = 300 / 60;
+    const wolfMovementSpeed = 300 / 60; // unit: tile/frame
     let currentWolfFrame = 0;
     let wolfAnimTimer = 0;
 
-    let cameraX = 0;
-    let cameraY = 0;
+    let cameraPX = 0;
+    let cameraPY = 0;
     const cameraSpeed = 10;
     const keysPressed = {};
 
@@ -155,28 +160,27 @@
     ];
 
     function generateField() {
-      const [initialWolfIsoX, initialWolfIsoY] = isoPxProject(wolfGridX, wolfGridY);
+      const [initialWolfPX, initialWolfPY] = isoPxProject(wolfGX, wolfGY);
       const viewportWidth = document.getElementById('field-wrapper').clientWidth;
       const viewportHeight = document.getElementById('field-wrapper').clientHeight;
 
-      cameraX = initialWolfIsoX - viewportWidth / 2;
-      cameraY = initialWolfIsoY + (tileSize / 2) - (64 / 2) - viewportHeight / 2;
+      cameraPX = initialWolfPX - viewportWidth / 2;
+      cameraPY = initialWolfPY - halfTile - viewportHeight / 2;
 
-      for (let r = 0; r < gridHeight; r++) {
-        for (let c = 0; c < gridWidth; c++) {
+      // We'll offset all our tiles a bit so that the ground point on the top of the screen,
+      // for a flat terrain, is exactly the grid point (0, 0).
+      const leftTileOffsetC = -halfTile;
+      const topTileOffsetC = -tileRiserPx;
+
+      for (let r = 0; r < gridHeightN; r++) {
+        for (let c = 0; c < gridWidthN; c++) {
           const tile = document.createElement("div");
           tile.classList.add("tile");
 
-          const isoX = (c - r) * (tileSize / 2);
-          const isoY = (c + r) * (tileSize / 4);
+          const [isoX, isoY] = isoPxProject(c, r);
 
-          // the tile would now be placed by its top-left corner... if it were a 32 x 32 diamond
-          // but the tile surface is actually 32 x 16, with space for pixels above and for the platform
-          // below. We can ignore the above but need to drop our tiles down by the riser (platform) amount
-          // so that the planar X,Y will map correctly to the visual SURFACE of each tiles as we expect.
-
-          tile.style.left = isoX + "px";
-          tile.style.top = (isoY + tileRiserPx) + "px" ;
+          tile.style.left = (isoX + leftTileOffsetC) + "px";
+          tile.style.top = (isoY + topTileOffsetC) + "px" ;
           tile.style.zIndex = c + r;
 
           const randomType = terrainTypes[Math.floor(Math.random() * terrainTypes.length)];
@@ -190,22 +194,34 @@
     }
 
     function updateCamera() {
-      cameraX = Math.max(-1500, Math.min(1500, cameraX));
-      cameraY = Math.max(-1000, Math.min(1000, cameraY));
-      document.getElementById("field").style.transform = `translate(${-cameraX}px, ${-cameraY}px)`;
+      // TODO: prevent this from being called constantly when the camera is not moving
+      // TODO: resolve issue with camera locked horizontally at center using -gradRadHoriz
+      console.log(cameraPX);
+      console.log(cameraPY);
+      console.log(gridRadHoriz);
+      console.log(gridDiamVert);
+      cameraPX = Math.max(-Infinity, Math.min(gridRadHoriz, cameraPX));
+      cameraPY = Math.max(0, Math.min(gridDiamVert, cameraPY));
+      document.getElementById("field").style.transform = `translate(${-cameraPX}px, ${-cameraPY}px)`;
     }
 
     function isoPxProject(x, y) {
-      const isoX = (x / tileSize - y / tileSize) * (tileSize / 2);
-      const isoY = (x / tileSize + y / tileSize) * (tileSize / 4);
+      const isoX = (x - y) * halfTile;
+      const isoY = (x + y) * qtrTile;
       return [isoX, isoY];
     }
 
+    function rectiGxProject(px, py) {
+      const gx = (px / tileSize + py / halfTile);
+      const gy = (py / halfTile - px / tileSize);
+      return [gx, gy];
+    }
+
     function gameLoop() {
-      if (keysPressed["ArrowUp"]) cameraY -= cameraSpeed;
-      if (keysPressed["ArrowDown"]) cameraY += cameraSpeed;
-      if (keysPressed["ArrowLeft"]) cameraX -= cameraSpeed;
-      if (keysPressed["ArrowRight"]) cameraX += cameraSpeed;
+      if (keysPressed["ArrowUp"]) cameraPY -= cameraSpeed;
+      if (keysPressed["ArrowDown"]) cameraPY += cameraSpeed;
+      if (keysPressed["ArrowLeft"]) cameraPX -= cameraSpeed;
+      if (keysPressed["ArrowRight"]) cameraPX += cameraSpeed;
       updateCamera();
 
       wolfAnimTimer++;
@@ -215,28 +231,29 @@
         const maxFrame = isMoving ? 8 : 4;
         currentWolfFrame %= maxFrame;
         const frameCol = isMoving ? currentWolfFrame : (currentWolfFrame + 8);
-        wolfElement.style.backgroundPosition = `-${frameCol * 64}px -${currentDirection * 64}px`;
+        wolfElement.style.backgroundPosition =
+          `-${frameCol * wolfFramePx}px -${currentDirection * wolfFramePx}px`;
       }
 
-      const nextX = wolfX + wolfVelocityX;
-      const nextY = wolfY + wolfVelocityY;
-      const gridX = nextX / tileSize;
-      const gridY = nextY / tileSize;
+      const nextGX = wolfGX + wolfVelocityGX;
+      const nextGY = wolfGY + wolfVelocityGY;
 
-      if (gridX >= 0 && gridX < gridWidth && gridY >= 0 && gridY < gridHeight) {
-        wolfX = nextX;
-        wolfY = nextY;
-        isMoving = (wolfVelocityX !== 0 || wolfVelocityY !== 0);
+      if (nextGX >= 0 && nextGX < gridWidthN && nextGY >= 0 && nextGY < gridHeightN) {
+        wolfGX = nextGX;
+        wolfGY = nextGY;
+        isMoving = (wolfVelocityGX !== 0 || wolfVelocityGY !== 0);
       } else {
-        wolfVelocityX = 0;
-        wolfVelocityY = 0;
+        wolfVelocityGX = 0;
+        wolfVelocityGY = 0;
         isMoving = false;
       }
 
-      const [isoX, isoY] = isoPxProject(wolfX, wolfY);
-      wolfElement.style.left = (isoX - 32) + "px";
-      wolfElement.style.top = (isoY - 64 + (tileSize / 2)) + "px";
-      wolfElement.style.zIndex = Math.floor(gridX + gridY) + 0.5;
+      const [isoX, isoY] = isoPxProject(wolfGX, wolfGY);
+
+      const topWolfOffsetC = wolfFramePx - wolfFrameShadowPY;
+      wolfElement.style.left = (isoX - wolfFramePx / 2) + "px";
+      wolfElement.style.top = (isoY - topWolfOffsetC) + "px";
+      wolfElement.style.zIndex = Math.floor(wolfGX + wolfGY) + 0.5;
 
       requestAnimationFrame(gameLoop);
     }
@@ -247,19 +264,16 @@
 
       fieldWrapper.addEventListener("mousemove", (e) => {
         const rect = fieldWrapper.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left + cameraX;
-        const mouseY = e.clientY - rect.top + cameraY;
+        const mousePX = e.clientX - rect.left + cameraPX;
+        const mousePY = e.clientY - rect.top + cameraPY;
 
-        // This does not use isoPxProject because the input is not a world grid coordinate,
-        // it's a screen coordinate, which has a slightly different formula
-        const isoX = (mouseX / (tileSize / 2) + mouseY / (tileSize / 4)) / 2;
-        const isoY = (mouseY / (tileSize / 4) - mouseX / (tileSize / 2)) / 2;
+        const mouseGX = (mousePX / halfTile + mousePY / qtrTile) / 2;
+        const mouseGY = (mousePY / qtrTile - mousePX / halfTile) / 2;
 
-        const gridX = isoX.toFixed(3);
-        const gridY = isoY.toFixed(3);
-
-        if (gridX >= 0 && gridX < gridWidth && gridY >= 0 && gridY < gridHeight) {
-          cursorCoords.textContent = `x: ${gridX}, y: ${gridY}`;
+        // TODO: display out-of-bounds coords in red, normal in black
+        if (mouseGX >= 0 && mouseGX < gridWidthN && mouseGY >= 0 && mouseGY < gridHeightN) {
+          const [dispGX, dispGY] = [mouseGX.toFixed(3), mouseGY.toFixed(3)];
+          cursorCoords.textContent = `x: ${dispGX}, y: ${dispGY}`;
         } else {
           cursorCoords.textContent = `x: –, y: –`;
         }
@@ -272,36 +286,38 @@
 
     setInterval(() => {
       if (Math.random() < 0.2) {
-        wolfVelocityX = 0;
-        wolfVelocityY = 0;
+        wolfVelocityGX = 0;
+        wolfVelocityGY = 0;
         isMoving = false;
         return;
       }
 
       const dir = movementDirections[Math.floor(Math.random() * movementDirections.length)];
-      const testGridX = Math.round(wolfX / tileSize + dir.dx);
-      const testGridY = Math.round(wolfY / tileSize + dir.dy);
+      const testGridX = Math.round(wolfGX + dir.dx);
+      const testGridY = Math.round(wolfGY + dir.dy);
 
-      const tiles = document.elementsFromPoint(
-        (testGridX - testGridY) * (tileSize / 2) - cameraX,
-        (testGridX + testGridY) * (tileSize / 4) - cameraY
-      );
+      // const tiles = document.elementsFromPoint(
+      //   (testGridX - testGridY) * (tileSize / 2) - cameraPX,
+      //   (testGridX + testGridY) * (tileSize / 4) - cameraPY
+      // );
 
-      const nextTile = tiles.find(el => el.classList.contains("tile"));
-      const terrain = nextTile?.dataset.type || "unknown";
+      // const nextTile = tiles.find(el => el.classList.contains("tile"));
+      // const terrain = nextTile?.dataset.type || "unknown";
 
-      const impassable = ["rock", "stone", "wstone", "wrock", "splash", "water", "ice"];
+      // const impassable = ["rock", "stone", "wstone", "wrock", "splash", "water", "ice"];
 
-      if (!impassable.includes(terrain)) {
-        wolfVelocityX = dir.dx * wolfMovementSpeed;
-        wolfVelocityY = dir.dy * wolfMovementSpeed;
+      // if (!impassable.includes(terrain)) {
+
+        wolfVelocityGX = dir.dx * wolfMovementSpeed;
+        wolfVelocityGY = dir.dy * wolfMovementSpeed;
         currentDirection = dir.dir;
         isMoving = true;
-      } else {
-        wolfVelocityX = 0;
-        wolfVelocityY = 0;
-        isMoving = false;
-      }
+
+      // } else {
+      //   wolfVelocityGX = 0;
+      //   wolfVelocityGY = 0;
+      //   isMoving = false;
+      // }
     }, 2000);
 
     document.addEventListener("keydown", (e) => { keysPressed[e.key] = true; });
