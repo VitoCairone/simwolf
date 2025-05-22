@@ -167,6 +167,10 @@
     const viewportWidth = document.getElementById('field-wrapper').clientWidth;
     const viewportHeight = document.getElementById('field-wrapper').clientHeight;
 
+    function boundVal(val, min, max) {
+      return Math.max(min, Math.min(val, max));
+    }
+
     function generateField() {
       const [initialWolfPX, initialWolfPY] = isoProject(wolfGX, wolfGY);
 
@@ -197,8 +201,8 @@
     }
 
     function updateCamera() {
-      cameraPX = Math.max(-worldRadPX, Math.min(worldRadPX - viewportWidth, cameraPX));
-      cameraPY = Math.max(0, Math.min(worldDiamPY + tileRiserPY - viewportHeight, cameraPY));
+      cameraPX = boundVal(cameraPX, -worldRadPX, worldRadPX - viewportWidth);
+      cameraPY = boundVal(cameraPY, 0, worldDiamPY + tileRiserPY - viewportHeight);
       document.getElementById("field").style.transform = `translate(${-cameraPX}px, ${-cameraPY}px)`;
     }
 
@@ -236,7 +240,7 @@
       const nextGX = wolfGX + wolfVelocityGX;
       const nextGY = wolfGY + wolfVelocityGY;
 
-      if (nextGX >= 0 && nextGX < gridWidthN && nextGY >= 0 && nextGY < gridHeightN) {
+      if (nextGX >= 0.6 && nextGX < (gridWidthN - 0.6) && nextGY >= 0.6 && nextGY < (gridHeightN - 0.6)) {
         wolfGX = nextGX;
         wolfGY = nextGY;
         isMoving = (wolfVelocityGX !== 0 || wolfVelocityGY !== 0);
@@ -249,9 +253,10 @@
       const [isoX, isoY] = isoProject(wolfGX, wolfGY);
 
       // wolf image is offset so its noon-shadow center is at its grid coordinate
+      const leftWolfOffsetC = wolfFramePx / 2;
       const topWolfOffsetC = wolfFramePx - wolfFrameShadowPY;
 
-      wolfElement.style.left = (isoX - wolfFramePx / 2) + "px";
+      wolfElement.style.left = (isoX - leftWolfOffsetC) + "px";
       wolfElement.style.top = (isoY - topWolfOffsetC) + "px";
       wolfElement.style.zIndex = Math.floor(wolfGX + wolfGY) + 0.5;
 
@@ -283,7 +288,7 @@
       });
     }
 
-    setInterval(() => {
+    function updateWolfAction() {
       if (Math.random() < 0.5) {
         wolfVelocityGX = 0;
         wolfVelocityGY = 0;
@@ -292,31 +297,14 @@
       }
 
       const dir = movementDirections[Math.floor(Math.random() * movementDirections.length)];
-      const testGridX = Math.round(wolfGX + dir.dx);
-      const testGridY = Math.round(wolfGY + dir.dy);
+      wolfVelocityGX = dir.dx * wolfMovementSpeed;
+      wolfVelocityGY = dir.dy * wolfMovementSpeed;
+      currentDirection = dir.dir;
+      isMoving = true;
+    }
 
-      // const tiles = document.elementsFromPoint(
-      //   (testGridX - testGridY) * (tileSize / 2) - cameraPX,
-      //   (testGridX + testGridY) * (tileSize / 4) - cameraPY
-      // );
-
-      // const nextTile = tiles.find(el => el.classList.contains("tile"));
-      // const terrain = nextTile?.dataset.type || "unknown";
-
-      // const impassable = ["rock", "stone", "wstone", "wrock", "splash", "water", "ice"];
-
-      // if (!impassable.includes(terrain)) {
-
-        wolfVelocityGX = dir.dx * wolfMovementSpeed;
-        wolfVelocityGY = dir.dy * wolfMovementSpeed;
-        currentDirection = dir.dir;
-        isMoving = true;
-
-      // } else {
-      //   wolfVelocityGX = 0;
-      //   wolfVelocityGY = 0;
-      //   isMoving = false;
-      // }
+    setInterval(() => {
+      updateWolfAction();
     }, 2000);
 
     document.addEventListener("keydown", (e) => { keysPressed[e.key] = true; });
