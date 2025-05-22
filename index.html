@@ -62,12 +62,13 @@
       will-change: transform;
       transform: translate(0px, 0px) scale(1);
       transform-origin: top left;
+      image-rendering: pixelated;
     }
     .tile {
       position: absolute;
       width: 32px;
       height: 32px;
-      background-image: url('./images_raw/tiles.png');
+      background-image: url('./images/tiles.png');
       background-repeat: no-repeat;
       background-size: auto;
       image-rendering: pixelated;
@@ -254,7 +255,9 @@
           tile.style.zIndex = c + r;
 
           const randomType = terrainTypes[Math.floor(Math.random() * terrainTypes.length)];
-          tile.classList.add(randomType);
+          // tile.classList.add(randomType);
+          tile.classList.add("dirt");
+          tile.style.backgroundPositionX = `${-tileSize * Math.floor(Math.random() * 11)}px`
           tile.dataset.type = randomType;
 
           tileLayer.appendChild(tile);
