@@ -28,7 +28,24 @@
       font-size: 14px;
       transition: background-color 0.3s;
     }
-    #sidebar button:hover { background-color: #777; }
+    #sidebar button:hover:not(:disabled) { background-color: #777; }
+    #sidebar button:disabled {
+      background-color: #444;
+      color: #777;
+      cursor: default;
+    }
+    .zoom-buttons {
+      display: flex;
+      gap: 5px;
+      width: 100%;
+    }
+    .zoom-buttons button {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 10px;
+    }
     #field-wrapper {
       flex: 1;
       position: relative;
@@ -42,10 +59,10 @@
       width: 3000px;
       height: 3000px;
       will-change: transform;
-      transform: translate(0px, 0px);
+      transform: translate(0px, 0px) scale(1);
+      transform-origin: top left;
     }
     .tile {
-      /* border: 1px solid green; */
       position: absolute;
       width: 32px;
       height: 32px;
@@ -69,8 +86,6 @@
     }
     #tile-layer { z-index: 1; }
     #sprite-layer { z-index: 2; }
-
-    /* Tile types */
     .tile.dirt      { background-position:   0px     0px; }
     .tile.grass     { background-position:   0px   -64px; }
     .tile.bush      { background-position:   0px   -96px; }
@@ -87,6 +102,23 @@
     <div id="sidebar">
       <button>Tool 1</button>
       <button>Tool 2</button>
+      <div class="zoom-buttons">
+        <button id="zoom-in" aria-label="Zoom In">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="9"/>
+            <line x1="12" y1="8" x2="12" y2="16"/>
+            <line x1="8" y1="12" x2="16" y2="12"/>
+          </svg>
+        </button>
+
+        <button id="zoom-out" aria-label="Zoom Out">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="9"/>
+            <line x1="8" y1="12" x2="16" y2="12"/>
+          </svg>
+        </button>
+
+      </div>
       <div id="cursor-coords" style="margin-top: auto; font-size: 12px; color: #aaa;">
         x: –, y: –
       </div>
@@ -102,6 +134,13 @@
   <script>
     const tileLayer = document.getElementById("tile-layer");
     const wolfElement = document.getElementById('wolf');
+    const fieldElement = document.getElementById("field");
+    const zoomInBtn = document.getElementById("zoom-in");
+    const zoomOutBtn = document.getElementById("zoom-out");
+
+    let zoomLevel = 1;
+    const zoomMin = 0.5;
+    const zoomMax = 8;
 
     // parameters
     const tileSize = 32;
@@ -171,6 +210,29 @@
       return Math.max(min, Math.min(val, max));
     }
 
+    function updateZoomButtons() {
+      zoomInBtn.disabled = zoomLevel >= zoomMax;
+      zoomOutBtn.disabled = zoomLevel <= zoomMin;
+    }
+
+    zoomInBtn.addEventListener("click", () => {
+      if (zoomLevel < zoomMax) {
+        zoomLevel *= 2;
+        updateCamera();
+        updateZoomButtons();
+      }
+    });
+
+    zoomOutBtn.addEventListener("click", () => {
+      if (zoomLevel > zoomMin) {
+        zoomLevel /= 2;
+        updateCamera();
+        updateZoomButtons();
+      }
+    });
+
+    updateZoomButtons();
+
     function generateField() {
       const [initialWolfPX, initialWolfPY] = isoProject(wolfGX, wolfGY);
 
@@ -201,9 +263,10 @@
     }
 
     function updateCamera() {
-      cameraPX = boundVal(cameraPX, -worldRadPX, worldRadPX - viewportWidth);
-      cameraPY = boundVal(cameraPY, 0, worldDiamPY + tileRiserPY - viewportHeight);
-      document.getElementById("field").style.transform = `translate(${-cameraPX}px, ${-cameraPY}px)`;
+      // TODO: ensure camera remains centered on zoom in and out
+      cameraPX = boundVal(cameraPX, -worldRadPX * zoomLevel, worldRadPX * zoomLevel - viewportWidth);
+      cameraPY = boundVal(cameraPY, 0, (worldDiamPY + tileRiserPY) * zoomLevel - viewportHeight);
+      document.getElementById("field").style.transform = `translate(${-cameraPX}px, ${-cameraPY}px) scale(${zoomLevel})`;
     }
 
     function isoProject(gx, gy) {
@@ -312,8 +375,8 @@
 
     window.onload = function () {
       generateField();
-      gameLoop();
       addCursorTracker();
+      gameLoop();
     };
   </script>
 </body>
