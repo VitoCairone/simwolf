@@ -102,8 +102,22 @@
 <body>
   <div id="app">
     <div id="sidebar">
-      <button>Tool 1</button>
-      <button>Tool 2</button>
+      <button id="arrow-mode-toggle">
+        <svg id="arrow-keys-placeholder" width="26" height="26" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke="currentColor" fill="none" stroke-width="1">
+          <!-- Up arrow -->
+          <path d="M12 2 L9 6 H11 V10 H13 V6 H15 Z" />
+          <!-- Down arrow -->
+          <path d="M12 22 L9 18 H11 V14 H13 V18 H15 Z" />
+          <!-- Left arrow -->
+          <path d="M2 12 L6 9 V11 H10 V13 H6 V15 Z" />
+          <!-- Right arrow -->
+          <path d="M22 12 L18 9 V11 H14 V13 H18 V15 Z" />
+        </svg>
+        <svg id="arrow-mode-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <!-- SVG set by script on page load -->
+        </svg>
+      </button>
+
       <div class="zoom-buttons">
         <button id="zoom-in" aria-label="Zoom In">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -180,6 +194,24 @@
       "dirt", "grass", "bush", "tallgrass", "flower", "rock", "stone", "water", "ice"
     ];
 
+    const wolfIconSVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <!-- Face outline: top, left, right, bottom point -->
+      <path d="M6 6 H18 V18 L12 22 L6 18 Z" />
+      <!-- Ears: verticals -->
+      <line x1="7" y1="6" x2="7" y2="3" />
+      <line x1="17" y1="6" x2="17" y2="3" />
+      <!-- Ears: angled tops -->
+      <line x1="7" y1="3" x2="10" y2="6" />
+      <line x1="17" y1="3" x2="14" y2="6" />
+    </svg>`;
+
+    const cameraIconSVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <!-- Main camera body: rounded rectangle -->
+      <rect x="3" y="6" width="10" height="12" rx="2" ry="2" />
+      <!-- Right-facing lens hood / extension -->
+      <path d="M13 10 L17 7 V17 L13 14 Z" />
+    </svg>`
+
     let wolfGX = Math.floor(gridWidthN / 2) + 0.5;
     let wolfGY = Math.floor(gridHeightN / 2) + 0.5;
 
@@ -207,6 +239,17 @@
 
     const viewportWidth = document.getElementById('field-wrapper').clientWidth;
     const viewportHeight = document.getElementById('field-wrapper').clientHeight;
+
+    const arrowsToggle = document.getElementById('arrow-mode-toggle');
+    const arrowsIcon = document.getElementById('arrow-mode-icon');
+    arrowsIcon.innerHTML = cameraIconSVG;
+
+    let arrowsMoveWolf = true;
+
+    arrowsToggle.addEventListener('click', () => {
+      arrowsMoveWolf = !arrowsMoveWolf;
+      arrowsIcon.innerHTML = arrowsMoveWolf ? wolfIconSVG : cameraIconSVG;
+    });
 
     function boundVal(val, min, max) {
       return Math.max(min, Math.min(val, max));
