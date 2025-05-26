@@ -73,7 +73,7 @@
       background-size: auto;
       image-rendering: pixelated;
     }
-    #wolf {
+    .wolf {
       position: absolute;
       width: 64px;
       height: 64px;
@@ -149,7 +149,7 @@
 
   <script>
     const tileLayer = document.getElementById("tile-layer");
-    const wolfElement = document.getElementById('wolf');
+    const spriteLayer = document.getElementById("sprite-layer");
     const fieldElement = document.getElementById("field");
     const zoomInBtn = document.getElementById("zoom-in");
     const zoomOutBtn = document.getElementById("zoom-out");
@@ -212,17 +212,71 @@
       <path d="M13 10 L17 7 V17 L13 14 Z" />
     </svg>`
 
-    let wolfGX = Math.floor(gridWidthN / 2) + 0.5;
-    let wolfGY = Math.floor(gridHeightN / 2) + 0.5;
 
-    let wolfVelocityGX = 0;
-    let wolfVelocityGY = 0;
-    let currentDirection = 0;
-    let isMoving = false;
+    function isoProject(gx, gy) {
+      const px = (gx - gy) * halfTile;
+      const py = (gx + gy) * qtrTile;
+      return [px, py];
+    }
 
-    const wolfMovementSpeed = 10 / 60; // unit: tile/frame
-    let currentWolfFrame = 0;
-    let wolfAnimTimer = 0;
+    function rectiProject(px, py) {
+      const gx = (px / tileSize + py / halfTile);
+      const gy = (py / halfTile - px / tileSize);
+      return [gx, gy];
+    }
+
+    function boundVal(val, min, max) {
+      return Math.max(min, Math.min(val, max));
+    }
+
+
+    const wolfMovementSpeed = 10 / 60; // unit: tiles/animationFrame
+
+    function updateWolfFrame(wolf) {
+      wolf.animTimer = 0;
+      wolf.frame = (wolf.frame + 1) % (wolf.isMoving ? 8 : 4);
+      const frameCol = wolf.isMoving ? wolf.frame : (wolf.frame + 8);
+      console.log("Updating Wolf Frame")
+      console.log(wolf.frame, wolf.isMoving, frameCol, wolfFramePx, wolf.currentDirection, wolfFramePx);
+      wolf.element.style.backgroundPosition =
+        `-${frameCol * wolfFramePx}px -${wolf.currentDirection * wolfFramePx}px`;
+    }
+
+    function placeWolfSprite(wolf) {
+      const [isoX, isoY] = isoProject(wolf.gx, wolf.gy);
+
+      // wolf image is offset so its noon-shadow center is at its grid coordinate
+      const leftWolfOffsetC = wolfFramePx / 2;
+      const topWolfOffsetC = wolfFramePx - wolfFrameShadowPY;
+
+      wolf.element.style.left = (isoX - leftWolfOffsetC) + "px";
+      wolf.element.style.top = (isoY - topWolfOffsetC) + "px";
+      wolf.element.style.zIndex = Math.floor(wolf.gx + wolf.gy) + 0.5;
+    }
+
+    // Wolf setup
+    const nWolves = 30;
+    const wolves = Array.from({length: nWolves}, () => ({}));
+    
+    wolves.forEach(wolf => {
+      const el = document.createElement("div");
+      el.classList.add("wolf");
+      spriteLayer.appendChild(el);
+      wolf.element = el;
+
+      // start wolves on tile centers
+      wolf.gx = Math.floor(Math.random() * gridWidthN) + 0.5;
+      wolf.gy = Math.floor(Math.random() * gridHeightN) + 0.5;
+      wolf.velGX = 0;
+      wolf.velGY = 0;
+      wolf.animTimer = 0;
+      wolf.currentDirection = 0;
+      wolf.isMoving = false;
+      wolf.frame = 0;
+
+      updateWolfFrame(wolf);
+      placeWolfSprite(wolf);
+    });
 
     // these are coordinates for the upper-left corner of the viewport
     let cameraPX = 0;
@@ -251,10 +305,6 @@
       arrowsIcon.innerHTML = arrowsMoveWolf ? wolfIconSVG : cameraIconSVG;
     });
 
-    function boundVal(val, min, max) {
-      return Math.max(min, Math.min(val, max));
-    }
-
     function updateZoomButtons() {
       zoomInBtn.disabled = zoomLevel >= zoomMax;
       zoomOutBtn.disabled = zoomLevel <= zoomMin;
@@ -279,8 +329,6 @@
     updateZoomButtons();
 
     function generateField() {
-      const [initialWolfPX, initialWolfPY] = isoProject(wolfGX, wolfGY);
-
       // All our tiles images are offset so that the single point on the top of the world's
       // isometric diamond, for a flat terrain, is exactly the grid point (0, 0).
       const leftTileOffsetC = -halfTile;
@@ -316,29 +364,39 @@
       document.getElementById("field").style.transform = `translate(${-cameraPX}px, ${-cameraPY}px) scale(${zoomLevel})`;
     }
 
-    function isoProject(gx, gy) {
-      const px = (gx - gy) * halfTile;
-      const py = (gx + gy) * qtrTile;
-      return [px, py];
-    }
-
-    function rectiProject(px, py) {
-      const gx = (px / tileSize + py / halfTile);
-      const gy = (py / halfTile - px / tileSize);
-      return [gx, gy];
-    }
-
     const arrowKeyNames = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]
+    const pcWolf = wolves[0];
+
+    function updateAllWolves() {
+      wolves.forEach(wolf => {
+        wolf.animTimer++;
+        if (wolf.animTimer >= (wolf.isMoving ? 5 : 12)) updateWolfFrame(wolf);
+
+        if (wolf.velGX === 0 && wolf.velGY === 0) return;
+        const nextGX = wolf.gx + wolf.velGX;
+        const nextGY = wolf.gy + wolf.velGY;
+        if (nextGX >= 0.6 && nextGX < (gridWidthN - 0.6) && nextGY >= 0.6 && nextGY < (gridHeightN - 0.6)) {
+          wolf.gx = nextGX;
+          wolf.gy = nextGY;
+          wolf.isMoving = true;
+          placeWolfSprite(wolf);
+        } else {
+          wolf.velGX = 0;
+          wolf.velGY = 0;
+          wolf.isMoving = false;
+        }
+      })
+    }
 
     function gameLoop() {
       let hasInput = arrowKeyNames.some(ak => keysPressed[ak]);
       if (hasInput) {
         if (arrowsMoveWolf) {
           // for simplicity, the arrow keys currently move along grid axis and don't combine
-          if (keysPressed["ArrowUp"]) { setWolfMoving(movementDirections[3]); }
-          if (keysPressed["ArrowDown"]) { setWolfMoving(movementDirections[0]); }
-          if (keysPressed["ArrowLeft"]) { setWolfMoving(movementDirections[2]); }
-          if (keysPressed["ArrowRight"]) { setWolfMoving(movementDirections[1]); }
+          if (keysPressed["ArrowUp"]) { setWolfMoving(pcWolf, movementDirections[3]); }
+          if (keysPressed["ArrowDown"]) { setWolfMoving(pcWolf, movementDirections[0]); }
+          if (keysPressed["ArrowLeft"]) { setWolfMoving(pcWolf, movementDirections[2]); }
+          if (keysPressed["ArrowRight"]) { setWolfMoving(pcWolf, movementDirections[1]); }
         } else {
           if (keysPressed["ArrowUp"]) { cameraPY -= cameraSpeed; }
           if (keysPressed["ArrowDown"]) { cameraPY += cameraSpeed; }
@@ -348,40 +406,7 @@
         }
       }
 
-      wolfAnimTimer++;
-      if (wolfAnimTimer >= (isMoving ? 5 : 12)) {
-        wolfAnimTimer = 0;
-        currentWolfFrame++;
-        const maxFrame = isMoving ? 8 : 4;
-        currentWolfFrame %= maxFrame;
-        const frameCol = isMoving ? currentWolfFrame : (currentWolfFrame + 8);
-        wolfElement.style.backgroundPosition =
-          `-${frameCol * wolfFramePx}px -${currentDirection * wolfFramePx}px`;
-      }
-
-      const nextGX = wolfGX + wolfVelocityGX;
-      const nextGY = wolfGY + wolfVelocityGY;
-
-      if (nextGX >= 0.6 && nextGX < (gridWidthN - 0.6) && nextGY >= 0.6 && nextGY < (gridHeightN - 0.6)) {
-        wolfGX = nextGX;
-        wolfGY = nextGY;
-        isMoving = (wolfVelocityGX !== 0 || wolfVelocityGY !== 0);
-      } else {
-        wolfVelocityGX = 0;
-        wolfVelocityGY = 0;
-        isMoving = false;
-      }
-
-      const [isoX, isoY] = isoProject(wolfGX, wolfGY);
-
-      // wolf image is offset so its noon-shadow center is at its grid coordinate
-      const leftWolfOffsetC = wolfFramePx / 2;
-      const topWolfOffsetC = wolfFramePx - wolfFrameShadowPY;
-
-      wolfElement.style.left = (isoX - leftWolfOffsetC) + "px";
-      wolfElement.style.top = (isoY - topWolfOffsetC) + "px";
-      wolfElement.style.zIndex = Math.floor(wolfGX + wolfGY) + 0.5;
-
+      updateAllWolves();
       requestAnimationFrame(gameLoop);
     }
 
@@ -410,29 +435,29 @@
       });
     }
 
-    function setWolfMoving(dirObj) {
-      currentDirection = dirObj.dir;
-      wolfVelocityGX = dirObj.dx * wolfMovementSpeed;
-      wolfVelocityGY = dirObj.dy * wolfMovementSpeed;
-      isMoving = true;
+    function setWolfMoving(wolf, dirObj) {
+      wolf.currentDirection = dirObj.dir;
+      wolf.velGX = dirObj.dx * wolfMovementSpeed;
+      wolf.velGY = dirObj.dy * wolfMovementSpeed;
+      wolf.isMoving = true;
     }
 
-    function updateWolfAction() {
-      if (arrowsMoveWolf) return; // TODO: revise for shared control
+    function updateWolfAction(wolf) {
+      if (wolf === wolves[0] && arrowsMoveWolf) return;
 
       if (Math.random() < 0.5) {
-        wolfVelocityGX = 0;
-        wolfVelocityGY = 0;
-        isMoving = false;
+        wolf.velGX = 0;
+        wolf.velGY = 0;
+        wolf.isMoving = false;
         return;
       }
 
       const dirObj = movementDirections[Math.floor(Math.random() * movementDirections.length)];
-      setWolfMoving(dirObj);
+      setWolfMoving(wolf, dirObj);
     }
 
     setInterval(() => {
-      updateWolfAction();
+      wolves.forEach(wolf => updateWolfAction(wolf));
     }, 2000);
 
     document.addEventListener("keydown", (e) => { keysPressed[e.key] = true; });
