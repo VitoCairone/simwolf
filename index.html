@@ -81,11 +81,13 @@
       background-repeat: no-repeat;
       image-rendering: pixelated;
     }
-    .stag {
+    .deer {
       position: absolute;
       width: 32px;
       height: 41px;
-      background-image: url('./images/stag-idle')
+      background-image: url('./images/stag-idle.png');
+      background-repeat: no-repeat;
+      image-rendering: pixelated;
     }
     #tile-layer, #sprite-layer {
       position: absolute;
@@ -148,15 +150,15 @@
     <div id="field-wrapper">
       <div id="field">
         <div id="tile-layer"></div>
-        <div id="sprite-layer"><div id="wolf"></div></div>
+        <div id="sprite-layer"></div>
       </div>
     </div>
   </div>
 
   <script>
+    const fieldElement = document.getElementById("field");
     const tileLayer = document.getElementById("tile-layer");
     const spriteLayer = document.getElementById("sprite-layer");
-    const fieldElement = document.getElementById("field");
     const zoomInBtn = document.getElementById("zoom-in");
     const zoomOutBtn = document.getElementById("zoom-out");
 
@@ -172,7 +174,6 @@
     const wolfFramePx = 64;
     const deerFrameW = 32;
     const deerFrameH = 41;
-    const wolfFrameShadowPY = 39;
 
     // derived constants, set once on startup
 
@@ -239,8 +240,14 @@
 
     // TODO: consider what data should be allowed to vary by pose and what data is fixed for the species
     const frameDataBySpeciesAndPose = {
-      wolf: { 'idle': {nFrames: 4, col: 0, frameW: 64, frameH: 64}, 'run': {nFrames: 4, col: 0, frameW: 64, frameH: 64}},
-      deer: { 'idle': {nFrames: 4, col: 0, frameW: 32, frameH: 41}, 'run': {nFrames: 4, col: 0, frameW: 32, frameH: 41}}
+      wolf: { 
+        'idle': {nFrames: 4, colZero: 8, frameW: 64, frameH: 64, holdTks: 12, topToShadow: 39}, 
+        'run': {nFrames: 8, colZero: 0, frameW: 64, frameH: 64, holdTks: 5, topToShadow: 39}
+      },
+      deer: { 
+        'idle': {nFrames: 24, colZero: 11, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33}, 
+        'run': {nFrames: 11, colZero: 0, frameW: 32, frameH: 41, holdTks: 5, topToShadow: 33}
+      }
     }
 
     // converts miles per hour to tiles per tick
@@ -258,7 +265,7 @@
       wolf.animTimer = 0;
       const frameData = frameDataBySpeciesAndPose[wolf.species][wolf.pose];
       wolf.frame = (wolf.frame + 1) % frameData.nFrames;
-      const frameCol = frameData.col;
+      const frameCol = frameData.colZero + wolf.frame;
       wolf.element.style.backgroundPosition =
         `-${frameCol * wolfFramePx}px -${wolf.currentDirection * wolfFramePx}px`;
     }
@@ -401,13 +408,10 @@
     }
 
     function updateAllCritters() {
-      console.log("!!");
-      console.log(allCritters);
-      console.log(typeof allCritters);
-      console.log(Array.isArray(allCritters));
       allCritters.forEach(wolf => {
         wolf.animTimer++;
-        if (wolf.animTimer >= (wolf.isMoving ? 5 : 12)) updateCritterFrame(wolf);
+        let holdTks = frameDataBySpeciesAndPose[wolf.species][wolf.pose].holdTks;
+        if (wolf.animTimer >= holdTks) updateCritterFrame(wolf);
 
         if (wolf.velGX === 0 && wolf.velGY === 0) return;
         const nextGX = wolf.gx + wolf.velGX;
@@ -422,7 +426,7 @@
           wolf.velGY = 0;
           wolf.isMoving = false;
         }
-      })
+      });
     }
 
     function gameLoop() {
