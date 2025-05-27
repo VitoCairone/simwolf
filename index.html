@@ -81,6 +81,12 @@
       background-repeat: no-repeat;
       image-rendering: pixelated;
     }
+    .stag {
+      position: absolute;
+      width: 32px;
+      height: 41px;
+      background-image: url('./images/stag-idle')
+    }
     #tile-layer, #sprite-layer {
       position: absolute;
       top: 0;
@@ -164,6 +170,8 @@
     const gridWidthN = 128;
     const gridHeightN = 128;
     const wolfFramePx = 64;
+    const deerFrameW = 32;
+    const deerFrameH = 41;
     const wolfFrameShadowPY = 39;
 
     // derived constants, set once on startup
@@ -229,8 +237,16 @@
       return Math.max(min, Math.min(val, max));
     }
 
+    // converts miles per hour to tiles per tick
+    function mphToSpd() { return x * 1609.34 / 216000 }
 
-    const wolfMovementSpeed = 10 / 60; // unit: tiles/animationFrame
+    const wolfSprintSpeed = mphToSpd(37); // < 1 minute sustain
+    const wolfRunSpeed = mphToSpeed(6.0); // 20 minutes sustain
+    const wolfWalkSpeed = mphToSpeed(4.5); // 10 hr sustain
+
+    const deerSprintSpeed = mphToSpeed(43); // < 1 minute sustain
+    const deerRunSpeed = mphToSpeed(31); // 2-3 minutes sustain
+    const deerWalkSpeed = mphToSpeed(3.0); // 10 hr sustain
 
     function updateWolfFrame(wolf) {
       wolf.animTimer = 0;
@@ -437,8 +453,8 @@
 
     function setWolfMoving(wolf, dirObj) {
       wolf.currentDirection = dirObj.dir;
-      wolf.velGX = dirObj.dx * wolfMovementSpeed;
-      wolf.velGY = dirObj.dy * wolfMovementSpeed;
+      wolf.velGX = dirObj.dx * wolfRunSpeed;
+      wolf.velGY = dirObj.dy * wolfRunSpeed;
       wolf.isMoving = true;
     }
 
