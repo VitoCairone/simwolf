@@ -81,11 +81,13 @@
       background-repeat: no-repeat;
       image-rendering: pixelated;
     }
-    .stag {
+    .deer {
       position: absolute;
       width: 32px;
       height: 41px;
-      background-image: url('./images/stag-idle')
+      background-image: url('./images/stag-walk-idle.png');
+      background-repeat: no-repeat;
+      image-rendering: pixelated;
     }
     #tile-layer, #sprite-layer {
       position: absolute;
@@ -148,15 +150,15 @@
     <div id="field-wrapper">
       <div id="field">
         <div id="tile-layer"></div>
-        <div id="sprite-layer"><div id="wolf"></div></div>
+        <div id="sprite-layer"></div>
       </div>
     </div>
   </div>
 
   <script>
+    const fieldElement = document.getElementById("field");
     const tileLayer = document.getElementById("tile-layer");
     const spriteLayer = document.getElementById("sprite-layer");
-    const fieldElement = document.getElementById("field");
     const zoomInBtn = document.getElementById("zoom-in");
     const zoomOutBtn = document.getElementById("zoom-out");
 
@@ -169,10 +171,8 @@
     const tileRiserPY = 8;
     const gridWidthN = 128;
     const gridHeightN = 128;
-    const wolfFramePx = 64;
     const deerFrameW = 32;
     const deerFrameH = 41;
-    const wolfFrameShadowPY = 39;
 
     // derived constants, set once on startup
 
@@ -237,10 +237,22 @@
       return Math.max(min, Math.min(val, max));
     }
 
-    // converts miles per hour to tiles per tick
-    function mphToSpd() { return x * 1609.34 / 216000 }
+    // TODO: consider what data should be allowed to vary by pose and what data is fixed for the species
+    const frameDataBySpeciesAndPose = {
+      wolf: { 
+        'walk': {nFrames: 8, colZero: 0, frameW: 64, frameH: 64, holdTks: 5, topToShadow: 39},
+        'idle': {nFrames: 4, colZero: 8, frameW: 64, frameH: 64, holdTks: 12, topToShadow: 39} 
+      },
+      deer: { 
+        'walk': {nFrames: 11, colZero: 0, frameW: 32, frameH: 41, holdTks: 5, topToShadow: 33},
+        'idle': {nFrames: 24, colZero: 11, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33} 
+      }
+    }
 
-    const wolfSprintSpeed = mphToSpd(37); // < 1 minute sustain
+    // converts miles per hour to tiles per tick
+    function mphToSpeed(x) { return x * 1609.34 / 216000 }
+
+    const wolfSprintSpeed = mphToSpeed(37); // < 1 minute sustain
     const wolfRunSpeed = mphToSpeed(6.0); // 20 minutes sustain
     const wolfWalkSpeed = mphToSpeed(4.5); // 10 hr sustain
 
@@ -248,51 +260,64 @@
     const deerRunSpeed = mphToSpeed(31); // 2-3 minutes sustain
     const deerWalkSpeed = mphToSpeed(3.0); // 10 hr sustain
 
-    function updateWolfFrame(wolf) {
+    function updateCritterFrame(wolf) {
       wolf.animTimer = 0;
-      wolf.frame = (wolf.frame + 1) % (wolf.isMoving ? 8 : 4);
-      const frameCol = wolf.isMoving ? wolf.frame : (wolf.frame + 8);
-      console.log("Updating Wolf Frame")
-      console.log(wolf.frame, wolf.isMoving, frameCol, wolfFramePx, wolf.currentDirection, wolfFramePx);
+      const frameData = frameDataBySpeciesAndPose[wolf.species][wolf.pose];
+      wolf.frame = (wolf.frame + 1) % frameData.nFrames;
+      if (wolf.species === "deer") console.log(wolf.frame);
+      const frameCol = frameData.colZero + wolf.frame;
       wolf.element.style.backgroundPosition =
-        `-${frameCol * wolfFramePx}px -${wolf.currentDirection * wolfFramePx}px`;
+        `-${frameCol * frameData.frameW}px -${wolf.currentDirection * frameData.frameH}px`;
     }
 
-    function placeWolfSprite(wolf) {
+    function placeCritterSprite(wolf) {
       const [isoX, isoY] = isoProject(wolf.gx, wolf.gy);
 
       // wolf image is offset so its noon-shadow center is at its grid coordinate
-      const leftWolfOffsetC = wolfFramePx / 2;
-      const topWolfOffsetC = wolfFramePx - wolfFrameShadowPY;
+      const frameData = frameDataBySpeciesAndPose[wolf.species][wolf.pose];
+      const leftOffset = frameData.frameW / 2;
+      const topOffset = frameData.frameH - (frameData.topToShadow || 0);
 
-      wolf.element.style.left = (isoX - leftWolfOffsetC) + "px";
-      wolf.element.style.top = (isoY - topWolfOffsetC) + "px";
+      wolf.element.style.left = (isoX - leftOffset) + "px";
+      wolf.element.style.top = (isoY - topOffset) + "px";
       wolf.element.style.zIndex = Math.floor(wolf.gx + wolf.gy) + 0.5;
     }
 
     // Wolf setup
     const nWolves = 30;
     const wolves = Array.from({length: nWolves}, () => ({}));
+
+    const nDeer = 30;
+    const deer = Array.from({length: nDeer}, () => ({}));
     
-    wolves.forEach(wolf => {
+    // in this and other Critter function, the parameter name used is wolf,
+    // although it could be any critter
+    function initCritter(wolf, species) {
       const el = document.createElement("div");
-      el.classList.add("wolf");
+      el.classList.add(species);
       spriteLayer.appendChild(el);
       wolf.element = el;
 
       // start wolves on tile centers
+      wolf.species = species;
       wolf.gx = Math.floor(Math.random() * gridWidthN) + 0.5;
       wolf.gy = Math.floor(Math.random() * gridHeightN) + 0.5;
       wolf.velGX = 0;
       wolf.velGY = 0;
       wolf.animTimer = 0;
       wolf.currentDirection = 0;
-      wolf.isMoving = false;
+      wolf.pose = 'idle';
       wolf.frame = 0;
 
-      updateWolfFrame(wolf);
-      placeWolfSprite(wolf);
-    });
+      updateCritterFrame(wolf);
+      placeCritterSprite(wolf);
+    }
+
+    wolves.forEach(wolf => { initCritter(wolf, "wolf"); });
+    deer.forEach(aDeer => { initCritter(aDeer, "deer"); });
+
+    const allCritters = wolves.concat(deer);
+    const pcWolf = wolves[0];
 
     // these are coordinates for the upper-left corner of the viewport
     let cameraPX = 0;
@@ -310,6 +335,7 @@
     const viewportWidth = document.getElementById('field-wrapper').clientWidth;
     const viewportHeight = document.getElementById('field-wrapper').clientHeight;
 
+    const arrowKeyNames = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
     const arrowsToggle = document.getElementById('arrow-mode-toggle');
     const arrowsIcon = document.getElementById('arrow-mode-icon');
     arrowsIcon.innerHTML = cameraIconSVG;
@@ -380,13 +406,11 @@
       document.getElementById("field").style.transform = `translate(${-cameraPX}px, ${-cameraPY}px) scale(${zoomLevel})`;
     }
 
-    const arrowKeyNames = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"]
-    const pcWolf = wolves[0];
-
-    function updateAllWolves() {
-      wolves.forEach(wolf => {
+    function updateAllCritters() {
+      allCritters.forEach(wolf => {
         wolf.animTimer++;
-        if (wolf.animTimer >= (wolf.isMoving ? 5 : 12)) updateWolfFrame(wolf);
+        let holdTks = frameDataBySpeciesAndPose[wolf.species][wolf.pose].holdTks;
+        if (wolf.animTimer >= holdTks) updateCritterFrame(wolf);
 
         if (wolf.velGX === 0 && wolf.velGY === 0) return;
         const nextGX = wolf.gx + wolf.velGX;
@@ -394,14 +418,14 @@
         if (nextGX >= 0.6 && nextGX < (gridWidthN - 0.6) && nextGY >= 0.6 && nextGY < (gridHeightN - 0.6)) {
           wolf.gx = nextGX;
           wolf.gy = nextGY;
-          wolf.isMoving = true;
-          placeWolfSprite(wolf);
+          wolf.pose = 'walk';
+          placeCritterSprite(wolf);
         } else {
           wolf.velGX = 0;
           wolf.velGY = 0;
-          wolf.isMoving = false;
+          wolf.pose = 'idle'
         }
-      })
+      });
     }
 
     function gameLoop() {
@@ -422,7 +446,7 @@
         }
       }
 
-      updateAllWolves();
+      updateAllCritters();
       requestAnimationFrame(gameLoop);
     }
 
@@ -451,29 +475,31 @@
       });
     }
 
-    function setWolfMoving(wolf, dirObj) {
+    function setCritterMoving(wolf, dirObj) {
+      const visualFitMoveSpeed = 0.15; // TODO: resolve this
       wolf.currentDirection = dirObj.dir;
-      wolf.velGX = dirObj.dx * wolfRunSpeed;
-      wolf.velGY = dirObj.dy * wolfRunSpeed;
-      wolf.isMoving = true;
+      wolf.velGX = dirObj.dx * visualFitMoveSpeed;
+      wolf.velGY = dirObj.dy * visualFitMoveSpeed;
+      wolf.pose = 'walk';
     }
 
-    function updateWolfAction(wolf) {
+    function updateCritterAction(wolf) {
       if (wolf === wolves[0] && arrowsMoveWolf) return;
 
       if (Math.random() < 0.5) {
         wolf.velGX = 0;
         wolf.velGY = 0;
-        wolf.isMoving = false;
+        wolf.pose = 'idle';
         return;
       }
 
       const dirObj = movementDirections[Math.floor(Math.random() * movementDirections.length)];
-      setWolfMoving(wolf, dirObj);
+      setCritterMoving(wolf, dirObj);
     }
 
+    // TODO: fold this into the game loop, so that all critters don't make their decisions simultaneously
     setInterval(() => {
-      wolves.forEach(wolf => updateWolfAction(wolf));
+      allCritters.forEach(wolf => updateCritterAction(wolf));
     }, 2000);
 
     document.addEventListener("keydown", (e) => { keysPressed[e.key] = true; });
