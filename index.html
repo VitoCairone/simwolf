@@ -85,7 +85,7 @@
       position: absolute;
       width: 32px;
       height: 41px;
-      background-image: url('./images/stag-idle.png');
+      background-image: url('./images/stag-walk-idle.png');
       background-repeat: no-repeat;
       image-rendering: pixelated;
     }
@@ -171,7 +171,6 @@
     const tileRiserPY = 8;
     const gridWidthN = 128;
     const gridHeightN = 128;
-    const wolfFramePx = 64;
     const deerFrameW = 32;
     const deerFrameH = 41;
 
@@ -241,12 +240,12 @@
     // TODO: consider what data should be allowed to vary by pose and what data is fixed for the species
     const frameDataBySpeciesAndPose = {
       wolf: { 
-        'idle': {nFrames: 4, colZero: 8, frameW: 64, frameH: 64, holdTks: 12, topToShadow: 39}, 
-        'run': {nFrames: 8, colZero: 0, frameW: 64, frameH: 64, holdTks: 5, topToShadow: 39}
+        'walk': {nFrames: 8, colZero: 0, frameW: 64, frameH: 64, holdTks: 5, topToShadow: 39},
+        'idle': {nFrames: 4, colZero: 8, frameW: 64, frameH: 64, holdTks: 12, topToShadow: 39} 
       },
       deer: { 
-        'idle': {nFrames: 24, colZero: 11, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33}, 
-        'run': {nFrames: 11, colZero: 0, frameW: 32, frameH: 41, holdTks: 5, topToShadow: 33}
+        'walk': {nFrames: 11, colZero: 0, frameW: 32, frameH: 41, holdTks: 5, topToShadow: 33},
+        'idle': {nFrames: 24, colZero: 11, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33} 
       }
     }
 
@@ -265,9 +264,10 @@
       wolf.animTimer = 0;
       const frameData = frameDataBySpeciesAndPose[wolf.species][wolf.pose];
       wolf.frame = (wolf.frame + 1) % frameData.nFrames;
+      if (wolf.species === "deer") console.log(wolf.frame);
       const frameCol = frameData.colZero + wolf.frame;
       wolf.element.style.backgroundPosition =
-        `-${frameCol * wolfFramePx}px -${wolf.currentDirection * wolfFramePx}px`;
+        `-${frameCol * frameData.frameW}px -${wolf.currentDirection * frameData.frameH}px`;
     }
 
     function placeCritterSprite(wolf) {
@@ -306,7 +306,6 @@
       wolf.velGY = 0;
       wolf.animTimer = 0;
       wolf.currentDirection = 0;
-      wolf.isMoving = false;
       wolf.pose = 'idle';
       wolf.frame = 0;
 
@@ -419,12 +418,12 @@
         if (nextGX >= 0.6 && nextGX < (gridWidthN - 0.6) && nextGY >= 0.6 && nextGY < (gridHeightN - 0.6)) {
           wolf.gx = nextGX;
           wolf.gy = nextGY;
-          wolf.isMoving = true;
+          wolf.pose = 'walk';
           placeCritterSprite(wolf);
         } else {
           wolf.velGX = 0;
           wolf.velGY = 0;
-          wolf.isMoving = false;
+          wolf.pose = 'idle'
         }
       });
     }
@@ -477,11 +476,11 @@
     }
 
     function setCritterMoving(wolf, dirObj) {
-      const visualFitRunSpeed = 0.15; // TODO: resolve this
+      const visualFitMoveSpeed = 0.15; // TODO: resolve this
       wolf.currentDirection = dirObj.dir;
-      wolf.velGX = dirObj.dx * visualFitRunSpeed;
-      wolf.velGY = dirObj.dy * visualFitRunSpeed;
-      wolf.isMoving = true;
+      wolf.velGX = dirObj.dx * visualFitMoveSpeed;
+      wolf.velGY = dirObj.dy * visualFitMoveSpeed;
+      wolf.pose = 'walk';
     }
 
     function updateCritterAction(wolf) {
@@ -490,7 +489,7 @@
       if (Math.random() < 0.5) {
         wolf.velGX = 0;
         wolf.velGY = 0;
-        wolf.isMoving = false;
+        wolf.pose = 'idle';
         return;
       }
 
