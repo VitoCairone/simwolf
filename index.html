@@ -237,10 +237,15 @@
       return Math.max(min, Math.min(val, max));
     }
 
-    // converts miles per hour to tiles per tick
-    function mphToSpd() { return x * 1609.34 / 216000 }
+    const frameDataBySpeciesAndPose = {
+      wolf: { 'idle': {nFrames: 4, col: 0}, 'run': {nFrames: 4, col: 0}},
+      deer: { 'idle': {nFrames: 4, col: 0}, 'run': {nFrames: 4, col: 0}}
+    }
 
-    const wolfSprintSpeed = mphToSpd(37); // < 1 minute sustain
+    // converts miles per hour to tiles per tick
+    function mphToSpeed(x) { return x * 1609.34 / 216000 }
+
+    const wolfSprintSpeed = mphToSpeed(37); // < 1 minute sustain
     const wolfRunSpeed = mphToSpeed(6.0); // 20 minutes sustain
     const wolfWalkSpeed = mphToSpeed(4.5); // 10 hr sustain
 
@@ -248,17 +253,16 @@
     const deerRunSpeed = mphToSpeed(31); // 2-3 minutes sustain
     const deerWalkSpeed = mphToSpeed(3.0); // 10 hr sustain
 
-    function updateWolfFrame(wolf) {
+    function updateCritterFrame(wolf) {
       wolf.animTimer = 0;
-      wolf.frame = (wolf.frame + 1) % (wolf.isMoving ? 8 : 4);
-      const frameCol = wolf.isMoving ? wolf.frame : (wolf.frame + 8);
-      console.log("Updating Wolf Frame")
-      console.log(wolf.frame, wolf.isMoving, frameCol, wolfFramePx, wolf.currentDirection, wolfFramePx);
+      const frameData = frameDataBySpeciesAndPose[wolf.species][wolf.pose];
+      wolf.frame = (wolf.frame + 1) % frameData[wolf.species][wolf.pose];
+      const frameCol = frameData.col;
       wolf.element.style.backgroundPosition =
         `-${frameCol * wolfFramePx}px -${wolf.currentDirection * wolfFramePx}px`;
     }
 
-    function placeWolfSprite(wolf) {
+    function placeCritterSprite(wolf) {
       const [isoX, isoY] = isoProject(wolf.gx, wolf.gy);
 
       // wolf image is offset so its noon-shadow center is at its grid coordinate
@@ -452,9 +456,10 @@
     }
 
     function setWolfMoving(wolf, dirObj) {
+      const visualFitRunSpeed = 0.15; // TODO: resolve this
       wolf.currentDirection = dirObj.dir;
-      wolf.velGX = dirObj.dx * wolfRunSpeed;
-      wolf.velGY = dirObj.dy * wolfRunSpeed;
+      wolf.velGX = dirObj.dx * visualFitRunSpeed;
+      wolf.velGY = dirObj.dy * visualFitRunSpeed;
       wolf.isMoving = true;
     }
 
