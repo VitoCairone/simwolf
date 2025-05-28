@@ -326,10 +326,10 @@
     const keysPressed = {};
 
     const movementDirections = [
-      { dx: 0, dy: 1, dir: 0 },
+      { dx: 0, dy: -1, dir: 0 },
       { dx: 1, dy: 0, dir: 1 },
-      { dx: -1, dy: 0, dir: 2 },
-      { dx: 0, dy: -1, dir: 3 }
+      { dx: 0, dy: 1, dir: 2 },
+      { dx: -1, dy: 0, dir: 3 }
     ];
 
     const viewportWidth = document.getElementById('field-wrapper').clientWidth;
@@ -476,7 +476,7 @@
     }
 
     function setCritterMoving(wolf, dirObj) {
-      const visualFitMoveSpeed = 0.15; // TODO: resolve this
+      const visualFitMoveSpeed = 0.08; // TODO: resolve this
       wolf.currentDirection = dirObj.dir;
       wolf.velGX = dirObj.dx * visualFitMoveSpeed;
       wolf.velGY = dirObj.dy * visualFitMoveSpeed;
