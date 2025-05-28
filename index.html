@@ -497,6 +497,59 @@
       setCritterMoving(wolf, dirObj);
     }
 
+    function getOccupiedTiles(gx, gy) {
+      const halfSize = 16; // Half of 32
+      const left = Math.floor(gx - halfSize);
+      const right = Math.floor(gx + halfSize);
+      const top = Math.floor(gy - halfSize);
+      const bottom = Math.floor(gy + halfSize);
+
+      const tiles = [];
+      for (let x = left; x <= right; x++) {
+        for (let y = top; y <= bottom; y++) {
+          tiles.push(`${x}_${y}`); // string key
+        }
+      }
+      return tiles;
+    }
+
+    function boundingBoxesOverlap(a, b) {
+      return Math.abs(a.gx - b.gx) < 32 && Math.abs(a.gy - b.gy) < 32;
+    }
+
+    function findCollidingPairs(creatures) {
+      const tileMap = new Map();  // key: tile "x_y", value: list of creature indices
+      const potentialPairs = new Set();  // store "i|j" where i < j
+
+      for (let i = 0; i < creatures.length; i++) {
+        const creature = creatures[i];
+        const tiles = getOccupiedTiles(creature.gx, creature.gy);
+
+        for (const tile of tiles) {
+          if (!tileMap.has(tile)) {
+            tileMap.set(tile, [i]);
+          } else {
+            for (const j of tileMap.get(tile)) {
+              const pairKey = i < j ? `${i}|${j}` : `${j}|${i}`;
+              potentialPairs.add(pairKey);
+            }
+            tileMap.get(tile).push(i);
+          }
+        }
+      }
+
+      // Now check actual bounding box overlap
+      const collisions = [];
+      for (const pairKey of potentialPairs) {
+        const [i, j] = pairKey.split('|').map(Number);
+        if (boundingBoxesOverlap(creatures[i], creatures[j])) {
+          collisions.push([creatures[i], creatures[j]]);
+        }
+      }
+
+      return collisions;
+    }
+
     // TODO: fold this into the game loop, so that all critters don't make their decisions simultaneously
     setInterval(() => {
       allCritters.forEach(wolf => updateCritterAction(wolf));
