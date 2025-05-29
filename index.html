@@ -264,7 +264,7 @@
       wolf.animTimer = 0;
       const frameData = frameDataBySpeciesAndPose[wolf.species][wolf.pose];
       wolf.frame = (wolf.frame + 1) % frameData.nFrames;
-      if (wolf.species === "deer") console.log(wolf.frame);
+      // if (wolf.species === "deer") console.log(wolf.frame);
       const frameCol = frameData.colZero + wolf.frame;
       wolf.element.style.backgroundPosition =
         `-${frameCol * frameData.frameW}px -${wolf.currentDirection * frameData.frameH}px`;
@@ -412,18 +412,48 @@
         let holdTks = frameDataBySpeciesAndPose[wolf.species][wolf.pose].holdTks;
         if (wolf.animTimer >= holdTks) updateCritterFrame(wolf);
 
-        if (wolf.velGX === 0 && wolf.velGY === 0) return;
+        if (wolf.velGX === 0 && wolf.velGY === 0) {
+          wolf.nextGX = wolf.gx;
+          wolf.nextGY = wolf.gy;
+          return;
+        }
+
         const nextGX = wolf.gx + wolf.velGX;
         const nextGY = wolf.gy + wolf.velGY;
         if (nextGX >= 0.6 && nextGX < (gridWidthN - 0.6) && nextGY >= 0.6 && nextGY < (gridHeightN - 0.6)) {
-          wolf.gx = nextGX;
-          wolf.gy = nextGY;
+          wolf.nextGX = nextGX;
+          wolf.nextGY = nextGY;
           wolf.pose = 'walk';
-          placeCritterSprite(wolf);
         } else {
+          wolf.nextGX = wolf.gx;
+          wolf.nextGY = wolf.gy;
           wolf.velGX = 0;
           wolf.velGY = 0;
           wolf.pose = 'idle'
+        }
+      });
+
+      moveAllTogether(allCritters);
+    }
+
+    function moveAllTogether(movers) {
+      // lazy first pass: halt colliders
+      const collidePairs = findCollidingPairs(movers);
+      const didCollide = {};
+      collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
+      movers.forEach(mover => {
+        // TODO: consider if this check is necessary and why?
+        if (mover.nextGX === mover.gx && mover.nextGY === mover.gy) return;
+
+        // TODO: Fix this logic, everything seems to get halted by first branch...
+        if (false && didCollide[mover]) {
+          // this mover's gx and gy do NOT get updated
+          mover.velGX = 0;
+          mover.velGY = 0;
+        } else {
+          mover.gx = mover.nextGX;
+          mover.gy = mover.nextGY;
+          placeCritterSprite(mover);
         }
       });
     }
@@ -433,10 +463,10 @@
       if (hasInput) {
         if (arrowsMoveWolf) {
           // for simplicity, the arrow keys currently move along grid axis and don't combine
-          if (keysPressed["ArrowUp"]) { setWolfMoving(pcWolf, movementDirections[3]); }
-          if (keysPressed["ArrowDown"]) { setWolfMoving(pcWolf, movementDirections[0]); }
-          if (keysPressed["ArrowLeft"]) { setWolfMoving(pcWolf, movementDirections[2]); }
-          if (keysPressed["ArrowRight"]) { setWolfMoving(pcWolf, movementDirections[1]); }
+          if (keysPressed["ArrowUp"]) { setCritterMoving(pcWolf, movementDirections[3]); }
+          if (keysPressed["ArrowDown"]) { setCritterMoving(pcWolf, movementDirections[0]); }
+          if (keysPressed["ArrowLeft"]) { setCritterMoving(pcWolf, movementDirections[2]); }
+          if (keysPressed["ArrowRight"]) { setCritterMoving(pcWolf, movementDirections[1]); }
         } else {
           if (keysPressed["ArrowUp"]) { cameraPY -= cameraSpeed; }
           if (keysPressed["ArrowDown"]) { cameraPY += cameraSpeed; }
@@ -497,12 +527,11 @@
       setCritterMoving(wolf, dirObj);
     }
 
-    function getOccupiedTiles(gx, gy) {
-      const halfSize = 16; // Half of 32
-      const left = Math.floor(gx - halfSize);
-      const right = Math.floor(gx + halfSize);
-      const top = Math.floor(gy - halfSize);
-      const bottom = Math.floor(gy + halfSize);
+    function getOccupiedTiles(gx, gy, boxRad = 0.5) {
+      const left = Math.floor(gx - boxRad);
+      const right = Math.floor(gx + boxRad);
+      const top = Math.floor(gy - boxRad);
+      const bottom = Math.floor(gy + boxRad);
 
       const tiles = [];
       for (let x = left; x <= right; x++) {
@@ -512,17 +541,22 @@
       }
       return tiles;
     }
+    
 
-    function boundingBoxesOverlap(a, b) {
+    function doBoundingBoxesOverlap(a, b) {
+      // TODO: fix this hardcoded box size
       return Math.abs(a.gx - b.gx) < 32 && Math.abs(a.gy - b.gy) < 32;
     }
 
     function findCollidingPairs(creatures) {
-      const tileMap = new Map();  // key: tile "x_y", value: list of creature indices
+      // console.log(creatures.map(c => [c.gx, c.gy]));
+
+      const tileMap = new Map();  // key: tile "x_y", value: index of creature
       const potentialPairs = new Set();  // store "i|j" where i < j
 
       for (let i = 0; i < creatures.length; i++) {
         const creature = creatures[i];
+        // TODO: individual-specific bounding boxes, ideally rectangular rather than square
         const tiles = getOccupiedTiles(creature.gx, creature.gy);
 
         for (const tile of tiles) {
@@ -542,7 +576,7 @@
       const collisions = [];
       for (const pairKey of potentialPairs) {
         const [i, j] = pairKey.split('|').map(Number);
-        if (boundingBoxesOverlap(creatures[i], creatures[j])) {
+        if (doBoundingBoxesOverlap(creatures[i], creatures[j])) {
           collisions.push([creatures[i], creatures[j]]);
         }
       }
