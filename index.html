@@ -439,14 +439,16 @@
     function moveAllTogether(movers) {
       // lazy first pass: halt colliders
       const collidePairs = findCollidingPairs(movers);
+      // console.log(collidePairs);
       const didCollide = {};
       collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
-      movers.forEach(mover => {
+      console.log(Object.keys(didCollide));
+      movers.forEach((mover, idx) => {
         // TODO: consider if this check is necessary and why?
         if (mover.nextGX === mover.gx && mover.nextGY === mover.gy) return;
 
-        // TODO: Fix this logic, everything seems to get halted by first branch...
-        if (false && didCollide[mover]) {
+        // TODO: Fix this logic, once halted a creature is never able to escape...
+        if (didCollide[idx]) {
           // this mover's gx and gy do NOT get updated
           mover.velGX = 0;
           mover.velGY = 0;
@@ -577,7 +579,7 @@
       for (const pairKey of potentialPairs) {
         const [i, j] = pairKey.split('|').map(Number);
         if (doBoundingBoxesOverlap(creatures[i], creatures[j])) {
-          collisions.push([creatures[i], creatures[j]]);
+          collisions.push([i, j]);
         }
       }
 
