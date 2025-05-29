@@ -302,12 +302,10 @@
       wolf.species = species;
       wolf.gx = Math.floor(Math.random() * gridWidthN) + 0.5;
       wolf.gy = Math.floor(Math.random() * gridHeightN) + 0.5;
-      wolf.velGX = 0;
-      wolf.velGY = 0;
       wolf.animTimer = 0;
       wolf.currentDirection = 0;
-      wolf.pose = 'idle';
       wolf.frame = 0;
+      setCritterIdle(wolf);
 
       updateCritterFrame(wolf);
       placeCritterSprite(wolf);
@@ -423,13 +421,8 @@
         if (nextGX >= 0.6 && nextGX < (gridWidthN - 0.6) && nextGY >= 0.6 && nextGY < (gridHeightN - 0.6)) {
           wolf.nextGX = nextGX;
           wolf.nextGY = nextGY;
-          wolf.pose = 'walk';
         } else {
-          wolf.nextGX = wolf.gx;
-          wolf.nextGY = wolf.gy;
-          wolf.velGX = 0;
-          wolf.velGY = 0;
-          wolf.pose = 'idle'
+          setCritterIdle(wolf);
         }
       });
 
@@ -450,8 +443,7 @@
         // TODO: Fix this logic, once halted a creature is never able to escape...
         if (didCollide[idx]) {
           // this mover's gx and gy do NOT get updated
-          mover.velGX = 0;
-          mover.velGY = 0;
+          setCritterIdle(mover);
         } else {
           mover.gx = mover.nextGX;
           mover.gy = mover.nextGY;
@@ -507,21 +499,31 @@
       });
     }
 
+    function setCritterIdle(wolf) {
+      if (wolf.pose === "idle") return;
+      wolf.velGX = 0;
+      wolf.velGY = 0;
+      wolf.nextGX = wolf.gx;
+      wolf.nextGY = wolf.gy;
+      wolf.pose = "idle";
+      updateCritterFrame(mover);
+    }
+
     function setCritterMoving(wolf, dirObj) {
+      if (wolf.pose === "walk" && wolf.currentDirection === dirObj.dir) return;
       const visualFitMoveSpeed = 0.08; // TODO: resolve this
       wolf.currentDirection = dirObj.dir;
       wolf.velGX = dirObj.dx * visualFitMoveSpeed;
       wolf.velGY = dirObj.dy * visualFitMoveSpeed;
-      wolf.pose = 'walk';
+      wolf.pose = "walk";
+      updateCritterFrame(mover);
     }
 
     function updateCritterAction(wolf) {
       if (wolf === wolves[0] && arrowsMoveWolf) return;
 
       if (Math.random() < 0.5) {
-        wolf.velGX = 0;
-        wolf.velGY = 0;
-        wolf.pose = 'idle';
+        setCritterIdle(wolf);
         return;
       }
 
