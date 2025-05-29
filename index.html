@@ -220,6 +220,7 @@
       <path d="M13 10 L17 7 V17 L13 14 Z" />
     </svg>`
 
+    function boundVal(val, min, max) { return Math.max(min, Math.min(val, max)); }
 
     function isoProject(gx, gy) {
       const px = (gx - gy) * halfTile;
@@ -231,10 +232,6 @@
       const gx = (px / tileSize + py / halfTile);
       const gy = (py / halfTile - px / tileSize);
       return [gx, gy];
-    }
-
-    function boundVal(val, min, max) {
-      return Math.max(min, Math.min(val, max));
     }
 
     // TODO: consider what data should be allowed to vary by pose and what data is fixed for the species
@@ -264,7 +261,6 @@
       wolf.animTimer = 0;
       const frameData = frameDataBySpeciesAndPose[wolf.species][wolf.pose];
       wolf.frame = (wolf.frame + 1) % frameData.nFrames;
-      // if (wolf.species === "deer") console.log(wolf.frame);
       const frameCol = frameData.colZero + wolf.frame;
       wolf.element.style.backgroundPosition =
         `-${frameCol * frameData.frameW}px -${wolf.currentDirection * frameData.frameH}px`;
@@ -300,6 +296,7 @@
 
       // start wolves on tile centers
       wolf.species = species;
+      // initial assignment of [gx, gy] -- changes in moveAllTogether() only
       wolf.gx = Math.floor(Math.random() * gridWidthN) + 0.5;
       wolf.gy = Math.floor(Math.random() * gridHeightN) + 0.5;
       wolf.animTimer = 0;
@@ -430,21 +427,21 @@
     }
 
     function moveAllTogether(movers) {
-      // lazy first pass: halt colliders
       const collidePairs = findCollidingPairs(movers);
-      // console.log(collidePairs);
-      const didCollide = {};
+      let didCollide = {};
       collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
-      console.log(Object.keys(didCollide));
+      // lazy first pass: halt colliders pre-collisions
+
       movers.forEach((mover, idx) => {
-        // TODO: consider if this check is necessary and why?
+        // for a stationary mover that is collided into, do nothing
         if (mover.nextGX === mover.gx && mover.nextGY === mover.gy) return;
 
-        // TODO: Fix this logic, once halted a creature is never able to escape...
         if (didCollide[idx]) {
-          // this mover's gx and gy do NOT get updated
-          setCritterIdle(mover);
+          // this mover's gx and gy do NOT get updated this tick
+          // and it should not try to continue the sasme movement
+          updateCritterAction(mover);
         } else {
+          // this is the ONLY PLACE ANYWHERE that mover gx and gy should change!
           mover.gx = mover.nextGX;
           mover.gy = mover.nextGY;
           placeCritterSprite(mover);
@@ -506,7 +503,7 @@
       wolf.nextGX = wolf.gx;
       wolf.nextGY = wolf.gy;
       wolf.pose = "idle";
-      updateCritterFrame(mover);
+      updateCritterFrame(wolf);
     }
 
     function setCritterMoving(wolf, dirObj) {
@@ -516,7 +513,7 @@
       wolf.velGX = dirObj.dx * visualFitMoveSpeed;
       wolf.velGY = dirObj.dy * visualFitMoveSpeed;
       wolf.pose = "walk";
-      updateCritterFrame(mover);
+      updateCritterFrame(wolf);
     }
 
     function updateCritterAction(wolf) {
@@ -547,9 +544,9 @@
     }
     
 
-    function doBoundingBoxesOverlap(a, b) {
+    function doNextBoundingBoxesOverlap(a, b) {
       // TODO: fix this hardcoded box size
-      return Math.abs(a.gx - b.gx) < 32 && Math.abs(a.gy - b.gy) < 32;
+      return Math.abs(a.nextGX - b.nextGX) < 1.0 && Math.abs(a.nextGY - b.nextGY) < 1.0;
     }
 
     function findCollidingPairs(creatures) {
@@ -561,7 +558,7 @@
       for (let i = 0; i < creatures.length; i++) {
         const creature = creatures[i];
         // TODO: individual-specific bounding boxes, ideally rectangular rather than square
-        const tiles = getOccupiedTiles(creature.gx, creature.gy);
+        const tiles = getOccupiedTiles(creature.nextGX, creature.nextGY);
 
         for (const tile of tiles) {
           if (!tileMap.has(tile)) {
@@ -580,7 +577,7 @@
       const collisions = [];
       for (const pairKey of potentialPairs) {
         const [i, j] = pairKey.split('|').map(Number);
-        if (doBoundingBoxesOverlap(creatures[i], creatures[j])) {
+        if (doNextBoundingBoxesOverlap(creatures[i], creatures[j])) {
           collisions.push([i, j]);
         }
       }
