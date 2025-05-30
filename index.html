@@ -314,6 +314,8 @@
     const allCritters = wolves.concat(deer);
     const pcWolf = wolves[0];
 
+    forbidOverlapsOnStart();
+
     // these are coordinates for the upper-left corner of the viewport
     let cameraPX = 0;
     let cameraPY = 0;
@@ -447,6 +449,44 @@
           placeCritterSprite(mover);
         }
       });
+    }
+
+    function deleteCritter(critter) {
+      if (!critter) return alert("falsy arg to deleteCritter");
+      if (typeof critter !== "object") return alert("invalid arg type to deleteCritter");
+      const idx = allCritters.findIndex(critter);
+      if (idx === -1) return alert("arg object to deleteCritter not in list");
+
+      critter.element.remove();
+      allCritters.splice(idx, 1);
+
+      // Note: Creatures created on-init will not be actually be garbage collected
+      // because they are still referenced by the (unused) wolves and deer arrays,
+      // but they will no longer be processed on-tick or rendered
+    }
+
+    function forbidOverlapsOnStart() {
+      allCritters.forEach(m => {
+        m.nextGX = m.gx;
+        m.nextGY = m.gy;
+      });
+      let overlapPairs = findCollidingPairs(allCritters);
+      for (let tries = 0; overlapPairs.length && tries < 10; tries++) {
+        const toReplace = [];
+        const offenders = new Set();
+        overlapPairs.forEach(pair => offenders.add(pair[1]));
+        // when splicing, highest indices must always be removed first!
+        const removeIdxs = Array.from(offenders).sort((a, b) => b - a);
+        removeIdxs.forEach(idx => {
+          toReplace.push(allCritters[idx].species);
+          deleteCritter(allCritters[idx]);
+        });
+        // TODO: re-init toReplace critters
+
+        // recollect for next cycle
+        overlapPairs = findCollidingPairs(allCritters);
+      }
+      if (overlapPairs.length) alert("Density too high: cannot place randomly without overlap");
     }
 
     function gameLoop() {
