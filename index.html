@@ -390,8 +390,21 @@
     const renderedTiles = new Map();
 
     function getTileTypeAt(gx, gy) {
+      const scale = 0.1;
+      const noise = Math.sin(gx * scale) + Math.sin(gy * scale);
+
+      // Add subtle irregularity to the wave
+      const jitter = Math.sin(gx * 0.17 + gy * 0.23) * 0.5;
+      const grassChance = noise + jitter - 0.8;
+
+      // Deterministic pseudo-random from coordinates
+      // So that when we revisit a place freed from system memory, the terrain remains the same
+      const hash = Math.sin((gx * 374761393 + gy * 668265263) % 1000000) * 43758.5453;
+      const pseudoRandom = hash - Math.floor(hash); // [0, 1)
+
+      if (pseudoRandom < grassChance) return "grass";
       const seed = (gx * 73856093) ^ (gy * 19349663);
-      const types = ["dirt", "grass", "bush", "tallgrass", "flower", "rock", "stone", "water", "ice"];
+      const types = ["dirt", "grass", "bush", "tallgrass", "rock"];
       return types[Math.abs(seed) % types.length];
     }
 
