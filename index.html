@@ -176,15 +176,15 @@
     const zoomOutBtn = document.getElementById("zoom-out");
     const debugWolfEl = document.getElementById("dbel-pc-wolf");
 
-    let zoomLevel = 1;
+    let zoom = 1;
     const zoomMin = 0.5;
     const zoomMax = 8;
 
     // parameters
     const tileSize = 32;
     const tileRiserPY = 8;
-    const gridWidthN = 128;
-    const gridHeightN = 128;
+    const gridWidthN = 5000;
+    const gridHeightN = 5000;
     const deerFrameW = 32;
     const deerFrameH = 41;
 
@@ -316,8 +316,8 @@
       // start wolves on tile centers
       wolf.species = species;
       // initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
-      wolf.gx = Math.floor(Math.random() * gridWidthN) + 0.5;
-      wolf.gy = Math.floor(Math.random() * gridHeightN) + 0.5;
+      wolf.gx = Math.floor(Math.random() * 50) + 0.5;
+      wolf.gy = Math.floor(Math.random() * 50) + 0.5;
       wolf.animTimer = 0;
       wolf.redecideCd = 0; // Cd = Cooldown (ticks)
       wolf.currentDirection = 0;
@@ -365,21 +365,21 @@
     });
 
     function updateZoomButtons() {
-      zoomInBtn.disabled = zoomLevel >= zoomMax;
-      zoomOutBtn.disabled = zoomLevel <= zoomMin;
+      zoomInBtn.disabled = zoom >= zoomMax;
+      zoomOutBtn.disabled = zoom <= zoomMin;
     }
 
     zoomInBtn.addEventListener("click", () => {
-      if (zoomLevel < zoomMax) {
-        zoomLevel *= 2;
+      if (zoom < zoomMax) {
+        zoom *= 2;
         updateCamera();
         updateZoomButtons();
       }
     });
 
     zoomOutBtn.addEventListener("click", () => {
-      if (zoomLevel > zoomMin) {
-        zoomLevel /= 2;
+      if (zoom > zoomMin) {
+        zoom /= 2;
         updateCamera();
         updateZoomButtons();
       }
@@ -387,40 +387,65 @@
 
     updateZoomButtons();
 
-    function generateField() {
-      // All our tiles images are offset so that the single point on the top of the world's
-      // isometric diamond, for a flat terrain, is exactly the grid point (0, 0).
-      const leftTileOffsetC = -halfTile;
-      const topTileOffsetC = -tileRiserPY;
+    const renderedTiles = new Map();
 
-      for (let r = 0; r < gridHeightN; r++) {
-        for (let c = 0; c < gridWidthN; c++) {
-          const tile = document.createElement("div");
-          tile.classList.add("tile");
+    function getTileTypeAt(gx, gy) {
+      const seed = (gx * 73856093) ^ (gy * 19349663);
+      const types = ["dirt", "grass", "bush", "tallgrass", "flower", "rock", "stone", "water", "ice"];
+      return types[Math.abs(seed) % types.length];
+    }
 
-          const [isoX, isoY] = isoProject(c, r);
+    function renderVisibleTiles() {
+      // Todo: review to see if we can capture fewer undisplayed tiles without excessive complexity
 
-          tile.style.left = (isoX + leftTileOffsetC) + "px";
-          tile.style.top = (isoY + topTileOffsetC) + "px" ;
-          tile.style.zIndex = c + r;
+      const viewW = viewportWidth / zoom;
+      const viewH = viewportHeight / zoom;
 
-          const randomType = terrainTypes[Math.floor(Math.random() * terrainTypes.length)];
-          // tile.classList.add(randomType);
-          tile.classList.add("dirt");
-          tile.style.backgroundPositionX = `${-tileSize * Math.floor(Math.random() * 11)}px`
-          tile.dataset.type = randomType;
+      const leftPX = cameraPX / zoom;
+      const topPX = cameraPY / zoom;
+      const rightPX = leftPX + viewW;
+      const bottomPX = topPX + viewH;
 
-          tileLayer.appendChild(tile);
+      const buffer = 2;
+
+      const gxMin = Math.floor((leftPX / halfTile + topPX / qtrTile) / 2) - buffer;
+      const gxMax = Math.ceil((rightPX / halfTile + bottomPX / qtrTile) / 2) + buffer;
+      const gyMin = Math.floor((topPX / qtrTile - rightPX / halfTile) / 2) - buffer;
+      const gyMax = Math.ceil((bottomPX / qtrTile - leftPX / halfTile) / 2) + buffer;
+
+      for (const key of renderedTiles.keys()) {
+        const [gx, gy] = key.split('_').map(Number);
+        if (gx < gxMin || gx > gxMax || gy < gyMin || gy > gyMax) {
+          tileLayer.removeChild(renderedTiles.get(key));
+          renderedTiles.delete(key);
         }
       }
-      updateCamera();
+
+      for (let gy = gyMin; gy <= gyMax; gy++) {
+        for (let gx = gxMin; gx <= gxMax; gx++) {
+          const key = `${gx}_${gy}`;
+          if (renderedTiles.has(key)) continue;
+          if (gx < 0 || gy < 0 || gx >= gridWidthN || gy >= gridHeightN) continue;
+
+          const tile = document.createElement("div");
+          tile.className = `tile ${getTileTypeAt(gx, gy)}`;
+          tile.style.zIndex = gx + gy;
+
+          const [px, py] = isoProject(gx, gy);
+          tile.style.left = `${px - halfTile}px`;
+          tile.style.top = `${py - tileRiserPY}px`;
+
+          tileLayer.appendChild(tile);
+          renderedTiles.set(key, tile);
+        }
+      }
     }
 
     function updateCamera() {
-      // TODO: ensure camera remains centered on zoom in and out
-      cameraPX = boundVal(cameraPX, -worldRadPX * zoomLevel, worldRadPX * zoomLevel - viewportWidth);
-      cameraPY = boundVal(cameraPY, 0, (worldDiamPY + tileRiserPY) * zoomLevel - viewportHeight);
-      document.getElementById("field").style.transform = `translate(${-cameraPX}px, ${-cameraPY}px) scale(${zoomLevel})`;
+      cameraPX = boundVal(cameraPX,  -worldRadPX * zoom, worldRadPX * zoom - viewportWidth);
+      cameraPY = boundVal(cameraPY, 0, (worldDiamPY + tileRiserPY) * zoom - viewportHeight);
+      document.getElementById("field").style.transform = `translate(${-cameraPX}px, ${-cameraPY}px) scale(${zoom})`;
+      renderVisibleTiles();
     }
 
     function updateAllCritters() {
@@ -477,7 +502,7 @@
     function deleteCritter(critter) {
       if (!critter) return alert("falsy arg to deleteCritter");
       if (typeof critter !== "object") return alert("invalid arg type to deleteCritter");
-      const idx = allCritters.findIndex(critter);
+      const idx = allCritters.indexOf(critter);
       if (idx === -1) return alert("arg object to deleteCritter not in list");
 
       critter.element.remove();
@@ -571,7 +596,7 @@
 
     function setCritterMoving(wolf, dirObj) {
       if (wolf.pose === "walk" && wolf.currentDirection === dirObj.dir) return;
-      const visualFitMoveSpeed = 0.08; // TODO: resolve this
+      const visualFitMoveSpeed = 0.06; // TODO: resolve this
       wolf.currentDirection = dirObj.dir;
       wolf.velGX = dirObj.dx * visualFitMoveSpeed;
       wolf.velGY = dirObj.dy * visualFitMoveSpeed;
@@ -653,7 +678,7 @@
     document.addEventListener("keyup", (e) => { keysPressed[e.key] = false; });
 
     window.onload = function () {
-      generateField();
+      renderVisibleTiles();
       addCursorTracker();
       gameLoop();
     };
