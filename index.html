@@ -81,6 +81,13 @@
       background-repeat: no-repeat;
       image-rendering: pixelated;
     }
+    #dbel-pc-wolf {
+      position: absolute;
+      width: 64px;
+      height: 64px;
+      box-sizing: border-box;
+      border: 2px solid green;
+    }
     .deer {
       position: absolute;
       width: 32px;
@@ -89,13 +96,15 @@
       background-repeat: no-repeat;
       image-rendering: pixelated;
     }
-    #tile-layer, #sprite-layer {
+    .layer {
       position: absolute;
       top: 0;
       left: 0;
     }
+    /* this is already the implicit stacking -- better to be explicit anyway */
     #tile-layer { z-index: 1; }
     #sprite-layer { z-index: 2; }
+    #debug-layer { z-index: 3; }
     .tile.dirt      { background-position:   0px     0px; }
     .tile.grass     { background-position:   0px   -64px; }
     .tile.bush      { background-position:   0px   -96px; }
@@ -149,8 +158,11 @@
     </div>
     <div id="field-wrapper">
       <div id="field">
-        <div id="tile-layer"></div>
-        <div id="sprite-layer"></div>
+        <div id="tile-layer" class="layer"></div>
+        <div id="sprite-layer" class="layer"></div>
+        <div id="debug-layer" class="layer">
+          <div id="dbel-pc-wolf"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -159,8 +171,10 @@
     const fieldElement = document.getElementById("field");
     const tileLayer = document.getElementById("tile-layer");
     const spriteLayer = document.getElementById("sprite-layer");
+    const debugLayer = document.getElementById("debug-layer");
     const zoomInBtn = document.getElementById("zoom-in");
     const zoomOutBtn = document.getElementById("zoom-out");
+    const debugWolfEl = document.getElementById("dbel-pc-wolf");
 
     let zoomLevel = 1;
     const zoomMin = 0.5;
@@ -277,6 +291,11 @@
       wolf.element.style.left = (isoX - leftOffset) + "px";
       wolf.element.style.top = (isoY - topOffset) + "px";
       wolf.element.style.zIndex = Math.floor(wolf.gx + wolf.gy) + 0.5;
+
+      if (wolf === wolves[0]) {
+        debugWolfEl.style.left = (isoX - leftOffset) + "px";
+        debugWolfEl.style.top = (isoY - topOffset) + "px";
+      }
     }
 
     // Wolf setup
