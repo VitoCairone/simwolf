@@ -305,6 +305,20 @@
     const nDeer = 30;
     const deer = Array.from({length: nDeer}, () => ({}));
     
+    function randomlyPlaceCritter(wolf) {
+      // used for initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
+      wolf.gx = Math.floor(Math.random() * 50) + 0.5;
+      wolf.gy = Math.floor(Math.random() * 50) + 0.5;
+      wolf.animTimer = 0;
+      wolf.redecideCd = 0; // Cd = Cooldown (ticks)
+      wolf.currentDirection = Math.floor(Math.random() * 4);
+      wolf.frame = 0;
+      setCritterIdle(wolf);
+
+      updateCritterFrame(wolf);
+      placeCritterSprite(wolf);
+    }
+
     // in this and other Critter function, the parameter name used is wolf,
     // although it could be any critter
     function initCritter(wolf, species) {
@@ -312,20 +326,8 @@
       el.classList.add(species);
       spriteLayer.appendChild(el);
       wolf.element = el;
-
-      // start wolves on tile centers
       wolf.species = species;
-      // initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
-      wolf.gx = Math.floor(Math.random() * 50) + 0.5;
-      wolf.gy = Math.floor(Math.random() * 50) + 0.5;
-      wolf.animTimer = 0;
-      wolf.redecideCd = 0; // Cd = Cooldown (ticks)
-      wolf.currentDirection = 0;
-      wolf.frame = 0;
-      setCritterIdle(wolf);
-
-      updateCritterFrame(wolf);
-      placeCritterSprite(wolf);
+      randomlyPlaceCritter(wolf);
     }
 
     wolves.forEach(wolf => { initCritter(wolf, "wolf"); });
@@ -390,15 +392,13 @@
     const renderedTiles = new Map();
 
     function getTileTypeAt(gx, gy) {
-      const scale = 0.1;
-      const noise = Math.sin(gx * scale) + Math.sin(gy * scale);
-
-      // Add subtle irregularity to the wave
+      const scalar = 0.1;
+      const noise = Math.sin(gx * scalar) + Math.sin(gy * scalar);
       const jitter = Math.sin(gx * 0.17 + gy * 0.23) * 0.5;
       const grassChance = noise + jitter - 0.8;
 
-      // Deterministic pseudo-random from coordinates
-      // So that when we revisit a place freed from system memory, the terrain remains the same
+      // Pseudo-random function of coordinates
+      // So that terrain is defined at all locations without any memory requirement
       const hash = Math.sin((gx * 374761393 + gy * 668265263) % 1000000) * 43758.5453;
       const pseudoRandom = hash - Math.floor(hash); // [0, 1)
 
@@ -409,7 +409,7 @@
     }
 
     function renderVisibleTiles() {
-      // Todo: review to see if we can capture fewer undisplayed tiles without excessive complexity
+      // Todo: review to see if we can include fewer off-cemra tiles without excess complexity
 
       const viewW = viewportWidth / zoom;
       const viewH = viewportHeight / zoom;
@@ -496,12 +496,12 @@
       // lazy first pass: halt colliders pre-collisions
 
       movers.forEach((mover, idx) => {
-        // for a stationary mover that is collided into, do nothing
+        // for a stationary mover that gets collided into, do nothing
         if (mover.nextGX === mover.gx && mover.nextGY === mover.gy) return;
 
         if (didCollide[idx]) {
           // this mover's gx and gy do NOT get updated this tick
-          // and it should not try to continue the sasme movement
+          // and it should decide on a new movement to try next tick
           updateCritterAction(mover);
         } else {
           // this is the ONLY PLACE ANYWHERE that mover gx and gy should change!
@@ -533,17 +533,14 @@
       });
       let overlapPairs = findCollidingPairs(allCritters);
       for (let tries = 0; overlapPairs.length && tries < 10; tries++) {
-        const toReplace = [];
-        const offenders = new Set();
-        overlapPairs.forEach(pair => offenders.add(pair[1]));
-        // when splicing, highest indices must always be removed first!
-        const removeIdxs = Array.from(offenders).sort((a, b) => b - a);
-        removeIdxs.forEach(idx => {
-          toReplace.push(allCritters[idx].species);
-          deleteCritter(allCritters[idx]);
+        const overlapperIdxs = new Set();
+        overlapPairs.forEach(pair => overlapperIdxs.add(pair[1]));
+        overlapperIdxs.forEach(oIdx => {
+          const wolf = critters[oIdx];
+          randomlyPlaceCritter(wolf);
+          wolf.nextGX = wolf.gx;
+          wolf.nextGY = wolf.gy;
         });
-        // TODO: re-init toReplace critters
-
         // recollect for next cycle
         overlapPairs = findCollidingPairs(allCritters);
       }
