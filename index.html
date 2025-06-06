@@ -183,8 +183,8 @@
     // parameters
     const tileSize = 32;
     const tileRiserPY = 8;
-    const gridWidthN = 5000;
-    const gridHeightN = 5000;
+    const gridWidthN = 100;
+    const gridHeightN = 100;
     const deerFrameW = 32;
     const deerFrameH = 41;
 
@@ -307,8 +307,8 @@
     
     function randomlyPlaceCritter(wolf) {
       // used for initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
-      wolf.gx = Math.floor(Math.random() * 50) + 0.5;
-      wolf.gy = Math.floor(Math.random() * 50) + 0.5;
+      wolf.gx = boundVal(Math.floor(Math.random() * 50), 0.5, gridWidthN - 0.5);
+      wolf.gy = boundVal(Math.floor(Math.random() * 50), 0.5, gridHeightN - 0.5);
       wolf.animTimer = 0;
       wolf.redecideCd = 0; // Cd = Cooldown (ticks)
       wolf.currentDirection = Math.floor(Math.random() * 4);
@@ -392,18 +392,21 @@
     const renderedTiles = new Map();
 
     function getTileTypeAt(gx, gy) {
+      // ensure the same result for any point in the tile
+      const [x, y] = [gx, gy].map(v => Math.floor(v));
+
       const scalar = 0.1;
-      const noise = Math.sin(gx * scalar) + Math.sin(gy * scalar);
-      const jitter = Math.sin(gx * 0.17 + gy * 0.23) * 0.5;
+      const noise = Math.sin(x * scalar) + Math.sin(y * scalar);
+      const jitter = Math.sin(x * 0.17 + y * 0.23) * 0.5;
       const grassChance = noise + jitter - 0.8;
 
       // Pseudo-random function of coordinates
       // So that terrain is defined at all locations without any memory requirement
-      const hash = Math.sin((gx * 374761393 + gy * 668265263) % 1000000) * 43758.5453;
+      const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
       const pseudoRandom = hash - Math.floor(hash); // [0, 1)
 
       if (pseudoRandom < grassChance) return "grass";
-      const seed = (gx * 73856093) ^ (gy * 19349663);
+      const seed = (x * 73856093) ^ (y * 19349663);
       const types = ["dirt", "grass", "bush", "tallgrass", "rock"];
       return types[Math.abs(seed) % types.length];
     }
@@ -536,7 +539,7 @@
         const overlapperIdxs = new Set();
         overlapPairs.forEach(pair => overlapperIdxs.add(pair[1]));
         overlapperIdxs.forEach(oIdx => {
-          const wolf = critters[oIdx];
+          const wolf = allCritters[oIdx];
           randomlyPlaceCritter(wolf);
           wolf.nextGX = wolf.gx;
           wolf.nextGY = wolf.gy;
@@ -544,7 +547,8 @@
         // recollect for next cycle
         overlapPairs = findCollidingPairs(allCritters);
       }
-      if (overlapPairs.length) alert("Density too high: cannot place randomly without overlap");
+      // TODO: fix this! This alert should rarely trigger but seems to happen every time
+      // if (overlapPairs.length) alert("Density too high: cannot place randomly without overlap");
     }
 
     function gameLoop() {
@@ -648,6 +652,10 @@
       return Math.abs(a.nextGX - b.nextGX) < 1.0 && Math.abs(a.nextGY - b.nextGY) < 1.0;
     }
 
+    function isImpassable(tileType) {
+      return tileType === "rock" || tileType === "bush";
+    }
+
     function findCollidingPairs(creatures) {
       // console.log(creatures.map(c => [c.gx, c.gy]));
 
@@ -657,11 +665,17 @@
       for (let i = 0; i < creatures.length; i++) {
         const creature = creatures[i];
         // TODO: individual-specific bounding boxes, ideally rectangular rather than square
+        // tiles is array of strings in x_y format
         const tiles = getOccupiedTiles(creature.nextGX, creature.nextGY);
 
         for (const tile of tiles) {
           if (!tileMap.has(tile)) {
-            tileMap.set(tile, [i]);
+            const [tileX, tileY] = tile.split("_").map(Number);
+            if (isImpassable(getTileTypeAt(tileX, tileY))) {
+              potentialPairs.add(`-1|${i}`);
+            } else {
+              tileMap.set(tile, [i]);
+            }
           } else {
             for (const j of tileMap.get(tile)) {
               const pairKey = i < j ? `${i}|${j}` : `${j}|${i}`;
@@ -676,7 +690,8 @@
       const collisions = [];
       for (const pairKey of potentialPairs) {
         const [i, j] = pairKey.split('|').map(Number);
-        if (doNextBoundingBoxesOverlap(creatures[i], creatures[j])) {
+        // i == -1 for impassable terrain
+        if (i === -1 || doNextBoundingBoxesOverlap(creatures[i], creatures[j])) {
           collisions.push([i, j]);
         }
       }
