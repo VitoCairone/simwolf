@@ -395,20 +395,22 @@
       // ensure the same result for any point in the tile
       const [x, y] = [gx, gy].map(v => Math.floor(v));
 
+      // All terrain is defined by pseudo-random pure functions of the coordinates,
+      // i.e. WITHOUT using Math.random(), so that terrain has a fixed value at all
+      // locations for any grid size with no memory requirement scaling.
+
       const scalar = 0.1;
       const noise = Math.sin(x * scalar) + Math.sin(y * scalar);
       const jitter = Math.sin(x * 0.17 + y * 0.23) * 0.5;
       const grassChance = noise + jitter - 0.8;
 
-      // Pseudo-random function of coordinates
-      // So that terrain is defined at all locations without any memory requirement
       const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
       const pseudoRandom = hash - Math.floor(hash); // [0, 1)
 
       if (pseudoRandom < grassChance) return "grass";
-      const seed = (x * 73856093) ^ (y * 19349663);
+      const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
       const types = ["dirt", "grass", "bush"];
-      return types[Math.abs(seed) % types.length];
+      return types[Math.abs(typePseudorandInt) % types.length];
     }
 
     function renderVisibleTiles() {
