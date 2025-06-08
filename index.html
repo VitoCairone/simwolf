@@ -83,10 +83,11 @@
     }
     #dbel-pc-wolf {
       position: absolute;
-      width: 64px;
-      height: 64px;
-      box-sizing: border-box;
-      border: 2px solid green;
+      width: 32px;
+      height: 16px;
+      background-image: url('./images/debug-tile.png');
+      background-repeat: no-repeat;
+      image-rendering: pixelated;
     }
     .deer {
       position: absolute;
@@ -280,6 +281,16 @@
         `-${frameCol * frameData.frameW}px -${wolf.currentDirection * frameData.frameH}px`;
     }
 
+    function placeDebugWolfEl() {
+      const wolf = wolves[0];
+      const [isoX, isoY] = isoProject(wolf.gx, wolf.gy);
+      // debug element, which has the dimensions of a tile (32 x 16),
+      // should be placed so that its center is the same as the wolf's center;
+      // to simplify the math it is its own image with no extra pixels.
+      debugWolfEl.style.left = (isoX - halfTile) + "px";
+      debugWolfEl.style.top = (isoY - qtrTile) + "px";
+    }
+
     function placeCritterSprite(wolf) {
       const [isoX, isoY] = isoProject(wolf.gx, wolf.gy);
 
@@ -292,10 +303,7 @@
       wolf.element.style.top = (isoY - topOffset) + "px";
       wolf.element.style.zIndex = Math.floor(wolf.gx + wolf.gy) + 0.5;
 
-      if (wolf === wolves[0]) {
-        debugWolfEl.style.left = (isoX - leftOffset) + "px";
-        debugWolfEl.style.top = (isoY - topOffset) + "px";
-      }
+      if (wolf === wolves[0]) placeDebugWolfEl(wolf);
     }
 
     // Wolf setup
