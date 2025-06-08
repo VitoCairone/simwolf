@@ -60,7 +60,7 @@
       width: 3000px;
       height: 3000px;
       will-change: transform;
-      transform: translate(0px, 0px) scale(1);
+      transform: translate(0px, 0px) scale(2);
       transform-origin: top left;
       image-rendering: pixelated;
     }
@@ -177,8 +177,8 @@
     const zoomOutBtn = document.getElementById("zoom-out");
     const debugWolfEl = document.getElementById("dbel-pc-wolf");
 
-    let zoom = 1;
-    const zoomMin = 0.5;
+    let zoom = 2;
+    const zoomMin = 1;
     const zoomMax = 8;
 
     // parameters
@@ -297,7 +297,8 @@
       // wolf image is offset so its noon-shadow center is at its grid coordinate
       const frameData = frameDataBySpeciesAndPose[wolf.species][wolf.pose];
       const leftOffset = frameData.frameW / 2;
-      const topOffset = frameData.frameH - (frameData.topToShadow || 0);
+      const topOffset = frameData.hasOwnProperty('topToShadow')
+        ? frameData.topToShadow : (frameData.frameH / 2);
 
       wolf.element.style.left = (isoX - leftOffset) + "px";
       wolf.element.style.top = (isoY - topOffset) + "px";
