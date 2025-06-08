@@ -299,10 +299,10 @@
     }
 
     // Wolf setup
-    const nWolves = 1;
+    const nWolves = 10;
     const wolves = Array.from({length: nWolves}, () => ({}));
 
-    const nDeer = 0;
+    const nDeer = 10;
     const deer = Array.from({length: nDeer}, () => ({}));
     
     function randomlyPlaceCritter(wolf) {
@@ -407,7 +407,7 @@
 
       if (pseudoRandom < grassChance) return "grass";
       const seed = (x * 73856093) ^ (y * 19349663);
-      const types = ["dirt", "grass", "bush", "tallgrass", "rock"];
+      const types = ["dirt", "grass", "bush"];
       return types[Math.abs(seed) % types.length];
     }
 
@@ -516,6 +516,7 @@
     }
 
     function deleteCritter(critter) {
+      if (critter === 0) return alert("cannot delete critter 0 in this version");
       if (!critter) return alert("falsy arg to deleteCritter");
       if (typeof critter !== "object") return alert("invalid arg type to deleteCritter");
       const idx = allCritters.indexOf(critter);
@@ -536,10 +537,8 @@
       });
       let overlapPairs = findCollidingPairs(allCritters);
       for (let tries = 0; overlapPairs.length && tries < 10; tries++) {
-        const overlapperIdxs = new Set();
-        overlapPairs.forEach(pair => overlapperIdxs.add(pair[1]));
-        overlapperIdxs.forEach(oIdx => {
-          const wolf = allCritters[oIdx];
+        overlapPairs.forEach(pair =>  {
+          const wolf = allCritters[pair[1]];
           randomlyPlaceCritter(wolf);
           wolf.nextGX = wolf.gx;
           wolf.nextGY = wolf.gy;
@@ -547,8 +546,10 @@
         // recollect for next cycle
         overlapPairs = findCollidingPairs(allCritters);
       }
-      // TODO: fix this! This alert should rarely trigger but seems to happen every time
-      // if (overlapPairs.length) alert("Density too high: cannot place randomly without overlap");
+      if (overlapPairs.length) {
+        overlapPairs.forEach(pair => deleteCritter(allCritters[pair[1]]));
+        console.log("Initial density too high, reduced start population.");
+      }
     }
 
     function gameLoop() {
