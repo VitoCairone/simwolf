@@ -496,16 +496,18 @@
       const [bX, bY] = getOnTileXY(b);
     }
 
-    // arranged for the array key 2 * xSign + ySign + 3
+    // arranged for the array key 3 * xSign + ySign + 3
     const traversalDoneFuncsArr = [
-      (x, y, end) => { return x <= end && y <= end },
-      (x, y, end) => { return x <= end },
-      (x, y, end) => { return y <= end },
-      (x, y, end) => { return true },
-      (x, y, end) => { return y >= end },
-      (x, y, end) => { return x >= end },
-      (x, y, end) => { return x >= end && y >= end }
-    ]
+      (x, y, end) => { return x <= (end + 0.001) && y <= (end + 0.001) }, // -1, -1
+      (x, y, end) => { return x <= (end + 0.001) }, // -1, 0
+      (x, y, end) => { return x <= (end + 0.001) && y >= (end - 0.001) }, // -1, 1
+      (x, y, end) => { return y <= (end + 0.001) }, // 0, -1
+      (x, y, end) => { return true; }, // 0, 0
+      (x, y, end) => { return y >= (end - 0.001) }, // 0, 1
+      (x, y, end) => { return x >= (end - 0.001) && y <= (end + 0.001) }, // 1, -1
+      (x, y, end) => { return x >= (end - 0.001) }, // 1, 0
+      (x, y, end) => { return x >= (end - 0.001) && y >= (end - 0.001) } // 1, 1
+    ];
 
     function traverseGrid(aX, aY, bX, bY) {
       const tiles = [];
@@ -537,13 +539,13 @@
       if (dx === 0) tMaxX = Infinity;
       if (dy === 0) tMaxY = Infinity;
 
-      const isDoneTestFn = traversalDoneFuncsArr[stepX * 2 + stepY + 3];
+      const isDoneTestFn = traversalDoneFuncsArr[stepX * 3 + stepY + 3];
 
       while (true) {
         tiles.push([x, y]);
 
         // isDoneTestFn is essentially just x === end && y === end
-        // but with correction for the imprecision of digital math
+        // but with allowances for imprecision of digital math
         if (isDoneTestFn(x, y, end)) break;
 
         // If both are set to Infinity, they are === ergo both blocks run
