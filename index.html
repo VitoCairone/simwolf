@@ -93,7 +93,7 @@
       position: absolute;
       width: 32px;
       height: 41px;
-      background-image: url('./images/stag-walk-idle.png');
+      background-image: url('./images/stag-walk-idle-run.png');
       background-repeat: no-repeat;
       image-rendering: pixelated;
     }
@@ -106,9 +106,9 @@
     #tile-layer { z-index: 1; }
     #sprite-layer { z-index: 2; }
     #debug-layer { z-index: 3; }
-    .tile.dirt      { background-position:   0px     0px; }
-    .tile.grass     { background-position:   0px   -64px; }
-    .tile.bush      { background-position:   0px   -96px; }
+    .tile.dirt      { background-position: -288px    0px; }
+    .tile.grass     { background-position: -64px   -64px; }
+    .tile.bush      { background-position: -96px   -96px; }
     .tile.tallgrass { background-position: -160px  -96px; }
     .tile.flower    { background-position: -256px  -96px; }
     .tile.rock      { background-position: -288px -128px; }
@@ -252,25 +252,15 @@
     // TODO: consider what data should be allowed to vary by pose and what data is fixed for the species
     const frameDataBySpeciesAndPose = {
       wolf: { 
-        'walk': {nFrames: 8, colZero: 0, frameW: 64, frameH: 64, holdTks: 5, topToShadow: 39},
-        'idle': {nFrames: 4, colZero: 8, frameW: 64, frameH: 64, holdTks: 12, topToShadow: 39} 
+        'walk': {nFrames: 8, colZero: 0, frameW: 64, frameH: 64, holdTks: 5, topToShadow: 39 },
+        'idle': {nFrames: 4, colZero: 8, frameW: 64, frameH: 64, holdTks: 12, topToShadow: 39 } 
       },
       deer: { 
         'walk': {nFrames: 11, colZero: 0, frameW: 32, frameH: 41, holdTks: 5, topToShadow: 33},
-        'idle': {nFrames: 24, colZero: 11, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33} 
+        'idle': {nFrames: 24, colZero: 11, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33},
+        'run': {nFrames: 10, colZero: 35, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33}
       }
     }
-
-    // converts miles per hour to tiles per tick
-    function mphToSpeed(x) { return x * 1609.34 / 216000 }
-
-    const wolfSprintSpeed = mphToSpeed(37); // < 1 minute sustain
-    const wolfRunSpeed = mphToSpeed(6.0); // 20 minutes sustain
-    const wolfWalkSpeed = mphToSpeed(4.5); // 10 hr sustain
-
-    const deerSprintSpeed = mphToSpeed(43); // < 1 minute sustain
-    const deerRunSpeed = mphToSpeed(31); // 2-3 minutes sustain
-    const deerWalkSpeed = mphToSpeed(3.0); // 10 hr sustain
 
     function updateCritterFrame(wolf) {
       wolf.animTimer = 0;
@@ -302,7 +292,7 @@
 
       wolf.element.style.left = (isoX - leftOffset) + "px";
       wolf.element.style.top = (isoY - topOffset) + "px";
-      wolf.element.style.zIndex = Math.floor(wolf.gx + wolf.gy) + 0.5;
+      wolf.element.style.zIndex = wolf.gx + wolf.gy;
 
       if (wolf === wolves[0]) placeDebugWolfEl(wolf);
     }
@@ -596,13 +586,8 @@
 
         const [mouseGX, mouseGY] = rectiProject(mousePX, mousePY);
 
-        // TODO: display out-of-bounds coords in red, normal in black
-        if (mouseGX >= 0 && mouseGX < gridWidthN && mouseGY >= 0 && mouseGY < gridHeightN) {
-          const [dispGX, dispGY] = [mouseGX.toFixed(3), mouseGY.toFixed(3)];
-          cursorCoords.textContent = `x: ${dispGX}, y: ${dispGY}`;
-        } else {
-          cursorCoords.textContent = `x: –, y: –`;
-        }
+        const [dispGX, dispGY] = [mouseGX.toFixed(3), mouseGY.toFixed(3)];
+        cursorCoords.textContent = `x: ${dispGX}, y: ${dispGY}`;
       });
 
       fieldWrapper.addEventListener("mouseleave", () => {
@@ -620,13 +605,35 @@
       updateCritterFrame(wolf);
     }
 
-    function setCritterMoving(wolf, dirObj) {
-      if (wolf.pose === "walk" && wolf.currentDirection === dirObj.dir) return;
-      const visualFitMoveSpeed = 0.06; // TODO: resolve this
+    const wolfAudibleToDeerDistByTerrainAndSpeed = {
+      dirt:    { stalk: 4,  trot: 15, run: 40 },
+      rock:    { stalk: 8,  trot: 30, run: 80 },
+      leafcover: { stalk: 6,  trot: 22, run: 60 },
+      grass:   { stalk: 3,  trot: 11, run: 30 },
+      gravel:  { stalk: 9,  trot: 37, run: 95 },
+    };
+
+
+    const kphToTpTk = 0.0046296; // kilometers/hour to tiles/tick
+    const wolfSprintSpeed = 55 * kphToTpTk; // a few seconds only
+    const wolfTrotSpeed = 10 * kphToTpTk; // 8 hours
+
+    const deerSprintSpeed = 65 * kphToTpTk; // a few seconds only; 0.3 tiles/tick
+    const deerGallopSpeed = 45 * kphToTpTk; // 2-3 minutes
+    const deerWalkSpeed = 6  * kphToTpTk; // all day
+
+    const travelSpeedBySpeciesAndPose = {
+      'wolf': { 'walk': wolfTrotSpeed, 'run': wolfSprintSpeed, 'idle': 0},
+      'deer': { 'walk': deerWalkSpeed, 'run': deerSprintSpeed, 'idle': 0}
+    }
+
+    function setCritterMoving(wolf, dirObj, newPose = 'walk') {
+      if ((!newPose || newPose === wolf.pose) && wolf.currentDirection === dirObj.dir) return;
       wolf.currentDirection = dirObj.dir;
-      wolf.velGX = dirObj.dx * visualFitMoveSpeed;
-      wolf.velGY = dirObj.dy * visualFitMoveSpeed;
-      wolf.pose = "walk";
+      wolf.pose = newPose;
+      const speed = travelSpeedBySpeciesAndPose[wolf.species][wolf.pose];
+      wolf.velGX = dirObj.dx * speed;
+      wolf.velGY = dirObj.dy * speed;
       updateCritterFrame(wolf);
     }
 
@@ -643,7 +650,7 @@
       setCritterMoving(wolf, dirObj);
     }
 
-    function getOccupiedTiles(gx, gy, boxRad = 0.5) {
+    function getOccupiedTiles(gx, gy, boxRad = 0.4) {
       const left = Math.floor(gx - boxRad);
       const right = Math.floor(gx + boxRad);
       const top = Math.floor(gy - boxRad);
