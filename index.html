@@ -484,9 +484,11 @@
 
       const [aX, aY] = getOnTileXY(a);
       const [bX, bY] = getOnTileXY(b);
+      const [visX, visY] = traverseGrid(aX, aY, bX, bY);
+      return visX === bX && visY === bY;
     }
 
-    // arranged for the array key 3 * xSign + ySign + 3
+    // arranged for the array key 3 * xSign + ySign + 4
     const traversalDoneFuncsArr = [
       (x, y, end) => { return x <= (end + 0.001) && y <= (end + 0.001) }, // -1, -1
       (x, y, end) => { return x <= (end + 0.001) }, // -1, 0
@@ -499,7 +501,7 @@
       (x, y, end) => { return x >= (end - 0.001) && y >= (end - 0.001) } // 1, 1
     ];
 
-    function traverseGrid(aX, aY, bX, bY) {
+    function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
       const tiles = [];
 
       let x = Math.floor(aX);
@@ -529,16 +531,20 @@
       if (dx === 0) tMaxX = Infinity;
       if (dy === 0) tMaxY = Infinity;
 
-      const isDoneTestFn = traversalDoneFuncsArr[stepX * 3 + stepY + 3];
+      const isDoneTestFn = traversalDoneFuncsArr[stepX * 3 + stepY + 4];
 
       while (true) {
-        tiles.push([x, y]);
+        if (fullTrace) tiles.push([x, y]);
 
         // isDoneTestFn is essentially just x === end && y === end
         // but with allowances for imprecision of digital math
         if (isDoneTestFn(x, y, end)) break;
 
-        // If both are set to Infinity, they are === ergo both blocks run
+        // todo: make more explicit the use for vision,
+        // which is currently implied by fullTrace false
+        if (!fullTrace && isOpaque(getTileTypeAt(x, y))) break;
+
+        // Note when tMaxX == tMaxY, both blocks run, this is intended
         if (tMaxX <= tMaxY) {
           x += stepX;
           tMaxX += tDeltaX;
@@ -549,7 +555,7 @@
         }
       }
 
-      return tiles;
+      return fullTrace ? tiles : [x, y];
     }
 
     function updateAllCritters() {
@@ -760,6 +766,10 @@
 
     function isImpassable(tileType) {
       return tileType === "rock" || tileType === "bush";
+    }
+
+    function isOpaque(tileType) {
+      return tileType === "rock";
     }
 
     function findCollidingPairs(creatures) {
