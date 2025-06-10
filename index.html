@@ -249,6 +249,10 @@
       return [gx, gy];
     }
 
+    function canSee(a, b) {
+
+    }
+
     // TODO: consider what data should be allowed to vary by pose and what data is fixed for the species
     const frameDataBySpeciesAndPose = {
       wolf: { 
@@ -321,11 +325,13 @@
     // in this and other Critter function, the parameter name used is wolf,
     // although it could be any critter
     function initCritter(wolf, species) {
+      if (!wolf || wolf.kind) return alert("Bad ref to initCritter");
+      wolf.kind = 'critter';
+      wolf.species = species;
       const el = document.createElement("div");
       el.classList.add(species);
       spriteLayer.appendChild(el);
       wolf.element = el;
-      wolf.species = species;
       randomlyPlaceCritter(wolf);
     }
 
@@ -463,6 +469,87 @@
       cameraPY = boundVal(cameraPY, 0, (worldDiamPY + tileRiserPY) * zoom - viewportHeight);
       document.getElementById("field").style.transform = `translate(${-cameraPX}px, ${-cameraPY}px) scale(${zoom})`;
       renderVisibleTiles();
+    }
+
+    function getOnTileXY(a) {
+      if (!a || !(a.hasOwnProperty('gx'))) return alert("Invalid arg to getOnTileXY");
+
+      return [a.gx, a.gy].map(v => Math.floor(v));
+    }
+
+    function canSee(a, b) {
+      // TODO: finish implementing
+
+      if (!a || !b || a.kind !== 'critter') return alert("Invalid arg to canSee");
+
+      const [aX, aY] = getOnTileXY(a);
+      const [bX, bY] = getOnTileXY(b);
+    }
+
+    // arranged for the array key 3 * xSign + ySign + 3
+    const traversalDoneFuncsArr = [
+      (x, y, end) => { return x <= (end + 0.001) && y <= (end + 0.001) }, // -1, -1
+      (x, y, end) => { return x <= (end + 0.001) }, // -1, 0
+      (x, y, end) => { return x <= (end + 0.001) && y >= (end - 0.001) }, // -1, 1
+      (x, y, end) => { return y <= (end + 0.001) }, // 0, -1
+      (x, y, end) => { return true; }, // 0, 0
+      (x, y, end) => { return y >= (end - 0.001) }, // 0, 1
+      (x, y, end) => { return x >= (end - 0.001) && y <= (end + 0.001) }, // 1, -1
+      (x, y, end) => { return x >= (end - 0.001) }, // 1, 0
+      (x, y, end) => { return x >= (end - 0.001) && y >= (end - 0.001) } // 1, 1
+    ];
+
+    function traverseGrid(aX, aY, bX, bY) {
+      const tiles = [];
+
+      let x = Math.floor(aX);
+      let y = Math.floor(aY);
+
+      const endX = Math.floor(bX);
+      const endY = Math.floor(bY);
+
+      const dx = bX - aX;
+      const dy = bY - aY;
+
+      const stepX = Math.sign(dx);
+      const stepY = Math.sign(dy);
+
+      const tDeltaX = Math.abs(1 / dx);  // how far along the ray we move to cross a tile boundary in x
+      const tDeltaY = Math.abs(1 / dy);  // same for y
+
+      let tMaxX = (stepX > 0)
+        ? ((Math.floor(aX) + 1 - aX) * tDeltaX)
+        : ((aX - Math.floor(aX)) * tDeltaX);
+
+      let tMaxY = (stepY > 0)
+        ? ((Math.floor(aY) + 1 - aY) * tDeltaY)
+        : ((aY - Math.floor(aY)) * tDeltaY);
+
+      // Edge case if already exactly on border
+      if (dx === 0) tMaxX = Infinity;
+      if (dy === 0) tMaxY = Infinity;
+
+      const isDoneTestFn = traversalDoneFuncsArr[stepX * 3 + stepY + 3];
+
+      while (true) {
+        tiles.push([x, y]);
+
+        // isDoneTestFn is essentially just x === end && y === end
+        // but with allowances for imprecision of digital math
+        if (isDoneTestFn(x, y, end)) break;
+
+        // If both are set to Infinity, they are === ergo both blocks run
+        if (tMaxX <= tMaxY) {
+          x += stepX;
+          tMaxX += tDeltaX;
+        }
+        if (tMaxY >= tMaxX) {
+          y += stepY;
+          tMaxY += tDeltaY;
+        }
+      }
+
+      return tiles;
     }
 
     function updateAllCritters() {
