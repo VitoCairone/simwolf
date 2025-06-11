@@ -392,7 +392,7 @@
 
     const renderedTiles = new Map();
 
-    function getTileTypeAt(gx, gy) {
+    function getTerrainAt(gx, gy) {
       // ensure the same result for any point in the tile
       const [x, y] = [gx, gy].map(v => Math.floor(v));
 
@@ -447,7 +447,7 @@
           if (gx < 0 || gy < 0 || gx >= gridWidthN || gy >= gridHeightN) continue;
 
           const tile = document.createElement("div");
-          tile.className = `tile ${getTileTypeAt(gx, gy)}`;
+          tile.className = `tile ${getTerrainAt(gx, gy)}`;
           tile.style.zIndex = gx + gy;
 
           const [px, py] = isoProject(gx, gy);
@@ -509,15 +509,15 @@
 
     // arranged for the array key 3 * xSign + ySign + 4
     const traversalDoneFuncsArr = [
-      (x, y, end) => { return x <= (end + 0.001) && y <= (end + 0.001) }, // -1, -1
-      (x, y, end) => { return x <= (end + 0.001) }, // -1, 0
-      (x, y, end) => { return x <= (end + 0.001) && y >= (end - 0.001) }, // -1, 1
-      (x, y, end) => { return y <= (end + 0.001) }, // 0, -1
-      (x, y, end) => { return true; }, // 0, 0
-      (x, y, end) => { return y >= (end - 0.001) }, // 0, 1
-      (x, y, end) => { return x >= (end - 0.001) && y <= (end + 0.001) }, // 1, -1
-      (x, y, end) => { return x >= (end - 0.001) }, // 1, 0
-      (x, y, end) => { return x >= (end - 0.001) && y >= (end - 0.001) } // 1, 1
+      (x, y, end) => x <= (end + 0.001) && y <= (end + 0.001),  // -1, -1
+      (x, y, end) => x <= (end + 0.001),                        // -1,  0
+      (x, y, end) => x <= (end + 0.001) && y >= (end - 0.001),  // -1,  1
+      (x, y, end) => y <= (end + 0.001),                        //  0, -1
+      (x, y, end) => true,                                      //  0,  0
+      (x, y, end) => y >= (end - 0.001),                        //  0,  1
+      (x, y, end) => x >= (end - 0.001) && y <= (end + 0.001),  //  1, -1
+      (x, y, end) => x >= (end - 0.001),                        //  1,  0
+      (x, y, end) => x >= (end - 0.001) && y >= (end - 0.001)   //  1,  1
     ];
 
     function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
@@ -561,7 +561,7 @@
 
         // todo: make more explicit the use for vision,
         // which is currently implied by fullTrace false
-        if (!fullTrace && isOpaque(getTileTypeAt(x, y))) break;
+        if (!fullTrace && isOpaque(getTerrainAt(x, y))) break;
 
         // Note when tMaxX == tMaxY, both blocks run, this is intended
         if (tMaxX <= tMaxY) {
@@ -752,11 +752,11 @@
       // revise in future to account for actual origin and listener species
       if (getSpeed(b) === 0) return false;
 
-      const tileType = getTileType(...getOnTileXY(b));
-      if (!wolfAudibleToDeerDistByTerrainAndSpeed.hasOwnProperty(tileType))
+      const terrain = getTerrainAt(...getOnTileXY(b));
+      if (!wolfAudibleToDeerDistByTerrainAndSpeed.hasOwnProperty(terrain))
         return alert("Unknown terrain type for canHear origin");
 
-      const rangeByPose = wolfAudibleToDeerDistByTerrainAndSpeed[tileType];
+      const rangeByPose = wolfAudibleToDeerDistByTerrainAndSpeed[terrain];
 
       if (!rangeByPose.hasOwnProperty(b.pose))
         return alert("Uknown pose for canHear origin");
@@ -822,12 +822,12 @@
       return Math.abs(a.nextGX - b.nextGX) < 1.0 && Math.abs(a.nextGY - b.nextGY) < 1.0;
     }
 
-    function isImpassable(tileType) {
-      return tileType === "rock" || tileType === "bush";
+    function isImpassable(terrain) {
+      return terrain === "rock" || terrain === "bush";
     }
 
-    function isOpaque(tileType) {
-      return tileType === "rock";
+    function isOpaque(terrain) {
+      return terrain === "rock";
     }
 
     function findCollidingPairs(creatures) {
@@ -845,7 +845,7 @@
         for (const tile of tiles) {
           if (!tileMap.has(tile)) {
             const [tileX, tileY] = tile.split("_").map(Number);
-            if (isImpassable(getTileTypeAt(tileX, tileY))) {
+            if (isImpassable(getTerrainAt(tileX, tileY))) {
               potentialPairs.add(`-1|${i}`);
             } else {
               tileMap.set(tile, [i]);
