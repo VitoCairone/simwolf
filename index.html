@@ -249,10 +249,6 @@
       return [gx, gy];
     }
 
-    function canSee(a, b) {
-
-    }
-
     // TODO: consider what data should be allowed to vary by pose and what data is fixed for the species
     const frameDataBySpeciesAndPose = {
       wolf: { 
@@ -478,14 +474,37 @@
     }
 
     function canSee(a, b) {
-      // TODO: finish implementing
-
       if (!a || !b || a.kind !== 'critter') return alert("Invalid arg to canSee");
 
       const [aX, aY] = getOnTileXY(a);
       const [bX, bY] = getOnTileXY(b);
       const [visX, visY] = traverseGrid(aX, aY, bX, bY);
       return visX === bX && visY === bY;
+    }
+
+    function setPresentOthersIneffMethod() {
+
+      // this scales O(n^2), rendering somewhat irrelevant
+      // the efficiency benefits in other methods like collision detection.
+      // TODO: replace with faster logic,
+      // e.g. a similar tile-based nearness groupings with larger scale tiles
+
+      allCritters.forEach(a => a.presentOthers = new Set());
+
+      for (var iA = 0; iA < allCritters.length; iA++) {
+        for (var iB = iA + 1; iB < allCritters.length; iB++) {
+          if (canSee(a, b)) {
+            // since we don't currently account for facing or lighting,
+            // visibility is symetrical
+            a.presentOthersSet.add(b);
+            b.presentOthersSet.add(a);
+          }
+
+          // audibility is not symmetrical
+          if (canHear(a, b)) a.presentOthersSet.add(b);
+          if (canHear(b, a)) b.presentOthersSet.add(a);
+        }
+      }
     }
 
     // arranged for the array key 3 * xSign + ySign + 4
@@ -536,8 +555,8 @@
       while (true) {
         if (fullTrace) tiles.push([x, y]);
 
-        // isDoneTestFn is essentially just x === end && y === end
-        // but with allowances for imprecision of digital math
+        // isDoneTestFn is theoretically just x === end && y === end,
+        // however we need to correct for imprecision of binary math
         if (isDoneTestFn(x, y, end)) break;
 
         // todo: make more explicit the use for vision,
@@ -699,13 +718,52 @@
     }
 
     const wolfAudibleToDeerDistByTerrainAndSpeed = {
-      dirt:    { stalk: 4,  trot: 15, run: 40 },
-      rock:    { stalk: 8,  trot: 30, run: 80 },
-      leafcover: { stalk: 6,  trot: 22, run: 60 },
-      grass:   { stalk: 3,  trot: 11, run: 30 },
-      gravel:  { stalk: 9,  trot: 37, run: 95 },
+      dirt:    { walk: 4,  run: 15, sprint: 40 },
+      rock:    { walk: 8,  run: 30, sprint: 80 },
+      leafcover: { walk: 6,  run: 22, sprint: 60 },
+      grass:   { walk: 3,  run: 11, sprint: 30 },
+      gravel:  { walk: 9,  run: 37, sprint: 95 },
     };
 
+    function getSpeed(a) {
+      if (!a || !a.hasOwnProperty('velGX')) return alert("Bad arg to getSpeed");
+      
+      // critters move only grid-aligned for now, so this is trivial
+      if (a.velGX === 0 || a.velGY === 0) return Math.abs(a.velGX + a.velGY);
+
+      // .sqrt() is a slow function; memoize speed when it stops being trivial
+      return Math.sqrt(a.velGX * a.velGX + a.velGY * a.velGY);
+    }
+
+    // distBetweenL2 returns the SQUARED distance (L2) between points
+    // which assumes we only need to order the results or compare against another L2
+    function distBetweenL2(a, b) {
+      if (!a || !b || !a.hasOwnProperty('gx') || !b.hasOwnProperty('gx')) return alert("Invalid arg to distBetween");
+
+      const [dx, dy] = [a.gx - b.gx, a.gy - b.gy];
+      return dx * dx + dy * dy;
+    }
+
+    function canHear(a, b) {
+      // a is the listener, and b is the potential sound origin
+      
+      // movement is currently the only source of sound
+      // for now we use one table based on moving wolf and listening deer
+      // revise in future to account for actual origin and listener species
+      if (getSpeed(b) === 0) return false;
+
+      const tileType = getTileType(...getOnTileXY(b));
+      if (!wolfAudibleToDeerDistByTerrainAndSpeed.hasOwnProperty(tileType))
+        return alert("Unknown terrain type for canHear origin");
+
+      const rangeByPose = wolfAudibleToDeerDistByTerrainAndSpeed[tileType];
+
+      if (!rangeByPose.hasOwnProperty(b.pose))
+        return alert("Uknown pose for canHear origin");
+
+      const range = rangeByPose[b.pose];
+      return distBetweenL2(a, b) <= range * range;
+    }
 
     const kphToTpTk = 0.0046296; // kilometers/hour to tiles/tick
     const wolfSprintSpeed = 55 * kphToTpTk; // a few seconds only
