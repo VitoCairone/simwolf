@@ -177,6 +177,7 @@
     const zoomOutBtn = document.getElementById("zoom-out");
     const debugWolfEl = document.getElementById("dbel-pc-wolf");
 
+    let g_tick = 0; // updates ONE PLACE ONLY in gameLoop
     let zoom = 2;
     const zoomMin = 1;
     const zoomMax = 8;
@@ -234,6 +235,8 @@
       <!-- Right-facing lens hood / extension -->
       <path d="M13 10 L17 7 V17 L13 14 Z" />
     </svg>`
+
+    function sqr(x) { return x * x; }
 
     function boundVal(val, min, max) { return Math.max(min, Math.min(val, max)); }
 
@@ -482,17 +485,31 @@
       return visX === bX && visY === bY;
     }
 
-    function setPresentOthersIneffMethod() {
+    function areSetsEqual(setA, setB) {
+      if (!setA || !setB) return (!setA && !setB);
+      if (setA.size !== setB.size) return false;
+      for (const element of setA) if (!setB.has(element)) return false;
+      return true;
+    }
 
+    function setPresentOthersIneffMethod() {
       // this scales O(n^2), rendering somewhat irrelevant
       // the efficiency benefits in other methods like collision detection.
       // TODO: replace with faster logic,
       // e.g. a similar tile-based nearness groupings with larger scale tiles
 
-      allCritters.forEach(a => a.presentOthers = new Set());
+      allCritters.forEach(a => {
+        // TODO: evaluate whether there is a clean way to do everything we
+        // want in-place with two sets, or better yet one,
+        // and not write a new set every time
+        a.priorOthers = a.presentOthers;
+        a.presentOthers = new Set();
+      });
 
       for (var iA = 0; iA < allCritters.length; iA++) {
+        const a = allCritters[iA];
         for (var iB = iA + 1; iB < allCritters.length; iB++) {
+          const b = allCritters[iB];
           if (canSee(a, b)) {
             // since we don't currently account for facing or lighting,
             // visibility is symetrical
@@ -504,20 +521,30 @@
           if (canHear(a, b)) a.presentOthersSet.add(b);
           if (canHear(b, a)) b.presentOthersSet.add(a);
         }
+
+        // react in realistic time to spotting or losing track of something
+        // This is still an approximation prone to hyperspeed errors;
+        // a preferred implementation may by to hold this state in a buffer of 7,
+        // and have the decisions enacted this tick be based on the world 7 ticks ago.
+        // It would be best if we aren't required to hold a full set of states,
+        // which means memory requirement would have to increase with temporal resolution.
+
+        if (!areSetsEqual(a.priorOthers, a.presentOthers) && a.redecideCd > 7)
+          a.redecideCd = 7;
       }
     }
 
     // arranged for the array key 3 * xSign + ySign + 4
     const traversalDoneFuncsArr = [
-      (x, y, end) => x <= (end + 0.001) && y <= (end + 0.001),  // -1, -1
-      (x, y, end) => x <= (end + 0.001),                        // -1,  0
-      (x, y, end) => x <= (end + 0.001) && y >= (end - 0.001),  // -1,  1
-      (x, y, end) => y <= (end + 0.001),                        //  0, -1
-      (x, y, end) => true,                                      //  0,  0
-      (x, y, end) => y >= (end - 0.001),                        //  0,  1
-      (x, y, end) => x >= (end - 0.001) && y <= (end + 0.001),  //  1, -1
-      (x, y, end) => x >= (end - 0.001),                        //  1,  0
-      (x, y, end) => x >= (end - 0.001) && y >= (end - 0.001)   //  1,  1
+      (x, y, eX, eY) => x <= (eX + 0.001) && y <= (eY + 0.001),  // -1, -1
+      (x, y, eX, eY) => x <= (eX + 0.001),                       // -1,  0
+      (x, y, eX, eY) => x <= (eX + 0.001) && y >= (eY - 0.001),  // -1,  1
+      (x, y, eX, eY) => y <= (eY + 0.001),                       //  0, -1
+      (x, y, eX, eY) => true,                                    //  0,  0
+      (x, y, eX, eY) => y >= (eY - 0.001),                       //  0,  1
+      (x, y, eX, eY) => x >= (eX - 0.001) && y <= (eY + 0.001),  //  1, -1
+      (x, y, eX, eY) => x >= (eX - 0.001),                       //  1,  0
+      (x, y, eX, eY) => x >= (eX - 0.001) && y >= (eY - 0.001)   //  1,  1
     ];
 
     function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
@@ -557,7 +584,7 @@
 
         // isDoneTestFn is theoretically just x === end && y === end,
         // however we need to correct for imprecision of binary math
-        if (isDoneTestFn(x, y, end)) break;
+        if (isDoneTestFn(x, y, endX, endY)) break;
 
         // todo: make more explicit the use for vision,
         // which is currently implied by fullTrace false
@@ -578,7 +605,12 @@
     }
 
     function updateAllCritters() {
+      // setPresentOthersIneffMethod();
+
       allCritters.forEach(wolf => {
+        // todo: combine this better with setPresentOthers() so that a wolf
+        // which spots a deer or vice versa will respond on a predictable short delay
+        // e.g. a realistic reaction time of 120 ms (7 ticks) vidual, 140 ms (8 ticks) auditory
         wolf.redecideCd--;
         if (wolf.redecideCd <= 0) updateCritterAction(wolf);
 
@@ -684,6 +716,8 @@
       }
 
       updateAllCritters();
+
+      g_tick++; // nowhere else may update g_tick
       requestAnimationFrame(gameLoop);
     }
 
@@ -717,14 +751,6 @@
       updateCritterFrame(wolf);
     }
 
-    const wolfAudibleToDeerDistByTerrainAndSpeed = {
-      dirt:    { walk: 4,  run: 15, sprint: 40 },
-      rock:    { walk: 8,  run: 30, sprint: 80 },
-      leafcover: { walk: 6,  run: 22, sprint: 60 },
-      grass:   { walk: 3,  run: 11, sprint: 30 },
-      gravel:  { walk: 9,  run: 37, sprint: 95 },
-    };
-
     function getSpeed(a) {
       if (!a || !a.hasOwnProperty('velGX')) return alert("Bad arg to getSpeed");
       
@@ -735,8 +761,16 @@
       return Math.sqrt(a.velGX * a.velGX + a.velGY * a.velGY);
     }
 
+    const wolfAudibleToDeerL2ByTerrainAndSpeed = {
+      dirt:    { walk: sqr(4),  run: sqr(15), sprint: sqr(40) },
+      rock:    { walk: sqr(8),  run: sqr(30), sprint: sqr(80) },
+      leafcover: { walk: sqr(6),  run: sqr(22), sprint: sqr(60) },
+      grass:   { walk: sqr(3),  run: sqr(11), sprint: sqr(30) },
+      gravel:  { walk: sqr(9),  run: sqr(37), sprint: sqr(95) },
+    };
+
     // distBetweenL2 returns the SQUARED distance (L2) between points
-    // which assumes we only need to order the results or compare against another L2
+    // which assumes we only need to sort or compare against another L2
     function distBetweenL2(a, b) {
       if (!a || !b || !a.hasOwnProperty('gx') || !b.hasOwnProperty('gx')) return alert("Invalid arg to distBetween");
 
@@ -753,16 +787,15 @@
       if (getSpeed(b) === 0) return false;
 
       const terrain = getTerrainAt(...getOnTileXY(b));
-      if (!wolfAudibleToDeerDistByTerrainAndSpeed.hasOwnProperty(terrain))
+      if (!wolfAudibleToDeerL2ByTerrainAndSpeed.hasOwnProperty(terrain))
         return alert("Unknown terrain type for canHear origin");
 
-      const rangeByPose = wolfAudibleToDeerDistByTerrainAndSpeed[terrain];
+      const rangeByPoseL2 = wolfAudibleToDeerL2ByTerrainAndSpeed[terrain];
 
       if (!rangeByPose.hasOwnProperty(b.pose))
         return alert("Uknown pose for canHear origin");
 
-      const range = rangeByPose[b.pose];
-      return distBetweenL2(a, b) <= range * range;
+      return distBetweenL2(a, b) <= sqrt(rangeByPose[b.pose]);
     }
 
     const kphToTpTk = 0.0046296; // kilometers/hour to tiles/tick
@@ -788,14 +821,21 @@
       updateCritterFrame(wolf);
     }
 
+    // makeDecision should not write any world or body state
+    function makeDecision(wolf) {
+      return false;
+    }
+
     function updateCritterAction(wolf) {
       if (wolf === wolves[0] && arrowsMoveWolf) return;
       wolf.redecideCd = 5 + Math.floor(Math.random() * 100 + Math.random() * 100);
 
-      if (Math.random() < 0.5) {
-        setCritterIdle(wolf);
-        return;
-      }
+      const decision = makeDecision();
+      if (decision) { enactDecision(decision); return; }
+
+      // no decision, update action at random
+
+      if (Math.random() < 0.5) { setCritterIdle(wolf); return; }
 
       const dirObj = movementDirections[Math.floor(Math.random() * movementDirections.length)];
       setCritterMoving(wolf, dirObj);
