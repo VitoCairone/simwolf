@@ -1,0 +1,7 @@
+(1) No MAPS or SATMAPS (aka minimaps) anywhere
+
+(2) No WORDS, LETTERS, or NUMBERS anywhere, except
+    (a) third party login integrations
+    (b) keyboard key icons
+
+(3) No METERS anywhere on the field
