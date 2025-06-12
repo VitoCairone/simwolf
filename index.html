@@ -481,6 +481,7 @@
 
       const [aX, aY] = getOnTileXY(a);
       const [bX, bY] = getOnTileXY(b);
+
       const [visX, visY] = traverseGrid(aX, aY, bX, bY);
       return visX === bX && visY === bY;
     }
@@ -502,24 +503,27 @@
         // TODO: evaluate whether there is a clean way to do everything we
         // want in-place with two sets, or better yet one,
         // and not write a new set every time
-        a.priorOthers = a.presentOthers;
+        a.priorOthers = a.presentOthers || new Set();
         a.presentOthers = new Set();
       });
 
       for (var iA = 0; iA < allCritters.length; iA++) {
         const a = allCritters[iA];
         for (var iB = iA + 1; iB < allCritters.length; iB++) {
+          // console.log(`Tick ${g_tick} ${iA} vs ${iB}`);
           const b = allCritters[iB];
+          // console.log("checking vision");
           if (canSee(a, b)) {
             // since we don't currently account for facing or lighting,
             // visibility is symetrical
-            a.presentOthersSet.add(b);
-            b.presentOthersSet.add(a);
+            a.presentOthers.add(b);
+            b.presentOthers.add(a);
           }
+          // console.log("checking audition");
 
           // audibility is not symmetrical
-          if (canHear(a, b)) a.presentOthersSet.add(b);
-          if (canHear(b, a)) b.presentOthersSet.add(a);
+          if (canHear(a, b)) a.presentOthers.add(b);
+          if (canHear(b, a)) b.presentOthers.add(a);
         }
 
         // react in realistic time to spotting or losing track of something
@@ -534,78 +538,65 @@
       }
     }
 
-    // arranged for the array key 3 * xSign + ySign + 4
-    const traversalDoneFuncsArr = [
-      (x, y, eX, eY) => x <= (eX + 0.001) && y <= (eY + 0.001),  // -1, -1
-      (x, y, eX, eY) => x <= (eX + 0.001),                       // -1,  0
-      (x, y, eX, eY) => x <= (eX + 0.001) && y >= (eY - 0.001),  // -1,  1
-      (x, y, eX, eY) => y <= (eY + 0.001),                       //  0, -1
-      (x, y, eX, eY) => true,                                    //  0,  0
-      (x, y, eX, eY) => y >= (eY - 0.001),                       //  0,  1
-      (x, y, eX, eY) => x >= (eX - 0.001) && y <= (eY + 0.001),  //  1, -1
-      (x, y, eX, eY) => x >= (eX - 0.001),                       //  1,  0
-      (x, y, eX, eY) => x >= (eX - 0.001) && y >= (eY - 0.001)   //  1,  1
-    ];
-
     function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
       const tiles = [];
 
-      let x = Math.floor(aX);
-      let y = Math.floor(aY);
+      // For simplicity we are tracing from center of the start tile
+      // to the center of the end tile, not using the exact argument values
+      // set start and end indices
+      const [sI, sJ] = [aX, aY].map(v => Math.floor(v));
+      const [eI, eJ] = [bX, bY].map(v => Math.floor(v));
+      
+      let [crossX, crossY] = [eI - sI, eJ - sJ];
+      const [xSign, ySign] = [crossX, crossY].map(v => Math.sign(v));
 
-      const endX = Math.floor(bX);
-      const endY = Math.floor(bY);
+      if (crossX === 0 && crossY === 0) return fullTrace? [[sI, sJ]] : [sI, sJ];
 
-      const dx = bX - aX;
-      const dy = bY - aY;
+      // Imagine the 'time' of the tracing == 1,
+      // then recipCx is the time it takes between each X boundary
+      // and recipCy is the time between each Y boundary.
+      const [recipCx, recipCy] = [crossX, crossY].map(v => {
+        return v === 0 ? Infinity : Math.abs(1 / v)
+      });
+      
+      let timeElapsed = 0;
+      let [timeToX, timeToY] = [recipCx / 2, recipCx / 2];
 
-      const stepX = Math.sign(dx);
-      const stepY = Math.sign(dy);
+      const shifts = [];
+      let [i, j] = [0, 0];
 
-      const tDeltaX = Math.abs(1 / dx);  // how far along the ray we move to cross a tile boundary in x
-      const tDeltaY = Math.abs(1 / dy);  // same for y
+      function shiftToGrid(s) { return [sI + xSign * s[0], sJ + ySign * s[1]]; }
 
-      let tMaxX = (stepX > 0)
-        ? ((Math.floor(aX) + 1 - aX) * tDeltaX)
-        : ((aX - Math.floor(aX)) * tDeltaX);
-
-      let tMaxY = (stepY > 0)
-        ? ((Math.floor(aY) + 1 - aY) * tDeltaY)
-        : ((aY - Math.floor(aY)) * tDeltaY);
-
-      // Edge case if already exactly on border
-      if (dx === 0) tMaxX = Infinity;
-      if (dy === 0) tMaxY = Infinity;
-
-      const isDoneTestFn = traversalDoneFuncsArr[stepX * 3 + stepY + 4];
-
-      while (true) {
-        if (fullTrace) tiles.push([x, y]);
-
-        // isDoneTestFn is theoretically just x === end && y === end,
-        // however we need to correct for imprecision of binary math
-        if (isDoneTestFn(x, y, endX, endY)) break;
-
-        // todo: make more explicit the use for vision,
-        // which is currently implied by fullTrace false
-        if (!fullTrace && isOpaque(getTerrainAt(x, y))) break;
-
-        // Note when tMaxX == tMaxY, both blocks run, this is intended
-        if (tMaxX <= tMaxY) {
-          x += stepX;
-          tMaxX += tDeltaX;
+      while (timeElapsed < 0.99999) {
+        if (timeToX === timeToY) {
+          timeElapsed += timeToX;
+          i++;
+          j++;
+          timeToX = recipCx;
+          timeToY = recipCy;
+        } else if (timeToX < timeToY) {
+          timeElapsed += timeToX;
+          i++;
+          timeToY -= timeToX;
+          timeToX = recipCx;
+        } else {
+          timeElapsed += timeToY;
+          j++;
+          timeToX -= timeToY;
+          timeToY = recipCy;
         }
-        if (tMaxY >= tMaxX) {
-          y += stepY;
-          tMaxY += tDeltaY;
+        if (fullTrace) {
+          shifts.push([i, j]);
+        } else {
+          if (isOpaque(getTerrainAt(...shiftToGrid([i, j])))) break;
         }
       }
 
-      return fullTrace ? tiles : [x, y];
+      return fullTrace ? shifts.map(s => shiftToGrid(s)) : shiftToGrid([i, j]);
     }
 
     function updateAllCritters() {
-      // setPresentOthersIneffMethod();
+      setPresentOthersIneffMethod();
 
       allCritters.forEach(wolf => {
         // todo: combine this better with setPresentOthers() so that a wolf
@@ -792,10 +783,10 @@
 
       const rangeByPoseL2 = wolfAudibleToDeerL2ByTerrainAndSpeed[terrain];
 
-      if (!rangeByPose.hasOwnProperty(b.pose))
+      if (!rangeByPoseL2.hasOwnProperty(b.pose))
         return alert("Uknown pose for canHear origin");
 
-      return distBetweenL2(a, b) <= sqrt(rangeByPose[b.pose]);
+      return distBetweenL2(a, b) <= rangeByPoseL2[b.pose];
     }
 
     const kphToTpTk = 0.0046296; // kilometers/hour to tiles/tick
