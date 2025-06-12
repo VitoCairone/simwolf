@@ -539,48 +539,45 @@
     }
 
     function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
-      const tiles = [];
-
-      // For simplicity we are tracing from center of the start tile
-      // to the center of the end tile, not using the exact argument values
-      // set start and end indices
+      // For simplicity we are tracing from tile center to tile center,
+      // not from exact point to point
       const [sI, sJ] = [aX, aY].map(v => Math.floor(v));
       const [eI, eJ] = [bX, bY].map(v => Math.floor(v));
       
-      let [crossX, crossY] = [eI - sI, eJ - sJ];
-      const [xSign, ySign] = [crossX, crossY].map(v => Math.sign(v));
+      let [crossI, crossJ] = [eI - sI, eJ - sJ];
+      if (crossI === 0 && crossJ === 0) return fullTrace? [[sI, sJ]] : [sI, sJ];
 
-      if (crossX === 0 && crossY === 0) return fullTrace? [[sI, sJ]] : [sI, sJ];
+      const [xSign, ySign] = [crossI, crossJ].map(v => Math.sign(v));
+      [crossI, crossJ] = [crossI, crossJ].map(v => Math.abs(v));
 
-      // Imagine the 'time' of the tracing == 1,
+      // Imagine the 'time' of the tracing === 1,
       // then recipCx is the time it takes between each X boundary
       // and recipCy is the time between each Y boundary.
-      const [recipCx, recipCy] = [crossX, crossY].map(v => {
-        return v === 0 ? Infinity : Math.abs(1 / v)
+      const [recipCx, recipCy] = [crossI, crossJ].map(v => {
+        return v === 0 ? Infinity : 1 / v
       });
       
-      let timeElapsed = 0;
-      let [timeToX, timeToY] = [recipCx / 2, recipCx / 2];
+      // start at center i.e. halfway between boundaries
+      let [timeToX, timeToY] = [recipCx, recipCy].map(v => v / 2);
 
       const shifts = [];
       let [i, j] = [0, 0];
 
       function shiftToGrid(s) { return [sI + xSign * s[0], sJ + ySign * s[1]]; }
 
-      while (timeElapsed < 0.99999) {
+      while (i < crossI || j < crossJ) {
+        if (i > crossI || j > crossJ)
+          return alert("axis crossing error in traverseGrid");
         if (timeToX === timeToY) {
-          timeElapsed += timeToX;
           i++;
           j++;
           timeToX = recipCx;
           timeToY = recipCy;
         } else if (timeToX < timeToY) {
-          timeElapsed += timeToX;
           i++;
           timeToY -= timeToX;
           timeToX = recipCx;
         } else {
-          timeElapsed += timeToY;
           j++;
           timeToX -= timeToY;
           timeToY = recipCy;
