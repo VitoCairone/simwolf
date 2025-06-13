@@ -40,11 +40,7 @@ function pickFromModes(modes, lvl = "fre") {
   }
 }
 
-function canPickMode(a, m) {
-  return canPickModeFnDict[m](a);
-}
-
-decideMode(a) {
+function decideMode(a) {
   let rv = decideForcePriotMode('max');
   if (rv) return rv;
   rv = decideForcePriotMode('mid');
