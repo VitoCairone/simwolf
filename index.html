@@ -901,6 +901,47 @@
       return collisions;
     }
 
+    function angleToTargetOctant(x, y, tX, tY, facingIndex) {
+      if (x === tX && y === tY) return 0;
+
+      // atan2 result in [-π, π]; shift to [0, 2π)
+      let angleRad = Math.atan2(tY - y, tX - x);
+      if (angleRad < 0) angleRad += 2 * Math.PI;
+
+      // Convert to octant index: 0 = E, 1 = NE, ..., 7 = SE
+      const targetIndex = Math.floor((angleRad / (Math.PI / 4)) + 0.5); // Round to nearest 1/8 circle
+
+      // Compute difference in range [-4, 4]
+      const diff = targetIndex - facingIndex;
+      return diff > 4 ? diff - 8 : (diff < -4 ? diff + 8 : diff);
+    }
+
+    const DIR_E  = 0;
+    const DIR_SE = 1;
+    const DIR_S  = 2;
+    const DIR_SW = 3;
+    const DIR_W  = 4;
+    const DIR_NW = 5;
+    const DIR_N  = 6;
+    const DIR_NE = 7;
+
+    function randomPara() {
+      const x = Math.random();
+      return 4 * x * (1 - x);
+    }
+
+    function getDir(x, y, defaultRV = 0) {
+      if (x === 0) return y === 0 ? defaultRV : (y > 0 ? DIR_S : DIR_N );
+      if (y === 0) return (x > 0 ? DIR_E : DIR_W)
+
+      const absX = Math.abs(x);
+      const absY = Math.abs(y);
+      // tan(1/8 circle) ~= 0.414, tan(3/8 circle) ~= 2.414
+      if (absX >= absY * 2.414) return x > 0 ? DIR_E : DIR_W;
+      if (absY >= absX * 2.414) return y > 0 ? DIR_S : DIR_N;
+      return x > 0 ? (y > 0 ? DIR_NE : DIR_SE) : (y > 0 ? DIR_NW : DIR_SW);
+    }
+
     document.addEventListener("keydown", (e) => { keysPressed[e.key] = true; });
     document.addEventListener("keyup", (e) => { keysPressed[e.key] = false; });
 

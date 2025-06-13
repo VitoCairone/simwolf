@@ -1,0 +1,81 @@
+  modes:
+    drink
+    feed
+    seek (water, food, others)
+    explore
+    rest
+    bed
+    sleep
+    flee
+    follow
+    fight
+    court
+    protect
+    social
+    track
+    patrol
+
+mode select
+  by priority
+  if MAX TIRED, force sleep
+  if ADULT near THREATENED CHILD, protect
+  if ADULT MALE near THREATENED FEMALE, protect
+  if THREATENED, flee or fight
+  if PARENT with UNACCOUNTED CHILDREN, track children / seek children
+  if THIRSTY, drink / seek water
+  if HUNGRY, feed / track food / seek food
+  if TIRED, sleep / bed
+  if UNBONDED ADULT in BREEDING SEASON, court / track pomate / seek pomate
+  if SEPERATED from mate or parent, track / seek mate or parent
+  if ISOLATED, seek others
+    * TODO: consider when to allow adult Wolves to prefer hunting solo?  
+  when none apply, select at random (based on evoWts)
+    near others: follow social patrol explore
+    alone: patrol explore
+
+
+  // every critter's highest decision Wt should be fixed at 1.0
+  // and others scaled accordingly
+
+  evos
+  urinateRat
+  midTiredRat
+  midTiredWt
+  minTiredRat
+  minTiredWt
+  maxThirstyRat
+  midThirstyRat
+  midThirstyWt
+  minThirstyRat
+  minThirstyWt
+  maxHungryRat
+  midHungryRat
+  midHungryWt
+  minHungryRat
+  minThirstyWt
+  followMateDist
+  followFrndDist
+  stalkPreyDist
+  criticalThreatDist
+  grpdFollowWt
+  grpdSocialWt
+  grpdPatrolWt
+  grpdExploreWt
+  soloPatrolWt
+  soloExploreWt
+  fleeAwayWt
+  fleeSafePathWt
+  fleeToOtherSwt
+  fleeHomeSwt
+  fleeHomeRevDist
+  fleeHomeDistMod
+  fleeHomeRevDistMod
+  coreTerritoryDist
+  childrenAloneTime
+  mateSepMinRat
+  mateSepMidRat
+  mateSepMaxTime
+  parentSepMinRat
+  parentSepMidRat
+  parentSepMaxTime
+  threatAwareTime
