@@ -406,12 +406,18 @@
       const scalar = 0.1;
       const noise = Math.sin(x * scalar) + Math.sin(y * scalar);
       const jitter = Math.sin(x * 0.17 + y * 0.23) * 0.5;
-      const grassChance = noise + jitter - 0.8;
+      const grassPatchRate = noise + jitter - 0.8;
+
+      // checkpoint -- this works surprisinglt well for creating large tracts of water
+      const noise2 = Math.sin(x * scalar) + Math.sin(y * scalar) * 1.3;
+      const jitter2 = Math.sin(x * 0.21 + y * 0.19) * 0.4;
+      const waterRate = noise2 + jitter2 - 2;
+      if (waterRate < -2) return "water";
 
       const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
       const pseudoRandom = hash - Math.floor(hash); // [0, 1)
 
-      if (pseudoRandom < grassChance) return "grass";
+      if (pseudoRandom < grassPatchRate) return "grass";
       const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
       const types = ["dirt", "grass", "bush"];
       return types[Math.abs(typePseudorandInt) % types.length];
@@ -755,6 +761,7 @@
       leafcover: { walk: sqr(6),  run: sqr(22), sprint: sqr(60) },
       grass:   { walk: sqr(3),  run: sqr(11), sprint: sqr(30) },
       gravel:  { walk: sqr(9),  run: sqr(37), sprint: sqr(95) },
+      water:   { walk: sqr(9),  run: sqr(37), sprint: sqr(95) } // fix this, made up up
     };
 
     // distBetweenL2 returns the SQUARED distance (L2) between points
@@ -851,7 +858,7 @@
     }
 
     function isImpassable(terrain) {
-      return terrain === "rock" || terrain === "bush";
+      return terrain === "rock" || terrain === "bush" || terrain === "water";
     }
 
     function isOpaque(terrain) {
