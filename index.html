@@ -185,8 +185,9 @@
     // parameters
     const tileSize = 32;
     const tileRiserPY = 8;
-    const gridWidthN = 100;
-    const gridHeightN = 100;
+
+    const gridWidthN = 3533088; // c * 1 tick / root2
+    const gridHeightN = 3533088;
     const deerFrameW = 32;
     const deerFrameH = 41;
 
@@ -404,27 +405,37 @@
       // locations for any grid size with no memory requirement scaling.
 
       const scalar = 0.1;
-      const noise = Math.sin(x * scalar) + Math.sin(y * scalar);
-      const jitter = Math.sin(x * 0.17 + y * 0.23) * 0.5;
-      const grassPatchRate = noise + jitter - 0.8;
+      // const noise = Math.sin(x * scalar) + Math.sin(y * scalar);
+      // const jitter = Math.sin(x * 0.17 + y * 0.23) * 0.5;
+      // const grassPatchRate = noise + jitter - 0.8;
+
+      
+      // Using this part alone with no randomness provides interesting
+      // features, but repetitive on a broad scale -- correct with e.g.
+      // wave packets, but before that work on visual improvement esp.
+      // for water boundaries and elevation.
 
       const noise2 = Math.sin(x * scalar) + Math.sin(y * scalar) * 1.3;
       const jitter2 = Math.sin(x * 0.21 + y * 0.19) * 0.4;
       const waterRate = noise2 + jitter2;
       if (waterRate < -0.5) return "water";
+      if (waterRate < 0) return "grass";
+      if (waterRate < 0.5) return "dirt";
+      return "rock";
 
-      const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
-      const pseudoRandom = hash - Math.floor(hash); // [0, 1)
+      // const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
+      // const pseudoRandom = hash - Math.floor(hash); // [0, 1)
 
-      if (pseudoRandom < grassPatchRate) return "grass";
-      const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
-      const types = ["dirt", "grass", "bush"];
-      return types[Math.abs(typePseudorandInt) % types.length];
+      // if (pseudoRandom < grassPatchRate) return "grass";
+      // const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
+      // const types = ["dirt", "grass", "bush"];
+      // return types[Math.abs(typePseudorandInt) % types.length];
     }
 
-    function renderVisibleTiles() {
-      // Todo: review to see if we can include fewer off-cemra tiles without excess complexity
+    const visTerrainMap = {};
 
+
+    function renderVisibleTiles() {
       const viewW = viewportWidth / zoom;
       const viewH = viewportHeight / zoom;
 
@@ -453,6 +464,9 @@
           const key = `${gx}_${gy}`;
           if (renderedTiles.has(key)) continue;
           if (gx < 0 || gy < 0 || gx >= gridWidthN || gy >= gridHeightN) continue;
+
+          // TODO: visible terrain should check its surround, and cache the result,
+          // in order to set the correct tile sprite
 
           const tile = document.createElement("div");
           tile.className = `tile ${getTerrainAt(gx, gy)}`;
