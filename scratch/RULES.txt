@@ -5,3 +5,13 @@
     (b) keyboard key icons
 
 (3) No METERS anywhere on the field
+
+
+
+NEXT STEP
+    set Tue 6-17:
+        (1) implement Wolf kills Deer on collide
+        (2) implement Deer threat detection
+        (3) implement Deer flee on threat
+        (4) implement three speeds for Wolf and Deer with Fatigue/Coldown
+        (5) implement eight facing sprites for Wolf and Deer

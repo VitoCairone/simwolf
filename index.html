@@ -113,7 +113,7 @@
     .tile.flower    { background-position: -256px  -96px; }
     .tile.rock      { background-position: -288px -128px; }
     .tile.stone     { background-position: -192px -160px; }
-    .tile.water     { background-position:   0px  -256px; }
+    .tile.water     { background-position: -192px -288px; }
     .tile.ice       { background-position:   0px  -320px; }
   </style>
 </head>
@@ -432,8 +432,16 @@
       // return types[Math.abs(typePseudorandInt) % types.length];
     }
 
-    const visTerrainMap = {};
-
+    function getTileClassAt(x, y) {
+      return getTerrainAt(x, y)
+      // TODO: implement or remove
+      // const localTerrain = [[null, null, null], [null, null, null], [null, null, null]];
+      // for (var i = -1; i <= 1; i++) { 
+      //   for (var j = -1; j <= 1; j++) {
+      //     localTerrain[i][j] = getTerrainAt(x + i, y + j);
+      //   }
+      // }
+    }
 
     function renderVisibleTiles() {
       const viewW = viewportWidth / zoom;
@@ -465,11 +473,11 @@
           if (renderedTiles.has(key)) continue;
           if (gx < 0 || gy < 0 || gx >= gridWidthN || gy >= gridHeightN) continue;
 
-          // TODO: visible terrain should check its surround, and cache the result,
-          // in order to set the correct tile sprite
+          // TODO: cache this check to reduce redundant work
+          const tileClass = getTileClassAt(gx, gy);
 
           const tile = document.createElement("div");
-          tile.className = `tile ${getTerrainAt(gx, gy)}`;
+          tile.className = `tile ${tileClass}`;
           tile.style.zIndex = gx + gy;
 
           const [px, py] = isoProject(gx, gy);
