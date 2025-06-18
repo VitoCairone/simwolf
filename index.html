@@ -655,6 +655,7 @@
     function moveAllTogether(movers) {
       const collidePairs = findCollidingPairs(movers);
       let didCollide = {};
+
       collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
       // lazy first pass: halt colliders pre-collisions
 
@@ -927,6 +928,17 @@
       }
 
       return collisions;
+    }
+
+    function classedCollisions(masterList, collidePairs) {
+      if (!masterList || !collidePairs) return alert("invalid args to classedCollisions");
+      return collidePairs.map(pair => {
+        if (pair[0] < 0) return [pair[0], pair[1], "imps"];
+        const [m1, m2] = pair.map(idx => masterList[idx]);
+        if (m1.species === m2.species) return [pair[0], pair[1], "bump"]
+        // order attacks with target first
+        return m1.species === "wolf" ? [pair[0], pair[1], "atck"] : [pair[1], pair[0], "atck"]
+      });
     }
 
     function angleToTargetOctant(x, y, tX, tY, facingIndex) {
