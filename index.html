@@ -60,8 +60,8 @@
       width: 3000px;
       height: 3000px;
       will-change: transform;
-      transform: translate(0px, 0px) scale(2);
-      transform-origin: top left;
+      transform: translate(0px, 0px) scale(1);
+      transform-origin: 50% 50%;
       image-rendering: pixelated;
     }
     .tile {
@@ -178,7 +178,10 @@
     const debugWolfEl = document.getElementById("dbel-pc-wolf");
 
     let g_tick = 0; // updates ONE PLACE ONLY in gameLoop
-    let zoom = 2;
+    // #zoom is mostly working except for two issues:
+    // (1) temporary artifacting when zooming out and then panning
+    // (1) pan limits based on zoom = 1, cannot pan to edges at higher zooms
+    let zoom = 1;
     const zoomMin = 1;
     const zoomMax = 8;
 
@@ -350,8 +353,8 @@
     forbidOverlapsOnStart();
 
     // these are coordinates for the upper-left corner of the viewport
-    let cameraPX = 0;
-    let cameraPY = 0;
+    let worldShiftPX = 0;
+    let worldShiftPY = 0;
     const cameraSpeed = 50;
     const keysPressed = {};
 
@@ -455,43 +458,41 @@
     }
 
     function renderVisibleTiles() {
-      const viewW = viewportWidth / zoom;
-      const viewH = viewportHeight / zoom;
+      const cornerPs = [
+        [worldShiftPX, worldShiftPY],
+        [worldShiftPX, worldShiftPY + viewportHeight],
+        [worldShiftPX + viewportWidth, worldShiftPY],
+        [worldShiftPX + viewportWidth, worldShiftPY + viewportHeight]
+      ];
+      const cornerGs = cornerPs.map(pair => rectiProject(...pair));
 
-      const leftPX = cameraPX / zoom;
-      const topPX = cameraPY / zoom;
-      const rightPX = leftPX + viewW;
-      const bottomPX = topPX + viewH;
-
-      const buffer = 2;
-
-      const gxMin = Math.floor((leftPX / halfTile + topPX / qtrTile) / 2) - buffer;
-      const gxMax = Math.ceil((rightPX / halfTile + bottomPX / qtrTile) / 2) + buffer;
-      const gyMin = Math.floor((topPX / qtrTile - rightPX / halfTile) / 2) - buffer;
-      const gyMax = Math.ceil((bottomPX / qtrTile - leftPX / halfTile) / 2) + buffer;
+      // TODO: simplify this since the mins and maxes are always in the same place
+      const iMin = Math.max(0, Math.floor(Math.min(...cornerGs.map(pair => pair[0]))));
+      const iMax = Math.min(gridWidthN - 1, Math.floor(Math.max(...cornerGs.map(pair => pair[0]))));
+      const jMin = Math.max(0, Math.floor(Math.min(...cornerGs.map(pair => pair[1]))));
+      const jMax = Math.min(gridHeightN - 1 ,Math.floor(Math.max(...cornerGs.map(pair => pair[1]))));
 
       for (const key of renderedTiles.keys()) {
-        const [gx, gy] = key.split('_').map(Number);
-        if (gx < gxMin || gx > gxMax || gy < gyMin || gy > gyMax) {
+        const [i, j] = key.split('_').map(Number);
+        if (i < iMin || i > iMax || j < jMin || j > jMax) {
           tileLayer.removeChild(renderedTiles.get(key));
           renderedTiles.delete(key);
         }
       }
 
-      for (let gy = gyMin; gy <= gyMax; gy++) {
-        for (let gx = gxMin; gx <= gxMax; gx++) {
-          const key = `${gx}_${gy}`;
+      for (let j = jMin; j <= jMax; j++) {
+        for (let i = iMin; i <= iMax; i++) {
+          const key = `${i}_${j}`;
           if (renderedTiles.has(key)) continue;
-          if (gx < 0 || gy < 0 || gx >= gridWidthN || gy >= gridHeightN) continue;
 
           // TODO: cache this check to reduce redundant work
-          const tileClass = getTileClassAt(gx, gy);
+          const tileClass = getTileClassAt(i, j);
 
           const tile = document.createElement("div");
           tile.className = `tile ${tileClass}`;
-          tile.style.zIndex = gx + gy;
+          tile.style.zIndex = i + j;
 
-          const [px, py] = isoProject(gx, gy);
+          const [px, py] = isoProject(i, j);
           tile.style.left = `${px - halfTile}px`;
           tile.style.top = `${py - tileRiserPY}px`;
 
@@ -502,9 +503,11 @@
     }
 
     function updateCamera() {
-      cameraPX = boundVal(cameraPX,  -worldRadPX * zoom, worldRadPX * zoom - viewportWidth);
-      cameraPY = boundVal(cameraPY, 0, (worldDiamPY + tileRiserPY) * zoom - viewportHeight);
-      document.getElementById("field").style.transform = `translate(${-cameraPX}px, ${-cameraPY}px) scale(${zoom})`;
+      worldShiftPX = boundVal(worldShiftPX,  -worldRadPX, worldRadPX - viewportWidth);
+      worldShiftPY = boundVal(worldShiftPY, 0, (worldDiamPY + tileRiserPY) - viewportHeight);
+      const [zoX, zoY] = [worldShiftPX + viewportWidth / 2, worldShiftPY + viewportHeight / 2];
+      document.getElementById("field").style.transformOrigin = `${zoX}px ${zoY}px`;
+      document.getElementById("field").style.transform = `translate(${-worldShiftPX}px, ${-worldShiftPY}px) scale(${zoom})`;
       renderVisibleTiles();
     }
 
@@ -736,10 +739,10 @@
           if (keysPressed["ArrowLeft"]) { setCritterMoving(pcWolf, 6); }
           if (keysPressed["ArrowRight"]) { setCritterMoving(pcWolf, 2); }
         } else {
-          if (keysPressed["ArrowUp"]) { cameraPY -= cameraSpeed; }
-          if (keysPressed["ArrowDown"]) { cameraPY += cameraSpeed; }
-          if (keysPressed["ArrowLeft"]) { cameraPX -= cameraSpeed; }
-          if (keysPressed["ArrowRight"]) { cameraPX += cameraSpeed; }
+          if (keysPressed["ArrowUp"]) { worldShiftPY -= cameraSpeed; }
+          if (keysPressed["ArrowDown"]) { worldShiftPY += cameraSpeed; }
+          if (keysPressed["ArrowLeft"]) { worldShiftPX -= cameraSpeed; }
+          if (keysPressed["ArrowRight"]) { worldShiftPX += cameraSpeed; }
           updateCamera();
         }
       }
@@ -756,8 +759,8 @@
 
       fieldWrapper.addEventListener("mousemove", (e) => {
         const rect = fieldWrapper.getBoundingClientRect();
-        const mousePX = e.clientX - rect.left + cameraPX;
-        const mousePY = e.clientY - rect.top + cameraPY;
+        const mousePX = e.clientX - rect.left + worldShiftPX;
+        const mousePY = e.clientY - rect.top + worldShiftPY;
 
         const [mouseGX, mouseGY] = rectiProject(mousePX, mousePY);
 
