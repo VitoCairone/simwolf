@@ -273,7 +273,8 @@
       }
     }
 
-    function spriteRow(wolf) { return Math.floor(wolf.currentDirection / 2); }
+    // TODO: rearrange sprite rows to match DIR_NAME order
+    function spriteRow(wolf) { return (Math.floor(wolf.currentDirection / 2) + 1) % 4; }
 
     function updateCritterFrame(wolf) {
       wolf.animTimer = 0;
@@ -359,15 +360,16 @@
     const keysPressed = {};
 
     const ir2 = 1 / Math.sqrt(2);
+
     const moveVecByDir = [
-      [ 0, -1 ],
-      [ ir2, -ir2 ],
       [ 1, 0 ],
       [ ir2, ir2 ],
       [ 0, 1 ],
       [ -ir2, ir2 ],
       [ -1, 0 ],
       [ -ir2, -ir2 ],
+      [ 0, -1 ],
+      [ ir2, -ir2 ],
     ];
 
     const viewportWidth = document.getElementById('field-wrapper').clientWidth;
@@ -380,9 +382,19 @@
 
     let arrowsMoveWolf = false;
 
+    function setCameraToPCWolf() {
+      const [px, py] = isoProject(pcWolf.gx, pcWolf.gy);
+      worldShiftPX = px - viewportWidth / 2;
+      worldShiftPY = py - viewportHeight / 2;
+    }
+
     arrowsToggle.addEventListener('click', () => {
       arrowsMoveWolf = !arrowsMoveWolf;
       arrowsIcon.innerHTML = arrowsMoveWolf ? wolfIconSVG : cameraIconSVG;
+      if (arrowsMoveWolf) {
+        setCameraToPCWolf();
+        updateCamera();
+      }
     });
 
     function updateZoomButtons() {
@@ -444,7 +456,7 @@
       const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
       const pseudoRandom = hash - Math.floor(hash); // [0, 1)
 
-      if (pseudoRandom < Math.pow(1.25 - waterRate, 6)) return "bush";
+      // if (pseudoRandom < Math.pow(1.25 - waterRate, 6)) return "bush";
 
       // const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
       // const types = ["dirt", "grass", "bush"];
@@ -526,6 +538,7 @@
 
     function canSee(a, b) {
       if (!a || !b || a.kind !== 'critter') return alert("Invalid arg to canSee");
+      if (distBetweenL2(a, b) > 10000) return false;
 
       const [aX, aY] = getOnTileXY(a);
       const [bX, bY] = getOnTileXY(b);
@@ -568,8 +581,10 @@
           const b = allCritters[iB];
           // console.log("checking vision");
           if (canSee(a, b)) {
-            if (isVisionFacing(a, b)) a.presentOthers.add(b);
-            if (isVisionFacing(b, a)) b.presentOthers.add(a);
+            // TODO: restore facing check; currently facing away while fleeing
+            // causes deer to immediately lose sight of wolf and stop fleeing
+            if (true || isVisionFacing(a, b)) a.presentOthers.add(b);
+            if (true || isVisionFacing(b, a)) b.presentOthers.add(a);
           }
           // console.log("checking audition");
           if (canHear(a, b)) a.presentOthers.add(b);
@@ -694,6 +709,10 @@
           // this is the ONLY PLACE ANYWHERE that mover gx and gy should change!
           mover.gx = mover.nextGX;
           mover.gy = mover.nextGY;
+          if (mover === pcWolf && arrowsMoveWolf) {
+            setCameraToPCWolf();
+            updateCamera();
+          }
           placeCritterSprite(mover);
         }
       });
@@ -741,10 +760,10 @@
       if (hasInput) {
         if (arrowsMoveWolf) {
           // for simplicity, the arrow keys currently move along grid axis and don't combine
-          if (keysPressed["ArrowUp"]) { setCritterMoving(pcWolf, 0); }
-          if (keysPressed["ArrowDown"]) { setCritterMoving(pcWolf, 4); }
-          if (keysPressed["ArrowLeft"]) { setCritterMoving(pcWolf, 6); }
-          if (keysPressed["ArrowRight"]) { setCritterMoving(pcWolf, 2); }
+          if (keysPressed["ArrowUp"]) { setCritterMoving(pcWolf, DIR_N); }
+          if (keysPressed["ArrowDown"]) { setCritterMoving(pcWolf, DIR_S); }
+          if (keysPressed["ArrowLeft"]) { setCritterMoving(pcWolf, DIR_W); }
+          if (keysPressed["ArrowRight"]) { setCritterMoving(pcWolf, DIR_E); }
         } else {
           if (keysPressed["ArrowUp"]) { worldShiftPY -= cameraSpeed; }
           if (keysPressed["ArrowDown"]) { worldShiftPY += cameraSpeed; }
@@ -856,11 +875,11 @@
       'deer': { 'walk': deerWalkSpeed, 'run': deerSprintSpeed, 'idle': 0}
     }
 
-    function setCritterMoving(wolf, dir, newPose = 'walk') {
-      const moveVec = moveVecByDir[dir];
-
+    function setCritterMoving(wolf, dir8, newPose = 'walk') {
       // NOTE: sprites currently exist only for 4 directions, so...
-      if (dir % 2) dir = dir - 1;
+      const dir = (dir8 % 2) ? dir8 - 1 : dir8;
+
+      const moveVec = moveVecByDir[dir];
 
       if ((!newPose || newPose === wolf.pose) && wolf.currentDirection === dir) return;
       wolf.currentDirection = dir;
@@ -878,9 +897,9 @@
       const predators = others.filter(other => other.species === 'wolf');
       if (!predators.length) return null;
 
-      console.log(`Returning flee decision on tick ${g_tick}`);
+      // console.log(`Returning flee decision on tick ${g_tick}`);
       const maxThreatPredIdx = getNearestIdx(a, predators);
-      return ['flee', {from: predators[maxThreatPredIdx]}];
+      return ["flee", {from: predators[maxThreatPredIdx]}];
     }
 
     function getNearestIdx(obj, choices) {
@@ -899,12 +918,13 @@
 
     function enactDecision(wolf, decision) {
       if (!decision) return alert("falsy decision to enactDecision");
-      const [act, options] = decision; 
+      const [act, options] = decision;
       switch (act) {
         case "flee":
-          console.log("options.from = ", options.from);
-          console.log("wolf = ", wolf);
-          const dir = getDir(vecToObj(options.from, wolf));
+          // console.log("options.from = ", options.from);
+          // console.log("wolf = ", wolf);
+          const dir = getDir(...vecToObj(options.from, wolf));
+          // console.log("Fleeing " + DIR_NAME[dir]);
           setCritterMoving(wolf, dir);
           return;
         default:
@@ -917,7 +937,9 @@
       wolf.redecideCd = 5 + Math.floor(Math.random() * 100 + Math.random() * 100);
 
       const decision = makeDecision(wolf);
-      if (decision) { enactDecision(wolf, decision); return; }
+      if (decision) { enactDecision(wolf, decision); return; } else {
+        if (wolf.species === "deer") console.log("Deer is unafraid");
+      }
 
       // no decision, update action at random
       if (Math.random() < 0.5) { setCritterIdle(wolf); return; }
@@ -1009,6 +1031,7 @@
       });
     }
 
+
     const DIR_E  = 0;
     const DIR_SE = 1;
     const DIR_S  = 2;
@@ -1017,6 +1040,8 @@
     const DIR_NW = 5;
     const DIR_N  = 6;
     const DIR_NE = 7;
+
+    const DIR_NAME = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]
 
     function randomPara() {
       const x = Math.random();
