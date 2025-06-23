@@ -458,6 +458,11 @@
     }
 
     function renderVisibleTiles() {
+      // Note the absence of factoring for zoom;
+      // this method collects the square which contains
+      // all tiles (actually twice as many because it surrounds the displayed diamond)
+      // at zoom = 1, ergo always more than enough at higher zoom.
+
       const cornerPs = [
         [worldShiftPX, worldShiftPY],
         [worldShiftPX, worldShiftPY + viewportHeight],
