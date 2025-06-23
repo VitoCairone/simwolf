@@ -464,18 +464,17 @@
       // at zoom = 1, ergo always more than enough at higher zoom.
 
       const cornerPs = [
-        [worldShiftPX, worldShiftPY],
-        [worldShiftPX, worldShiftPY + viewportHeight],
-        [worldShiftPX + viewportWidth, worldShiftPY],
-        [worldShiftPX + viewportWidth, worldShiftPY + viewportHeight]
+        [worldShiftPX, worldShiftPY], // TopLeft
+        [worldShiftPX + viewportWidth, worldShiftPY], // TopRight
+        [worldShiftPX, worldShiftPY + viewportHeight], // BotLeft
+        [worldShiftPX + viewportWidth, worldShiftPY + viewportHeight] // BotRight
       ];
       const cornerGs = cornerPs.map(pair => rectiProject(...pair));
 
-      // TODO: simplify this since the mins and maxes are always in the same place
-      const iMin = Math.max(0, Math.floor(Math.min(...cornerGs.map(pair => pair[0]))));
-      const iMax = Math.min(gridWidthN - 1, Math.floor(Math.max(...cornerGs.map(pair => pair[0]))));
-      const jMin = Math.max(0, Math.floor(Math.min(...cornerGs.map(pair => pair[1]))));
-      const jMax = Math.min(gridHeightN - 1 ,Math.floor(Math.max(...cornerGs.map(pair => pair[1]))));
+      const iMin = Math.max(0, Math.floor(cornerGs[0][0]));
+      const iMax = Math.min(gridWidthN - 1, Math.floor(cornerGs[3][0]));
+      const jMin = Math.max(0, Math.floor(cornerGs[1][1]));
+      const jMax = Math.min(gridHeightN - 1 ,Math.floor(cornerGs[2][1]));
 
       for (const key of renderedTiles.keys()) {
         const [i, j] = key.split('_').map(Number);
