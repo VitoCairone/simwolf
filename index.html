@@ -269,7 +269,8 @@
       deer: { 
         'walk': {nFrames: 11, colZero: 0, frameW: 32, frameH: 41, holdTks: 5, topToShadow: 33},
         'idle': {nFrames: 24, colZero: 11, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33},
-        'run': {nFrames: 10, colZero: 35, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33}
+        'run': {nFrames: 10, colZero: 35, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33},
+        'death': {nFrames: 10, colZero: 45, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33},
       }
     }
 
@@ -697,14 +698,28 @@
       collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
       // lazy first pass: halt colliders pre-collisions
 
+      const wasKilled = {};
+
+      collidePairs.forEach(pair => {
+        if (pair[0] < 0 || pair[0].species === pair[1]. species) return;
+        wasKilled[pair[pair[1].species === "deer" ? 1 : 0]] = true;
+      });
+
       movers.forEach((mover, idx) => {
         // for a stationary mover that gets collided into, do nothing
         if (mover.nextGX === mover.gx && mover.nextGY === mover.gy) return;
 
         if (didCollide[idx]) {
-          // this mover's gx and gy do NOT get updated this tick
-          // and it should decide on a new movement to try next tick
-          updateCritterAction(mover);
+          if (wasKilled[idx]) {
+            setCritterDeath(movers[idx]);
+          } else {
+            // this mover's gx and gy do NOT get updated this tick
+            // and it should decide on a new movement to try for next tick
+
+            // TODO: allow a rear-ended collider to continue moving when space in front is open
+            // this 'should' already be the behavior since creatures move all together, investigate
+            updateCritterAction(mover);
+          }
         } else {
           // this is the ONLY PLACE ANYWHERE that mover gx and gy should change!
           mover.gx = mover.nextGX;
@@ -871,8 +886,8 @@
     const deerWalkSpeed = 6  * kphToTpTk; // all day
 
     const travelSpeedBySpeciesAndPose = {
-      'wolf': { 'walk': wolfTrotSpeed, 'run': wolfSprintSpeed, 'idle': 0},
-      'deer': { 'walk': deerWalkSpeed, 'run': deerSprintSpeed, 'idle': 0}
+      "wolf": { "walk": wolfTrotSpeed, "run": wolfSprintSpeed, "idle": 0, "death": 0},
+      "deer": { "walk": deerWalkSpeed, "run": deerSprintSpeed, "idle": 0, "death": 0}
     }
 
     function setCritterMoving(wolf, dir8, newPose = 'walk') {
@@ -932,6 +947,18 @@
       }
     }
 
+    function setCritterDeath(wolf) {
+      if (!wolf || wolf.species !== "deer") return alert("Invalid arg to setCritterDeath");
+
+      if (wolf.pose === "death") return;
+      wolf.velGX = 0;
+      wolf.velGY = 0;
+      wolf.nextGX = wolf.gx;
+      wolf.nextGY = wolf.gy;
+      wolf.pose = "death";
+      updateCritterFrame(wolf);
+    }
+
     function updateCritterAction(wolf) {
       if (wolf === wolves[0] && arrowsMoveWolf) return;
       wolf.redecideCd = 5 + Math.floor(Math.random() * 100 + Math.random() * 100);
@@ -977,6 +1004,7 @@
       return terrain === "rock";
     }
 
+    // returns a list of pairs of integers e.g. [[1,2], [3,6]]
     function findCollidingPairs(creatures) {
       // console.log(creatures.map(c => [c.gx, c.gy]));
 
