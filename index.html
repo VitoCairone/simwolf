@@ -333,12 +333,18 @@
       placeCritterSprite(wolf);
     }
 
+    // searchmeta makeCritter createCritter makeWolf createWolf makeWisp createWisp
     // in this and other Critter function, the parameter name used is wolf,
     // although it could be any critter
     function initCritter(wolf, species) {
-      if (!wolf || wolf.kind) return alert("Bad ref to initCritter");
+      if (!wolf) return alert("Falsy ref to initCritter");
+      if (wolf.kind) return alert("Already-kind ref to initCritter");
       wolf.kind = 'critter';
       wolf.species = species;
+
+      wolf.heldInfo = {};
+      wolf.holdInfoUntil = {};
+
       const el = document.createElement("div");
       el.classList.add(species);
       spriteLayer.appendChild(el);
@@ -661,30 +667,37 @@
     function updateAllCritters() {
       setPresentOthersIneffMethod();
 
-      allCritters.forEach(wolf => {
+      allCritters.forEach(wisp => {
+        Object.keys(wisp.heldInfo).forEach(key => {
+          if (g_tick >= wisp.holdInfoUntil[key]) {
+            delete wisp.heldInfo[key];
+            delete wisp.holdInfoUntil[key];
+          }
+        });
+
         // todo: combine this better with setPresentOthers() so that a wolf
         // which spots a deer or vice versa will respond on a predictable short delay
-        // e.g. a realistic reaction time of 120 ms (7 ticks) vidual, 140 ms (8 ticks) auditory
-        wolf.redecideCd--;
-        if (wolf.redecideCd <= 0) updateCritterAction(wolf);
+        // e.g. a realistic reaction time of 120 ms (7 ticks)
+        wisp.redecideCd--;
+        if (wisp.redecideCd <= 0) updateCritterAction(wisp);
 
-        wolf.animTimer++;
-        let holdTks = frameDataBySpeciesAndPose[wolf.species][wolf.pose].holdTks;
-        if (wolf.animTimer >= holdTks) updateCritterFrame(wolf);
+        wisp.animTimer++;
+        let holdTks = frameDataBySpeciesAndPose[wisp.species][wisp.pose].holdTks;
+        if (wisp.animTimer >= holdTks) updateCritterFrame(wisp);
 
-        if (wolf.velGX === 0 && wolf.velGY === 0) {
-          wolf.nextGX = wolf.gx;
-          wolf.nextGY = wolf.gy;
+        if (wisp.velGX === 0 && wisp.velGY === 0) {
+          wisp.nextGX = wisp.gx;
+          wisp.nextGY = wisp.gy;
           return;
         }
 
-        const nextGX = wolf.gx + wolf.velGX;
-        const nextGY = wolf.gy + wolf.velGY;
+        const nextGX = wisp.gx + wisp.velGX;
+        const nextGY = wisp.gy + wisp.velGY;
         if (nextGX >= 0.6 && nextGX < (gridWidthN - 0.6) && nextGY >= 0.6 && nextGY < (gridHeightN - 0.6)) {
-          wolf.nextGX = nextGX;
-          wolf.nextGY = nextGY;
+          wisp.nextGX = nextGX;
+          wisp.nextGY = nextGY;
         } else {
-          setCritterIdle(wolf);
+          setCritterIdle(wisp);
         }
       });
 
@@ -931,6 +944,11 @@
       return idx;
     }
 
+    function holdInfo(wisp, key, options, ticks) {
+      wisp.heldInfo[key] = ;
+      wolf.holdInfoUntil[key] = g_tick + ticks;
+    }
+
     function enactDecision(wolf, decision) {
       if (!decision) return alert("falsy decision to enactDecision");
       const [act, options] = decision;
@@ -940,6 +958,7 @@
           // console.log("wolf = ", wolf);
           const dir = getDir(...vecToObj(options.from, wolf));
           // console.log("Fleeing " + DIR_NAME[dir]);
+          holdInfo(wolf, "flee", options, rpMod(240));
           setCritterMoving(wolf, dir);
           return;
         default:
@@ -1071,9 +1090,14 @@
 
     const DIR_NAME = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]
 
+    // produces a random distribution in [0, 1) with a parabolic curve
     function randomPara() {
       const x = Math.random();
       return 4 * x * (1 - x);
+    }
+
+    function rpMod(x) {
+      return x * (0.8 + 0.4 * randomPara());
     }
 
     function getDir(x, y, defaultRV = 0) {
