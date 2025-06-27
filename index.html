@@ -319,38 +319,55 @@
     const nDeer = 10;
     const deer = Array.from({length: nDeer}, () => ({}));
     
-    function randomlyPlaceCritter(wolf) {
-      // used for initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
-      wolf.gx = boundVal(Math.floor(Math.random() * 50), 0.5, gridWidthN - 0.5);
-      wolf.gy = boundVal(Math.floor(Math.random() * 50), 0.5, gridHeightN - 0.5);
-      wolf.animTimer = 0;
-      wolf.redecideCd = 0; // Cd = Cooldown (ticks)
-      wolf.currentDirection = Math.floor(Math.random() * 4) * 2;
-      wolf.frame = 0;
-      setCritterIdle(wolf);
+    let worldShiftPX = 0;
+    let worldShiftPY = 0;
 
-      updateCritterFrame(wolf);
-      placeCritterSprite(wolf);
+    function randomlyPlaceCritter(wisp) {
+      // used for initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
+      wisp.gx = boundVal(initX + Math.floor(Math.random() * 50), 0.5, gridWidthN - 0.5);
+      wisp.gy = boundVal(initY + Math.floor(Math.random() * 50), 0.5, gridHeightN - 0.5);
+      wisp.animTimer = 0;
+      wisp.redecideCd = 0; // Cd = Cooldown (ticks)
+      wisp.currentDirection = Math.floor(Math.random() * 4) * 2;
+      wisp.frame = 0;
+      setCritterIdle(wisp);
+
+      updateCritterFrame(wisp);
+      placeCritterSprite(wisp);
     }
 
     // searchmeta makeCritter createCritter makeWolf createWolf makeWisp createWisp
-    // in this and other Critter function, the parameter name used is wolf,
-    // although it could be any critter
-    function initCritter(wolf, species) {
-      if (!wolf) return alert("Falsy ref to initCritter");
-      if (wolf.kind) return alert("Already-kind ref to initCritter");
-      wolf.kind = 'critter';
-      wolf.species = species;
+    function initCritter(wisp, species) {
+      if (!wisp) return alert("Falsy ref to initCritter");
+      if (wisp.kind) return alert("Already-kind ref to initCritter");
+      wisp.kind = 'critter';
+      wisp.species = species;
 
-      wolf.heldInfo = {};
-      wolf.holdInfoUntil = {};
+      wisp.speed = 0;
+      wisp.heldInfo = {};
+      wisp.holdInfoUntil = {};
 
       const el = document.createElement("div");
       el.classList.add(species);
       spriteLayer.appendChild(el);
-      wolf.element = el;
-      randomlyPlaceCritter(wolf);
+      wisp.element = el;
+      randomlyPlaceCritter(wisp);
     }
+
+    let viewportWidth = document.getElementById('field-wrapper').clientWidth;
+    let viewportHeight = document.getElementById('field-wrapper').clientHeight;
+
+    let initX = 0;
+    let initY = 0;
+    // rendering errors occur abruptly at x >= 1,677,740
+    const safeX = Math.min(gridWidthN, 1500000);
+    const safeY = Math.min(gridHeightN, 1500000);
+    for (let t = 0; t < 1000 && getTerrainAt(initX, initY) === "water"; t++) {
+      initX = Math.floor(Math.random() * safeX);
+      initY = Math.floor(Math.random() * safeY);
+    }
+    if (getTerrainAt(initX, initY) === "water") alert("No land found in map");
+    // centerCameraOnGXY(initX, initY);
 
     wolves.forEach(wolf => { initCritter(wolf, "wolf"); });
     deer.forEach(aDeer => { initCritter(aDeer, "deer"); });
@@ -359,10 +376,6 @@
     const pcWolf = wolves[0];
 
     forbidOverlapsOnStart();
-
-    // these are coordinates for the upper-left corner of the viewport
-    let worldShiftPX = 0;
-    let worldShiftPY = 0;
     const cameraSpeed = 50;
     const keysPressed = {};
 
@@ -379,9 +392,6 @@
       [ ir2, -ir2 ],
     ];
 
-    const viewportWidth = document.getElementById('field-wrapper').clientWidth;
-    const viewportHeight = document.getElementById('field-wrapper').clientHeight;
-
     const arrowKeyNames = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
     const arrowsToggle = document.getElementById('arrow-mode-toggle');
     const arrowsIcon = document.getElementById('arrow-mode-icon');
@@ -389,11 +399,13 @@
 
     let arrowsMoveWolf = false;
 
-    function setCameraToPCWolf() {
-      const [px, py] = isoProject(pcWolf.gx, pcWolf.gy);
+    function centerCameraOnGXY(gx, gy) {
+      const [px , py] = isoProject(gx, gy);
       worldShiftPX = px - viewportWidth / 2;
       worldShiftPY = py - viewportHeight / 2;
     }
+
+    function setCameraToPCWolf() { centerCameraOnGXY(pcWolf.gx, pcWolf.gy); }
 
     arrowsToggle.addEventListener('click', () => {
       arrowsMoveWolf = !arrowsMoveWolf;
@@ -445,23 +457,30 @@
       // ensure the same result for any point in the tile
       const [x, y] = [gx, gy].map(v => Math.floor(v));
 
-      // ignore base until rendering relative altitude
-      // const [rx, ry] = [x - gCX, y - gCY].map(v => v * 2.5 / gRad);
-      // const rL2 = rx * rx + ry * ry; // scaled L2
-      // const base = boundVal(jag(rL2) - 0.5, 0.25, 0.75) * 3000 + ry * 1000;
+      // For desmos.com/3d:
+      // 2*abs((x*x+y*y)-floor(x*x+y*y+0.5)) - 0.5
+      // for x,y in range [-1.25, 1.25]
+      const [rx, ry] = [x - gCX, y - gCY].map(v => v * 1.25 / gRad);
+      const baseAlt = jag(rx * rx + ry * ry) - 0.5 + (
+        jag(x / 103) + jag(y / 109) + jag ((x + y) / 127) + jag((x - y) / 199)
+      ) * 0.04;
+
+      if (baseAlt < 0.5) return "water"; // sea
+      if (baseAlt > 0.875) return "rock"; // mountain
 
       const sum = x + y;
       const dif = x - y;
-      const noise = jag(x / 19) + jag(y / 23) + jag(sum / 27) + jag(dif / 29); // => [0, 4]
-      let jitter = (jag(x / 31) + jag(y / 33) + jag(sum / 37) + jag(dif / 41)) * 0.3
-        + (jag(x / 43) + jag(y / 47) + jag(sum / 49) + jag(dif / 51)) * 0.2; // => [0, 2]
+      const fastNoise = jag(x / 19) + jag(y / 23) + jag(sum / 29) + jag(dif / 31); // => [0, 4]
+      const slowNoise = (jag(x / 37) + jag(y / 41) + jag(sum / 43) + jag(dif / 47)) * 0.3
+        + (jag(x / 53) + jag(y / 59) + jag(sum / 61) + jag(dif / 67)) * 0.2; // => [0, 2]
 
-      const waterRate = (noise + jitter) / 6;
-      if (waterRate < 0.25) return "water";
-      if (waterRate > 0.75) return "rock";
+      const unitVariant = (fastNoise + slowNoise) / 6;
+
+      if (unitVariant < 0.25) return "water";
+      if (unitVariant > 0.75) return "rock";
 
       const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
-      const pseudoRandom = hash - Math.floor(hash); // [0, 1)
+      // const pseudoRandom = hash - Math.floor(hash); // [0, 1)
 
       // if (pseudoRandom < Math.pow(1.25 - waterRate, 6)) return "bush";
 
@@ -469,8 +488,8 @@
       // const types = ["dirt", "grass", "bush"];
       // return types[Math.abs(typePseudorandInt) % types.length];
 
-      if (waterRate < 0.5) return "grass";
-      if (waterRate < 0.75) return "dirt";
+      if (unitVariant < 0.5) return "grass";
+      if (unitVariant < 0.75) return "dirt";
     }
 
     function getTileClassAt(x, y) {
@@ -495,6 +514,9 @@
       const iMax = Math.min(gridWidthN - 1, Math.floor(cornerGs[3][0]));
       const jMin = Math.max(0, Math.floor(cornerGs[1][1]));
       const jMax = Math.min(gridHeightN - 1 ,Math.floor(cornerGs[2][1]));
+
+      console.log(`Rendering grid range ${iMin}-${iMax}, ${jMin}-${jMax}`);
+      console.log(`pcWolf at ${pcWolf.gx},${pcWolf.gy}`);
 
       for (const key of renderedTiles.keys()) {
         const [i, j] = key.split('_').map(Number);
@@ -590,8 +612,8 @@
           if (canSee(a, b)) {
             // TODO: restore facing check; currently facing away while fleeing
             // causes deer to immediately lose sight of wolf and stop fleeing
-            if (true || isVisionFacing(a, b)) a.presentOthers.add(b);
-            if (true || isVisionFacing(b, a)) b.presentOthers.add(a);
+            if (isVisionFacing(a, b)) a.presentOthers.add(b);
+            if (isVisionFacing(b, a)) b.presentOthers.add(a);
           }
           // console.log("checking audition");
           if (canHear(a, b)) a.presentOthers.add(b);
@@ -669,7 +691,7 @@
 
       allCritters.forEach(wisp => {
         Object.keys(wisp.heldInfo).forEach(key => {
-          if (g_tick >= wisp.holdInfoUntil[key]) {
+          if (g_tick > wisp.holdInfoUntil[key]) {
             delete wisp.heldInfo[key];
             delete wisp.holdInfoUntil[key];
           }
@@ -685,14 +707,16 @@
         let holdTks = frameDataBySpeciesAndPose[wisp.species][wisp.pose].holdTks;
         if (wisp.animTimer >= holdTks) updateCritterFrame(wisp);
 
-        if (wisp.velGX === 0 && wisp.velGY === 0) {
+        if (wisp.speed === 0) {
           wisp.nextGX = wisp.gx;
           wisp.nextGY = wisp.gy;
           return;
         }
 
-        const nextGX = wisp.gx + wisp.velGX;
-        const nextGY = wisp.gy + wisp.velGY;
+        const moveVec = moveVecByDir[wisp.currentDirection];
+        const [velGX, velGY] = moveVec.map(v => v * wisp.speed);
+        const nextGX = wisp.gx + velGX;
+        const nextGY = wisp.gy + velGY;
         if (nextGX >= 0.6 && nextGX < (gridWidthN - 0.6) && nextGY >= 0.6 && nextGY < (gridHeightN - 0.6)) {
           wisp.nextGX = nextGX;
           wisp.nextGY = nextGY;
@@ -829,22 +853,11 @@
 
     function setCritterIdle(wolf) {
       if (wolf.pose === "idle") return;
-      wolf.velGX = 0;
-      wolf.velGY = 0;
+      wolf.speed = 0;
       wolf.nextGX = wolf.gx;
       wolf.nextGY = wolf.gy;
       wolf.pose = "idle";
       updateCritterFrame(wolf);
-    }
-
-    function getSpeed(a) {
-      if (!a || !a.hasOwnProperty('velGX')) return alert("Bad arg to getSpeed");
-      
-      // critters move only grid-aligned for now, so this is trivial
-      if (a.velGX === 0 || a.velGY === 0) return Math.abs(a.velGX + a.velGY);
-
-      // .sqrt() is a slow function; memoize speed when it stops being trivial
-      return Math.sqrt(a.velGX * a.velGX + a.velGY * a.velGY);
     }
 
     const wolfAudibleToDeerL2ByTerrainAndSpeed = {
@@ -876,7 +889,7 @@
       // movement is currently the only source of sound
       // for now we use one table based on moving wolf and listening deer
       // revise in future to account for actual origin and listener species
-      if (getSpeed(b) === 0) return false;
+      if (b.hasOwnProperty('speed') && b.speed === 0) return false;
 
       const terrain = getTerrainAt(...getOnTileXY(b));
       if (!wolfAudibleToDeerL2ByTerrainAndSpeed.hasOwnProperty(terrain))
@@ -912,8 +925,7 @@
       if ((!newPose || newPose === wolf.pose) && wolf.currentDirection === dir) return;
       wolf.currentDirection = dir;
       wolf.pose = newPose;
-      const speed = travelSpeedBySpeciesAndPose[wolf.species][wolf.pose];
-      [wolf.velGX, wolf.velGY] = moveVec.map(v => v * speed);
+      wolf.speed = travelSpeedBySpeciesAndPose[wolf.species][wolf.pose];
       updateCritterFrame(wolf);
     }
 
@@ -945,8 +957,8 @@
     }
 
     function holdInfo(wisp, key, options, ticks) {
-      wisp.heldInfo[key] = ;
-      wolf.holdInfoUntil[key] = g_tick + ticks;
+      wisp.heldInfo[key] = options;
+      wisp.holdInfoUntil[key] = g_tick + ticks;
     }
 
     function enactDecision(wolf, decision) {
@@ -970,8 +982,7 @@
       if (!wolf || wolf.species !== "deer") return alert("Invalid arg to setCritterDeath");
 
       if (wolf.pose === "death") return;
-      wolf.velGX = 0;
-      wolf.velGY = 0;
+      wolf.speed = 0;
       wolf.nextGX = wolf.gx;
       wolf.nextGY = wolf.gy;
       wolf.pose = "death";
@@ -1114,6 +1125,12 @@
 
     document.addEventListener("keydown", (e) => { keysPressed[e.key] = true; });
     document.addEventListener("keyup", (e) => { keysPressed[e.key] = false; });
+
+    window.addEventListener('resize', () => {
+      viewportWidth = document.getElementById('field-wrapper').clientWidth;
+      viewportHeight = document.getElementById('field-wrapper').clientHeight;
+      updateCamera();
+    });
 
     window.onload = function () {
       renderVisibleTiles();
