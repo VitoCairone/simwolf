@@ -477,10 +477,9 @@
       if (unitVariant < 0.25) return "water";
       if (unitVariant > 0.75) return "rock";
 
-      const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
-      const pseudoRandom = hash - Math.floor(hash); // [0, 1)
-
-      if (pseudoRandom < 0.75 * Math.pow(1 - (unitVariant * 2 - 0.5), 3)) return "bush";
+      // const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
+      // const pseudoRandom = hash - Math.floor(hash); // [0, 1)
+      // if (pseudoRandom < 0.75 * Math.pow(1 - (unitVariant * 2 - 0.5), 3)) return "bush";
 
       // const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
       // const types = ["dirt", "grass", "bush"];
@@ -970,25 +969,25 @@
       return ["flee", { from: predators } ];
     }
 
-    function getNearestIdx(obj, choices) {
-      if (!choices || !choices.length) return -1;
-      let idx = -1;
-      let minDistL2 = Infinity;
-      choices.forEach((c, i) => {
-        const distL2 = distBetweenL2(obj, c);
-        if (distL2 < minDistL2) {
-          idx = i;
-          minDistL2 = distL2;
-        }
-      });
-      return idx;
-    }
+    // function getNearestIdx(obj, choices) {
+    //   if (!choices || !choices.length) return -1;
+    //   let idx = -1;
+    //   let minDistL2 = Infinity;
+    //   choices.forEach((c, i) => {
+    //     const distL2 = distBetweenL2(obj, c);
+    //     if (distL2 < minDistL2) {
+    //       idx = i;
+    //       minDistL2 = distL2;
+    //     }
+    //   });
+    //   return idx;
+    // }
 
     function holdInfo(a, key, options, ticks) {
       if (key === "lostSignals") {
         // TODO: provide some per-signal expiry mechanism so the restack effect
         // cannot refresh old data forever
-        const oldSignals = a.heldInfo["lostSignals"].signals || new Set();
+        const oldSignals = a.heldInfo?.lostSignals?.signals || new Set();
         a.heldInfo["lostSignals"] = options.signals.union(oldSignals);
       } else {
         // default combine = override
@@ -998,16 +997,20 @@
       a.holdInfoUntil[key] = g_tick + ticks;
     }
 
+
     function enactDecision(a, decision) {
       if (!decision) return alert("falsy decision to enactDecision");
       const [act, options] = decision;
       switch (act) {
         case "flee":
           let dirSum = 0;
+          let wtSum = 0;
           options.from.forEach(other => {
-            dirSum += getDir(...vecToObj(other, a));
+            const wt = 1 / Math.max(distBetweenL2(a, other), 1);
+            dirSum += wt * getDir(...vecToObj(other, a));
+            wtSum += wt;
           });
-          const dir = Math.floor(dirSum / options.from.length);
+          const dir = Math.floor(dirSum / wtSum);
           setCritterMoving(a, dir);
           return;
         default:
