@@ -954,7 +954,7 @@
 
     function getOthers(a, cond) {
       const present = a.presentOthers || new Set();
-      return present.union(a.heldInfo.lostSignals || new Set());
+      return present.union(a.heldInfo?.lostSignals?.signals || new Set());
     }
 
     // makeDecision should not write any world or body state
@@ -984,9 +984,18 @@
       return idx;
     }
 
-    function holdInfo(wisp, key, options, ticks) {
-      wisp.heldInfo[key] = options;
-      wisp.holdInfoUntil[key] = g_tick + ticks;
+    function holdInfo(a, key, options, ticks) {
+      if (key === "lostSignals") {
+        // TODO: provide some per-signal expiry mechanism so the restack effect
+        // cannot refresh old data forever
+        const oldSignals = a.heldInfo["lostSignals"].signals || new Set();
+        a.heldInfo["lostSignals"] = options.signals.union(oldSignals);
+      } else {
+        // default combine = override
+        a.heldInfo[key] = options;
+      }
+
+      a.holdInfoUntil[key] = g_tick + ticks;
     }
 
     function enactDecision(a, decision) {
