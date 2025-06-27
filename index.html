@@ -605,8 +605,6 @@
           const b = allCritters[iB];
           // console.log("checking vision");
           if (canSee(a, b)) {
-            // TODO: restore facing check; currently facing away while fleeing
-            // causes deer to immediately lose sight of wolf and stop fleeing
             if (isVisionFacing(a, b)) a.presentOthers.add(b);
             if (isVisionFacing(b, a)) b.presentOthers.add(a);
           }
@@ -614,18 +612,41 @@
           if (canHear(a, b)) a.presentOthers.add(b);
           if (canHear(b, a)) b.presentOthers.add(a);
         }
-
-        // react in realistic time to spotting or losing track of something
-        // This is still an approximation prone to hyperspeed errors;
-        // a preferred implementation may by to hold this state in a buffer of 7,
-        // and have the decisions enacted this tick be based on the world 7 ticks ago.
-        // It would be best if we aren't required to hold a full set of states,
-        // which means memory requirement would have to increase with temporal resolution.
-
-        if (!areSetsEqual(a.priorOthers, a.presentOthers) && a.redecideCd > 7)
-          a.redecideCd = 7;
       }
     }
+
+    function signalSnapshots(others) {
+      // produces snapshots of critters so that the gx, gy of these objects
+      // will not continue to update
+
+      // TODO: record actual signal data only, expect and handle nodata
+      if (!others || !others.size) return [];
+      return [...others].map(o => {
+        return {
+          kind: o.kind,
+          species: o.species,
+          gx: o.gx,
+          gy: o.gy,
+          speed: o.speed,
+          currentDirection: o.currentDirection
+        };
+      });
+    }
+
+    allCritters.forEach(a => {
+      if (areSetsEqual(a.priorOthers, a.presentOthers)) return;
+
+      const newSignals = a.presentOthers.difference(a.priorOthers);
+      const lostSignals = a.priorOthers.difference(a.presentOthers);
+
+      if (lostSignals.size) {
+        holdInfo(a, "lostSignals", {signals: signalSnapshots(lostSignals) }, 360)
+      }
+
+      if (newSignals.size) {
+        if (a.redecideCd < 7) a.redecideCd = 7;
+      }
+    });
 
     function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
       // For simplicity we are tracing from tile center to tile center,
@@ -931,23 +952,22 @@
       }
     }
 
+    function getOthers(a, cond) {
+      const present = a.presentOthers || new Set();
+      return present.union(a.heldInfo.lostSignals || new Set());
+    }
+
     // makeDecision should not write any world or body state
     function makeDecision(a) {
+      // currently only decision making is deer fleeing
       if (a.species !== "deer") return null;
 
-      return "flee" in a.heldInfo ? ["flee", { keepOn: true } ] : null;
-
-      // TODO: rearrange to check present first so that deer will
-      // flee new approach / nearest; at current this would cause deer to
-      // stutter in place between two opposed threats
-
-      const others = [...a.presentOthers] || [];
-      const predators = others.filter(other => other.species === 'wolf');
+      const predators = [...getOthers(a)].filter(o => o.species !== 'deer');
       
       if (!predators.length) return null;
 
-      const maxThreatPredIdx = getNearestIdx(a, predators);
-      return ["flee", {from: predators[maxThreatPredIdx]}];
+      // const maxThreatPredIdx = getNearestIdx(a, predators);
+      return ["flee", { from: predators } ];
     }
 
     function getNearestIdx(obj, choices) {
@@ -969,15 +989,17 @@
       wisp.holdInfoUntil[key] = g_tick + ticks;
     }
 
-    function enactDecision(wolf, decision) {
+    function enactDecision(a, decision) {
       if (!decision) return alert("falsy decision to enactDecision");
       const [act, options] = decision;
-      if (options.keepOn) return; // already doing act
       switch (act) {
         case "flee":
-          const dir = getDir(...vecToObj(options.from, wolf));
-          holdInfo(wolf, "flee", options, rpMod(240));
-          setCritterMoving(wolf, dir);
+          let dirSum = 0;
+          options.from.forEach(other => {
+            dirSum += getDir(...vecToObj(other, a));
+          });
+          const dir = Math.floor(dirSum / options.from.length);
+          setCritterMoving(a, dir);
           return;
         default:
           return alert("unknown decision to enactDecision");
