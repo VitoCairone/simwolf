@@ -359,7 +359,8 @@
 
     let initX = 0;
     let initY = 0;
-    // rendering errors occur abruptly at x >= 1,677,740
+    // rendering errors occur abruptly at x == 1677740
+    // unknown why at this time
     const safeX = Math.min(gridWidthN, 1500000);
     const safeY = Math.min(gridHeightN, 1500000);
     for (let t = 0; t < 1000 && getTerrainAt(initX, initY) === "water"; t++) {
@@ -477,9 +478,9 @@
       if (unitVariant > 0.75) return "rock";
 
       const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
-      // const pseudoRandom = hash - Math.floor(hash); // [0, 1)
+      const pseudoRandom = hash - Math.floor(hash); // [0, 1)
 
-      // if (pseudoRandom < Math.pow(1.25 - waterRate, 6)) return "bush";
+      if (pseudoRandom < 0.75 * Math.pow(1 - (unitVariant * 2 - 0.5), 3)) return "bush";
 
       // const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
       // const types = ["dirt", "grass", "bush"];
@@ -511,9 +512,6 @@
       const iMax = Math.min(gridWidthN - 1, Math.floor(cornerGs[3][0]));
       const jMin = Math.max(0, Math.floor(cornerGs[1][1]));
       const jMax = Math.min(gridHeightN - 1 ,Math.floor(cornerGs[2][1]));
-
-      console.log(`Rendering grid range ${iMin}-${iMax}, ${jMin}-${jMax}`);
-      console.log(`pcWolf at ${pcWolf.gx},${pcWolf.gy}`);
 
       for (const key of renderedTiles.keys()) {
         const [i, j] = key.split('_').map(Number);
@@ -916,26 +914,38 @@
       // NOTE: sprites currently exist only for 4 directions, so...
       const dir = (dir8 % 2) ? dir8 - 1 : dir8;
 
-      const moveVec = moveVecByDir[dir];
-
       if ((!newPose || newPose === wolf.pose) && wolf.currentDirection === dir) return;
       wolf.currentDirection = dir;
-      wolf.pose = newPose;
+      if (newPose) wolf.pose = newPose;
+      else if (wolf.pose === "idle") wolf.pose = "walk";
       wolf.speed = travelSpeedBySpeciesAndPose[wolf.species][wolf.pose];
       updateCritterFrame(wolf);
+
+      // prevent critters from bumping directly into walls
+      // TODO: will need expansion for 8-way movement
+      // also could be improved to consider critter size
+      const moveVec = moveVecByDir[dir];
+      const [nextX, nextY] = [wolf.gx + moveVec[0], wolf.gy + moveVec[1]];
+      if (isImpassable(getTerrainAt(nextX, nextY))) {
+        wolf.redecideCd = Math.min(wolf.redecideCd, 5);
+      }
     }
 
     // makeDecision should not write any world or body state
     function makeDecision(a) {
       if (a.species !== "deer") return null;
 
-      if ("flee" in a.heldInfo) return ["flee", { keepOn: true } ];
+      return "flee" in a.heldInfo ? ["flee", { keepOn: true } ] : null;
+
+      // TODO: rearrange to check present first so that deer will
+      // flee new approach / nearest; at current this would cause deer to
+      // stutter in place between two opposed threats
 
       const others = [...a.presentOthers] || [];
       const predators = others.filter(other => other.species === 'wolf');
+      
       if (!predators.length) return null;
 
-      // console.log(`Returning flee decision on tick ${g_tick}`);
       const maxThreatPredIdx = getNearestIdx(a, predators);
       return ["flee", {from: predators[maxThreatPredIdx]}];
     }
@@ -987,13 +997,13 @@
 
     function updateCritterAction(wolf) {
       if (wolf === wolves[0] && arrowsMoveWolf) return;
-      wolf.redecideCd = 5 + Math.floor(Math.random() * 100 + Math.random() * 100);
+      wolf.redecideCd = 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
 
       const decision = makeDecision(wolf);
       if (decision) { enactDecision(wolf, decision); return; }
 
       // no decision, update action at random
-      if (Math.random() < 0.5) { setCritterIdle(wolf); return; }
+      if (Math.random() < 0.1) { setCritterIdle(wolf); return; }
 
       const dir = Math.floor(Math.random() * 4) * 2;
       setCritterMoving(wolf, dir);
