@@ -367,7 +367,6 @@
       initY = Math.floor(Math.random() * safeY);
     }
     if (getTerrainAt(initX, initY) === "water") alert("No land found in map");
-    // centerCameraOnGXY(initX, initY);
 
     wolves.forEach(wolf => { initCritter(wolf, "wolf"); });
     deer.forEach(aDeer => { initCritter(aDeer, "deer"); });
@@ -403,6 +402,7 @@
       const [px , py] = isoProject(gx, gy);
       worldShiftPX = px - viewportWidth / 2;
       worldShiftPY = py - viewportHeight / 2;
+      updateCamera();
     }
 
     function setCameraToPCWolf() { centerCameraOnGXY(pcWolf.gx, pcWolf.gy); }
@@ -410,10 +410,7 @@
     arrowsToggle.addEventListener('click', () => {
       arrowsMoveWolf = !arrowsMoveWolf;
       arrowsIcon.innerHTML = arrowsMoveWolf ? wolfIconSVG : cameraIconSVG;
-      if (arrowsMoveWolf) {
-        setCameraToPCWolf();
-        updateCamera();
-      }
+      if (arrowsMoveWolf) setCameraToPCWolf();
     });
 
     function updateZoomButtons() {
@@ -763,7 +760,6 @@
           mover.gy = mover.nextGY;
           if (mover === pcWolf && arrowsMoveWolf) {
             setCameraToPCWolf();
-            updateCamera();
           }
           placeCritterSprite(mover);
         }
@@ -933,6 +929,8 @@
     function makeDecision(a) {
       if (a.species !== "deer") return null;
 
+      if ("flee" in a.heldInfo) return ["flee", { keepOn: true } ];
+
       const others = [...a.presentOthers] || [];
       const predators = others.filter(other => other.species === 'wolf');
       if (!predators.length) return null;
@@ -964,12 +962,10 @@
     function enactDecision(wolf, decision) {
       if (!decision) return alert("falsy decision to enactDecision");
       const [act, options] = decision;
+      if (options.keepOn) return; // already doing act
       switch (act) {
         case "flee":
-          // console.log("options.from = ", options.from);
-          // console.log("wolf = ", wolf);
           const dir = getDir(...vecToObj(options.from, wolf));
-          // console.log("Fleeing " + DIR_NAME[dir]);
           holdInfo(wolf, "flee", options, rpMod(240));
           setCritterMoving(wolf, dir);
           return;
@@ -994,9 +990,7 @@
       wolf.redecideCd = 5 + Math.floor(Math.random() * 100 + Math.random() * 100);
 
       const decision = makeDecision(wolf);
-      if (decision) { enactDecision(wolf, decision); return; } else {
-        if (wolf.species === "deer") console.log("Deer is unafraid");
-      }
+      if (decision) { enactDecision(wolf, decision); return; }
 
       // no decision, update action at random
       if (Math.random() < 0.5) { setCritterIdle(wolf); return; }
@@ -1133,7 +1127,7 @@
     });
 
     window.onload = function () {
-      renderVisibleTiles();
+      setCameraToPCWolf();
       addCursorTracker();
       gameLoop();
     };
