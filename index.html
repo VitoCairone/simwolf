@@ -1003,16 +1003,22 @@
       const [act, options] = decision;
       switch (act) {
         case "flee":
-          let dirSum = 0;
-          let wtSum = 0;
-          options.from.forEach(other => {
-            const wt = 1 / Math.max(distBetweenL2(a, other), 1);
-            dirSum += wt * getDir(...vecToObj(other, a));
-            wtSum += wt;
+          if (options.from.length === 1) {
+            setCritterMoving(a, getDir(...vecToObj(options.from[0], a)));
+            return;
+          }
+
+          let [fleeX, fleeY] = [0, 0];
+          options.from.forEach(b => {
+            const fleeVec = vecToObj(b, a);
+            const wt = 1 / Math.max(distBetweenL2(a, b), 1);
+            fleeX += fleeVec[0] * wt;
+            fleeY += fleeVec[1] * wt;
           });
-          const dir = Math.floor(dirSum / wtSum);
-          setCritterMoving(a, dir);
+          console.log("Calculated fX,fY = " + fleeX + " , " + fleeY);
+          setCritterMoving(a, getDir(fleeX, fleeY));
           return;
+        
         default:
           return alert("unknown decision to enactDecision");
       }
