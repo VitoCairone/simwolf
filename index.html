@@ -313,10 +313,10 @@
     }
 
     // Wolf setup
-    const nWolves = 10;
+    const nWolves = 1;
     const wolves = Array.from({length: nWolves}, () => ({}));
 
-    const nDeer = 10;
+    const nDeer = 1;
     const deer = Array.from({length: nDeer}, () => ({}));
     
     let worldShiftPX = 0;
@@ -639,6 +639,7 @@
       const lostSignals = a.priorOthers.difference(a.presentOthers);
 
       if (lostSignals.size) {
+        console.log(`Holding lostSignal for ${a.species}`)
         holdInfo(a, "lostSignals", {signals: signalSnapshots(lostSignals) }, 360)
       }
 
@@ -1003,6 +1004,10 @@
       const [act, options] = decision;
       switch (act) {
         case "flee":
+          // while fleeing a critter should make frequent redecisions
+          // so that it always flees from the closest predator
+          a.redecideCd = Math.min(a.redecideCd, 15);
+
           if (options.from.length === 1) {
             setCritterMoving(a, getDir(...vecToObj(options.from[0], a)));
             return;
@@ -1015,7 +1020,7 @@
             fleeX += fleeVec[0] * wt;
             fleeY += fleeVec[1] * wt;
           });
-          console.log("Calculated fX,fY = " + fleeX + " , " + fleeY);
+          // console.log("Calculated fX,fY = " + fleeX + " , " + fleeY);
           setCritterMoving(a, getDir(fleeX, fleeY));
           return;
         
@@ -1038,9 +1043,21 @@
     function updateCritterAction(wolf) {
       if (wolf === wolves[0] && arrowsMoveWolf) return;
       wolf.redecideCd = 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
+      // note this is the default time, decisions may override
 
       const decision = makeDecision(wolf);
-      if (decision) { enactDecision(wolf, decision); return; }
+      if (decision) { 
+        console.log(`Enacting ${decision[0]} for ${wolf.species}`)
+        enactDecision(wolf, decision); 
+        console.log("flee-er redecideCd = " + wolf.redecideCd);
+        return;
+      }
+
+      console.log(`${wolf.species} default decide for ${wolf.redecideCd}`);
+      if (wolf.species === "deer") {
+        console.log("others:")
+        console.log([...getOthers(wolf)])
+      }
 
       // no decision, update action at random
       if (Math.random() < 0.1) { setCritterIdle(wolf); return; }
@@ -1122,16 +1139,16 @@
       return collisions;
     }
 
-    function classedCollisions(masterList, collidePairs) {
-      if (!masterList || !collidePairs) return alert("invalid args to classedCollisions");
-      return collidePairs.map(pair => {
-        if (pair[0] < 0) return [pair[0], pair[1], "imps"];
-        const [m1, m2] = pair.map(idx => masterList[idx]);
-        if (m1.species === m2.species) return [pair[0], pair[1], "bump"]
-        // order attacks with target first
-        return m1.species === "wolf" ? [pair[0], pair[1], "atck"] : [pair[1], pair[0], "atck"]
-      });
-    }
+    // function classedCollisions(masterList, collidePairs) {
+    //   if (!masterList || !collidePairs) return alert("invalid args to classedCollisions");
+    //   return collidePairs.map(pair => {
+    //     if (pair[0] < 0) return [pair[0], pair[1], "imps"];
+    //     const [m1, m2] = pair.map(idx => masterList[idx]);
+    //     if (m1.species === m2.species) return [pair[0], pair[1], "bump"]
+    //     // order attacks with target first
+    //     return m1.species === "wolf" ? [pair[0], pair[1], "atck"] : [pair[1], pair[0], "atck"]
+    //   });
+    // }
 
 
     const DIR_E  = 0;
