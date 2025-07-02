@@ -578,6 +578,8 @@
     }
 
     function isVisionFacing(a, b) {
+      // TODO: check and fix this
+      return true;
       const dirTo = getDir(...vecToObj(a, b));
       const dirDiff = Math.abs(dirTo - a.currentDirection);
       return dirDiff <= 1 || (a.species === "deer" && dirDiff === 2);
@@ -614,39 +616,23 @@
       }
     }
 
-    function signalSnapshots(others) {
-      // produces snapshots of critters so that the gx, gy of these objects
-      // will not continue to update
+    // function signalSnapshots(others) {
+    //   // produces snapshots of critters so that the gx, gy of these objects
+    //   // will not continue to update
 
-      // TODO: record actual signal data only, expect and handle nodata
-      if (!others || !others.size) return [];
-      return [...others].map(o => {
-        return {
-          kind: o.kind,
-          species: o.species,
-          gx: o.gx,
-          gy: o.gy,
-          speed: o.speed,
-          currentDirection: o.currentDirection
-        };
-      });
-    }
-
-    allCritters.forEach(a => {
-      if (areSetsEqual(a.priorOthers, a.presentOthers)) return;
-
-      const newSignals = a.presentOthers.difference(a.priorOthers);
-      const lostSignals = a.priorOthers.difference(a.presentOthers);
-
-      if (lostSignals.size) {
-        console.log(`Holding lostSignal for ${a.species}`)
-        holdInfo(a, "lostSignals", {signals: signalSnapshots(lostSignals) }, 360)
-      }
-
-      if (newSignals.size) {
-        if (a.redecideCd < 7) a.redecideCd = 7;
-      }
-    });
+    //   // TODO: record actual signal data only, expect and handle nodata
+    //   if (!others || !others.size) return [];
+    //   return [...others].map(o => {
+    //     return {
+    //       kind: o.kind,
+    //       species: o.species,
+    //       gx: o.gx,
+    //       gy: o.gy,
+    //       speed: o.speed,
+    //       currentDirection: o.currentDirection
+    //     };
+    //   });
+    // }
 
     function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
       // For simplicity we are tracing from tile center to tile center,
@@ -702,42 +688,62 @@
       return fullTrace ? shifts.map(s => shiftToGrid(s)) : shiftToGrid([i, j]);
     }
 
+    function updateSinals(a) {
+      if (areSetsEqual(a.priorOthers, a.presentOthers)) return;
+
+      const newSignals = a.presentOthers.difference(a.priorOthers);
+      const lostSignals = a.priorOthers.difference(a.presentOthers);
+
+      if (lostSignals.size) {
+        console.log(`${a.species} lost signal`);
+        holdInfo(a, "lostSignals", {signals: lostSignals }, 360)
+      }
+
+      if (newSignals.size) {
+        console.log(`${a.species} got new signal`);
+        if (a.redecideCd < 7) a.redecideCd = 7;
+      }
+    }
+
     function updateAllCritters() {
       setPresentOthersIneffMethod();
 
-      allCritters.forEach(wisp => {
-        Object.keys(wisp.heldInfo).forEach(key => {
-          if (g_tick > wisp.holdInfoUntil[key]) {
-            delete wisp.heldInfo[key];
-            delete wisp.holdInfoUntil[key];
+      allCritters.forEach(a => {
+        Object.keys(a.heldInfo).forEach(key => {
+          if (g_tick > a.holdInfoUntil[key]) {
+            console.log(`Deleted ${key} from ${a.species}'s heldInfo`);
+            delete a.heldInfo[key];
+            delete a.holdInfoUntil[key];
           }
-        });
+        })
+      });
 
+      allCritters.forEach(a => {
         // todo: combine this better with setPresentOthers() so that a wolf
         // which spots a deer or vice versa will respond on a predictable short delay
         // e.g. a realistic reaction time of 120 ms (7 ticks)
-        wisp.redecideCd--;
-        if (wisp.redecideCd <= 0) updateCritterAction(wisp);
+        a.redecideCd--;
+        if (a.redecideCd <= 0) updateCritterAction(a);
 
-        wisp.animTimer++;
-        let holdTks = frameDataBySpeciesAndPose[wisp.species][wisp.pose].holdTks;
-        if (wisp.animTimer >= holdTks) updateCritterFrame(wisp);
+        a.animTimer++;
+        let holdTks = frameDataBySpeciesAndPose[a.species][a.pose].holdTks;
+        if (a.animTimer >= holdTks) updateCritterFrame(a);
 
-        if (wisp.speed === 0) {
-          wisp.nextGX = wisp.gx;
-          wisp.nextGY = wisp.gy;
+        if (a.speed === 0) {
+          a.nextGX = a.gx;
+          a.nextGY = a.gy;
           return;
         }
 
-        const moveVec = moveVecByDir[wisp.currentDirection];
-        const [velGX, velGY] = moveVec.map(v => v * wisp.speed);
-        const nextGX = wisp.gx + velGX;
-        const nextGY = wisp.gy + velGY;
+        const moveVec = moveVecByDir[a.currentDirection];
+        const [velGX, velGY] = moveVec.map(v => v * a.speed);
+        const nextGX = a.gx + velGX;
+        const nextGY = a.gy + velGY;
         if (nextGX >= 0.6 && nextGX < (gridWidthN - 0.6) && nextGY >= 0.6 && nextGY < (gridHeightN - 0.6)) {
-          wisp.nextGX = nextGX;
-          wisp.nextGY = nextGY;
+          a.nextGX = nextGX;
+          a.nextGY = nextGY;
         } else {
-          setCritterIdle(wisp);
+          setCritterIdle(a);
         }
       });
 
@@ -963,6 +969,7 @@
       if (a.species !== "deer") return null;
 
       const predators = [...getOthers(a)].filter(o => o.species !== 'deer');
+      console.log("predators: " + predators.length);
       
       if (!predators.length) return null;
 
