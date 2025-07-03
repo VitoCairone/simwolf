@@ -16,4 +16,6 @@ Wed Jul 2
     
 Thu Jun 3
     Task: Fix flee directioning in general
-        ~10:35 - 
+        ~10:35 - 11:03 (27m)
+            * Fixed key semicardinal math error in getDir
+            * Testing

@@ -316,10 +316,10 @@
     }
 
     // Wolf setup
-    const nWolves = 1;
+    const nWolves = 10;
     const wolves = Array.from({length: nWolves}, () => ({}));
 
-    const nDeer = 1;
+    const nDeer = 10;
     const deer = Array.from({length: nDeer}, () => ({}));
     
     let worldShiftPX = 0;
@@ -946,8 +946,7 @@
       updateCritterFrame(a);
 
       // prevent critters from bumping directly into walls
-      // TODO: improve detection for corner or edge-approach paths
-      // also could be improved to consider critter size
+      // TODO: improve blocking for on-edge or to-corner motion
       const moveVec = moveVecByDir[dir];
       const [nextX, nextY] = [a.gx + moveVec[0], a.gy + moveVec[1]];
       if (isImpassable(getTerrainAt(nextX, nextY))) {
@@ -965,13 +964,8 @@
       // currently only decision making is deer fleeing
       if (a.species !== "deer") return null;
 
-      // const predators = [...getOthers(a)].filter(o => o.species !== 'deer');
-      // DEBUG
-      const predators = [pcWolf];
-      
+      const predators = [...getOthers(a)].filter(o => o.species !== 'deer');
       if (!predators.length) return null;
-
-      // const maxThreatPredIdx = getNearestIdx(a, predators);
       return ["flee", { from: predators } ];
     }
 
@@ -1011,15 +1005,13 @@
         case "flee":
           // while fleeing a critter should make frequent redecisions
           // so that it always flees from the closest predator
-          a.redecideCd = Math.min(a.redecideCd, 5);
+          a.redecideCd = Math.min(a.redecideCd, 10);
 
           if (options.from.length === 1) {
             const dir = getDir(...vecToObj(options.from[0], a));
             setCritterMoving(a, dir);
             return;
           }
-
-          alert("debug-1026");
 
           let [fleeX, fleeY] = [0, 0];
           options.from.forEach(b => {
@@ -1036,15 +1028,15 @@
       }
     }
 
-    function setCritterDeath(wolf) {
-      if (!wolf || wolf.species !== "deer") return alert("Invalid arg to setCritterDeath");
+    function setCritterDeath(q) {
+      if (!q || q.species !== "deer") return alert("Invalid arg to setCritterDeath");
 
-      if (wolf.pose === "death") return;
-      wolf.speed = 0;
-      wolf.nextGX = wolf.gx;
-      wolf.nextGY = wolf.gy;
-      wolf.pose = "death";
-      updateCritterFrame(wolf);
+      if (q.pose === "death") return;
+      q.speed = 0;
+      q.nextGX = q.gx;
+      q.nextGY = q.gy;
+      q.pose = "death";
+      updateCritterFrame(q);
     }
 
     function updateCritterAction(wolf) {
