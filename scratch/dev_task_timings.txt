@@ -11,4 +11,9 @@ Tue Jul 1
         
 Wed Jul 2
   Task: Fix redecisioning for fleeing
-    11:56 - 
+    11:56 - 12:04 (25m):
+        * Refactor control flow in updateAllCritters
+    
+Thu Jun 3
+    Task: Fix flee directioning in general
+        ~10:35 - 

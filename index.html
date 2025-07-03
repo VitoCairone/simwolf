@@ -275,7 +275,10 @@
     }
 
     // TODO: rearrange sprite rows to match DIR_NAME order
-    function spriteRow(wolf) { return (Math.floor(wolf.currentDirection / 2) + 1) % 4; }
+    function spriteRow(wolf) {
+      // TODO: rearrange sprite rows for simpler formula floor(dir/2)
+      return (Math.floor(wolf.currentDirection / 2) + 1) % 4;
+    }
 
     function updateCritterFrame(wolf) {
       wolf.animTimer = 0;
@@ -602,14 +605,11 @@
       for (var iA = 0; iA < allCritters.length; iA++) {
         const a = allCritters[iA];
         for (var iB = iA + 1; iB < allCritters.length; iB++) {
-          // console.log(`Tick ${g_tick} ${iA} vs ${iB}`);
           const b = allCritters[iB];
-          // console.log("checking vision");
           if (canSee(a, b)) {
             if (isVisionFacing(a, b)) a.presentOthers.add(b);
             if (isVisionFacing(b, a)) b.presentOthers.add(a);
           }
-          // console.log("checking audition");
           if (canHear(a, b)) a.presentOthers.add(b);
           if (canHear(b, a)) b.presentOthers.add(a);
         }
@@ -937,28 +937,25 @@
       "deer": { "walk": deerWalkSpeed, "run": deerSprintSpeed, "idle": 0, "death": 0}
     }
 
-    function setCritterMoving(wolf, dir8, newPose = 'walk') {
-      // NOTE: sprites currently exist only for 4 directions, so...
-      const dir = (dir8 % 2) ? dir8 - 1 : dir8;
-
-      if ((!newPose || newPose === wolf.pose) && wolf.currentDirection === dir) return;
-      wolf.currentDirection = dir;
-      if (newPose) wolf.pose = newPose;
-      else if (wolf.pose === "idle") wolf.pose = "walk";
-      wolf.speed = travelSpeedBySpeciesAndPose[wolf.species][wolf.pose];
-      updateCritterFrame(wolf);
+    function setCritterMoving(a, dir, newPose = 'walk') {
+      if ((!newPose || newPose === a.pose) && a.currentDirection === dir) return;
+      a.currentDirection = dir;
+      if (newPose) a.pose = newPose;
+      else if (a.pose === "idle") a.pose = "walk";
+      a.speed = travelSpeedBySpeciesAndPose[a.species][a.pose];
+      updateCritterFrame(a);
 
       // prevent critters from bumping directly into walls
-      // TODO: will need expansion for 8-way movement
+      // TODO: improve detection for corner or edge-approach paths
       // also could be improved to consider critter size
       const moveVec = moveVecByDir[dir];
-      const [nextX, nextY] = [wolf.gx + moveVec[0], wolf.gy + moveVec[1]];
+      const [nextX, nextY] = [a.gx + moveVec[0], a.gy + moveVec[1]];
       if (isImpassable(getTerrainAt(nextX, nextY))) {
-        wolf.redecideCd = Math.min(wolf.redecideCd, 5);
+        a.redecideCd = Math.min(a.redecideCd, 5);
       }
     }
 
-    function getOthers(a, cond) {
+    function getOthers(a) {
       const present = a.presentOthers || new Set();
       return present.union(a.heldInfo?.lostSignals?.signals || new Set());
     }
@@ -968,8 +965,9 @@
       // currently only decision making is deer fleeing
       if (a.species !== "deer") return null;
 
-      const predators = [...getOthers(a)].filter(o => o.species !== 'deer');
-      console.log("predators: " + predators.length);
+      // const predators = [...getOthers(a)].filter(o => o.species !== 'deer');
+      // DEBUG
+      const predators = [pcWolf];
       
       if (!predators.length) return null;
 
@@ -1013,12 +1011,15 @@
         case "flee":
           // while fleeing a critter should make frequent redecisions
           // so that it always flees from the closest predator
-          a.redecideCd = Math.min(a.redecideCd, 15);
+          a.redecideCd = Math.min(a.redecideCd, 5);
 
           if (options.from.length === 1) {
-            setCritterMoving(a, getDir(...vecToObj(options.from[0], a)));
+            const dir = getDir(...vecToObj(options.from[0], a));
+            setCritterMoving(a, dir);
             return;
           }
+
+          alert("debug-1026");
 
           let [fleeX, fleeY] = [0, 0];
           options.from.forEach(b => {
@@ -1027,7 +1028,6 @@
             fleeX += fleeVec[0] * wt;
             fleeY += fleeVec[1] * wt;
           });
-          // console.log("Calculated fX,fY = " + fleeX + " , " + fleeY);
           setCritterMoving(a, getDir(fleeX, fleeY));
           return;
         
@@ -1054,17 +1054,14 @@
 
       const decision = makeDecision(wolf);
       if (decision) { 
-        console.log(`Enacting ${decision[0]} for ${wolf.species}`)
         enactDecision(wolf, decision); 
-        console.log("flee-er redecideCd = " + wolf.redecideCd);
         return;
       }
 
-      console.log(`${wolf.species} default decide for ${wolf.redecideCd}`);
-      if (wolf.species === "deer") {
-        console.log("others:")
-        console.log([...getOthers(wolf)])
-      }
+      // if (wolf.species === "deer") {
+      //   console.log("others:")
+      //   console.log([...getOthers(wolf)])
+      // }
 
       // no decision, update action at random
       if (Math.random() < 0.1) { setCritterIdle(wolf); return; }
@@ -1104,7 +1101,6 @@
 
     // returns a list of pairs of integers e.g. [[1,2], [3,6]]
     function findCollidingPairs(creatures) {
-      // console.log(creatures.map(c => [c.gx, c.gy]));
 
       const tileMap = new Map();  // key: tile "x_y", value: index of creature
       const potentialPairs = new Set();  // store "i|j" where i < j
@@ -1188,7 +1184,7 @@
       // tan(1/8 circle) ~= 0.414, tan(3/8 circle) ~= 2.414
       if (absX >= absY * 2.414) return x > 0 ? DIR_E : DIR_W;
       if (absY >= absX * 2.414) return y > 0 ? DIR_S : DIR_N;
-      return x > 0 ? (y > 0 ? DIR_NE : DIR_SE) : (y > 0 ? DIR_NW : DIR_SW);
+      return x > 0 ? (y > 0 ? DIR_SE : DIR_NE) : (y > 0 ? DIR_SW : DIR_NW);
     }
 
     document.addEventListener("keydown", (e) => { keysPressed[e.key] = true; });
