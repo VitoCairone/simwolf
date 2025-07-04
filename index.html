@@ -700,7 +700,7 @@
 
       if (lostSignals.size) {
         console.log(`${a.species} lost signal`);
-        holdInfo(a, "lostSignals", {signals: lostSignals }, 360)
+        holdInfo(a, "lostSignals", {signals: lostSignals }, 360);
       }
 
       if (newSignals.size) {
@@ -1184,10 +1184,19 @@
       return x > 0 ? (y > 0 ? DIR_SE : DIR_NE) : (y > 0 ? DIR_SW : DIR_NW);
     }
 
+    function pause() {
+      isPaused = true;
+    }
+
+    function unpause() {
+      if (!isPaused) return;
+      isPaused = false;
+      gameLoop();
+    }
+
     document.addEventListener("keydown", (e) => { 
       if (e.key === "p") {
-        isPaused = !isPaused;
-        if (!isPaused) gameLoop();
+        isPaused ? unpause() : pause();
         return;
       } else if (e.key === "s") {
         if (isPaused) gameLoop(true);
