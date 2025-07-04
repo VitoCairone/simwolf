@@ -581,12 +581,15 @@
       return true;
     }
 
+    function dirDiff(dirA, dirB) {
+      const diff = Math.abs(dirA - dirB);
+      return Math.min(diff, 8 - diff);
+    }
+
     function isVisionFacing(a, b) {
-      // TODO: check and fix this
-      return true;
       const dirTo = getDir(...vecToObj(a, b));
-      const dirDiff = Math.abs(dirTo - a.currentDirection);
-      return dirDiff <= 1 || (a.species === "deer" && dirDiff === 2);
+      const diff = dirDiff(dirTo, a.currentDirection);
+      return diff <= 1 || (a.species === "deer" && diff === 2);
     }
 
     function setPresentOthersIneffMethod() {
