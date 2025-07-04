@@ -178,6 +178,7 @@
     const debugWolfEl = document.getElementById("dbel-pc-wolf");
 
     let g_tick = 0; // updates ONE PLACE ONLY in gameLoop
+    let isPaused = false;
     // #zoom is mostly working except for two issues:
     // (1) temporary artifacting when zooming out and then panning
     // (1) pan limits based on zoom = 1, cannot pan to edges at higher zooms
@@ -828,7 +829,8 @@
       }
     }
 
-    function gameLoop() {
+    function gameLoop(isStepThrough = false) {
+      if (isPaused && !isStepThrough) return;
       let hasInput = arrowKeyNames.some(ak => keysPressed[ak]);
       if (hasInput) {
         if (arrowsMoveWolf) {
@@ -849,7 +851,7 @@
       updateAllCritters();
 
       g_tick++; // nowhere else may update g_tick
-      requestAnimationFrame(gameLoop);
+      if (!isPaused) requestAnimationFrame(gameLoop);
     }
 
     function addCursorTracker() {
@@ -1179,7 +1181,17 @@
       return x > 0 ? (y > 0 ? DIR_SE : DIR_NE) : (y > 0 ? DIR_SW : DIR_NW);
     }
 
-    document.addEventListener("keydown", (e) => { keysPressed[e.key] = true; });
+    document.addEventListener("keydown", (e) => { 
+      if (e.key === "p") {
+        isPaused = !isPaused;
+        if (!isPaused) gameLoop();
+        return;
+      } else if (e.key === "s") {
+        if (isPaused) gameLoop(true);
+        return;
+      }
+      keysPressed[e.key] = true; 
+    });
     document.addEventListener("keyup", (e) => { keysPressed[e.key] = false; });
 
     window.addEventListener('resize', () => {

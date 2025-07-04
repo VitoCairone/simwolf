@@ -19,3 +19,9 @@ Thu Jun 3
         ~10:35 - 11:03 (27m)
             * Fixed key semicardinal math error in getDir
             * Testing
+
+Fri Jul 4
+    Task: Restore other & signal processing for decisioning
+        9:14 - 
+            * console diagnostics
+            * needed: improved debug functions (starting with pause & step)
