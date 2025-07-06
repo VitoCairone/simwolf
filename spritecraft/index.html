@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Isometric Renderer</title>
+  <style>
+    canvas { border: 1px solid black; }
+    body { font-family: sans-serif; text-align: center; padding-top: 20px; }
+    button { margin: 5px; }
+  </style>
+</head>
+<body>
+  <h2>Isometric Renderer</h2>
+  <canvas id="main-canvas" width="600" height="600"></canvas><br>
+  <button onclick="rotateModel(45)">Rotate 45°</button>
+  <button onclick="downloadImage()">Download Image</button>
+
+  <script>
+    const canvas = document.getElementById('main-canvas');
+    const ctx = canvas.getContext('2d');
+
+    // Isometric projection (2:1) function
+    function isoProject(x, y, z) {
+      const isoX = (x - y);
+      const isoY = (x + y) / 2 - z;
+      return [isoX, isoY];
+    }
+
+    // Translate and scale to canvas
+    function toCanvasCoords(x, y) {
+      const scale = 1; // cm to pixels, adjustable
+      const offsetX = canvas.width / 2;
+      const offsetY = canvas.height / 2;
+      return [offsetX + x * scale, offsetY + y * scale];
+    }
+
+    function drawPoint(x, y, color = 'red', size = 2) {
+      ctx.fillStyle = color;
+      ctx.fillRect(x - size / 2, y - size / 2, size, size);
+    }
+
+    function drawLine(p1, p2, color = 'green', width = 1) {
+      ctx.strokeStyle = color;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      ctx.moveTo(...p1);
+      ctx.lineTo(...p2);
+      ctx.stroke();
+    }
+
+    const points3D = {
+      // Front legs
+      footFL: [-90, +20, 0],
+      kneeFL: [-90, +20, 50],
+      hipFL: [-90, +20, 110],
+
+      footFR: [-90, -20, 0],
+      kneeFR: [-90, -20, 50],
+      hipFR: [-90, -20, 110],
+
+      // Hind legs
+      footHL: [+80, +25, 0],
+      kneeHL: [+80, +25, 55],
+      hipHL:  [+80, +25, 115],
+
+      footHR: [+80, -25, 0],
+      kneeHR: [+80, -25, 55],
+      hipHR:  [+80, -25, 115],
+
+      // Body / Spine
+      tailBase: [+100, 0, 115],
+      withers: [-100, 0, 120],   // base of neck
+      neckBase: [-120, 0, 130],
+
+      // Head
+      nose: [-160, 0, 125],
+      eyeL: [-150, +6, 140],
+      eyeR: [-150, -6, 140],
+      earL: [-145, +12, 150],
+      earR: [-145, -12, 150],
+    };
+
+    function clearCanvas() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+
+    // Draw all elements
+    function drawModel() {
+      clearCanvas();
+      const projected = {};
+      for (const key in points3D) {
+        const [x, y, z] = points3D[key];
+        const [isoX, isoY] = isoProject(x, y, z);
+        projected[key] = toCanvasCoords(isoX, isoY);
+      }
+
+      // Draw legs
+      drawLine(projected.footFL, projected.kneeFL);
+      drawLine(projected.kneeFL, projected.hipFL);
+      drawLine(projected.footFR, projected.kneeFR);
+      drawLine(projected.kneeFR, projected.hipFR);
+      drawLine(projected.footHL, projected.kneeHL);
+      drawLine(projected.kneeHL, projected.hipHL);
+      drawLine(projected.footHR, projected.kneeHR);
+      drawLine(projected.kneeHR, projected.hipHR);
+
+      // Draw spine
+      drawLine(projected.tailBase, projected.neckBase, 'red', 2);
+
+      // head triangle
+      drawLine(projected.earL, projected.nose, 'magenta', 2);
+      drawLine(projected.earR, projected.nose, 'magenta', 2);
+      drawLine(projected.earL, projected.earR, 'magenta', 2);
+
+      // Draw all points except eyes first
+      for (const key in projected) {
+        if (!key.startsWith('eye')) {
+          drawPoint(...projected[key], 'red', 4);
+        }
+      }
+
+      // Draw black eye points last and slightly larger
+      drawPoint(...projected.eyeL, 'black', 4);
+      drawPoint(...projected.eyeR, 'black', 4);
+
+      ctx.endPath();
+    }
+
+    // Rotate all points around Z axis by angle (in degrees)
+    function rotateModel(angleDegrees) {
+      const angle = angleDegrees * Math.PI / 180; // Convert to radians
+      for (const key in points3D) {
+        const [x, y, z] = points3D[key];
+        const rotatedX = x * Math.cos(angle) - y * Math.sin(angle);
+        const rotatedY = x * Math.sin(angle) + y * Math.cos(angle);
+        points3D[key] = [rotatedX, rotatedY, z];
+      }
+      drawModel();
+    }
+
+    drawModel();
+
+    // Download as image
+    function downloadImage() {
+      const link = document.createElement('a');
+      link.download = 'model_3d_to_isometric.png';
+      link.href = canvas.toDataURL();
+      link.click();
+    }
+  </script>
+</body>
+</html>
