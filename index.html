@@ -261,38 +261,48 @@
       return [gx, gy];
     }
 
-    // TODO: consider what data should be allowed to vary by pose and what data is fixed for the species
+    // TODO: consider what data should be allowed to vary by pose and what data 
+    // is fixed for the species
     const frameDataBySpeciesAndPose = {
       wolf: { 
-        'walk': {nFrames: 8, colZero: 0, frameW: 64, frameH: 64, holdTks: 5, topToShadow: 39 },
-        'idle': {nFrames: 4, colZero: 8, frameW: 64, frameH: 64, holdTks: 12, topToShadow: 39 } 
+        walk: {nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
+          holdTks: 5, topToShadow: 39 },
+        idle: {nFrames: 4, colZero: 8, frameW: 64, frameH: 64,
+          holdTks: 12, topToShadow: 39 },
+        run: {nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
+          holdTks: 5, topToShadow: 39 }, // placeholder
+        sprint: {nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
+          holdTks: 5, topToShadow: 39 }, // placeholder
       },
       deer: { 
-        'walk': {nFrames: 11, colZero: 0, frameW: 32, frameH: 41, holdTks: 5, topToShadow: 33},
-        'idle': {nFrames: 24, colZero: 11, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33},
-        'run': {nFrames: 10, colZero: 35, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33},
-        'death': {nFrames: 10, colZero: 45, frameW: 32, frameH: 41, holdTks: 12, topToShadow: 33},
+        walk: {nFrames: 11, colZero: 0, frameW: 32, frameH: 41,
+          holdTks: 5, topToShadow: 33},
+        idle: {nFrames: 24, colZero: 11, frameW: 32, frameH: 41,
+          holdTks: 12, topToShadow: 33},
+        run: {nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
+          holdTks: 12, topToShadow: 33},
+        sprint: {nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
+          holdTks: 12, topToShadow: 33} // placeholder
       }
     }
 
     // TODO: rearrange sprite rows to match DIR_NAME order
-    function spriteRow(wolf) {
+    function spriteRow(a) {
       // TODO: rearrange sprite rows for simpler formula floor(dir/2)
-      return (Math.floor(wolf.currentDirection / 2) + 1) % 4;
+      return (Math.floor(a.currentDirection / 2) + 1) % 4;
     }
 
-    function updateCritterFrame(wolf) {
-      wolf.animTimer = 0;
-      const frameData = frameDataBySpeciesAndPose[wolf.species][wolf.pose];
-      wolf.frame = (wolf.frame + 1) % frameData.nFrames;
-      const frameCol = frameData.colZero + wolf.frame;
-      wolf.element.style.backgroundPosition =
-        `-${frameCol * frameData.frameW}px -${spriteRow(wolf) * frameData.frameH}px`;
+    function updateCritterFrame(a) {
+      a.animTimer = 0;
+      const frameData = frameDataBySpeciesAndPose[a.species][a.pose];
+      a.frame = (a.frame + 1) % frameData.nFrames;
+      const frameCol = frameData.colZero + a.frame;
+      a.element.style.backgroundPosition =
+        `-${frameCol * frameData.frameW}px -${spriteRow(a) * frameData.frameH}px`;
     }
 
     function placeDebugWolfEl() {
-      const wolf = wolves[0];
-      const [isoX, isoY] = isoProject(wolf.gx, wolf.gy);
+      const [isoX, isoY] = isoProject(pcWolf.gx, pcWolf.gy);
       // debug element, which has the dimensions of a tile (32 x 16),
       // should be placed so that its center is the same as the wolf's center;
       // to simplify the math it is its own image with no extra pixels.
@@ -300,25 +310,26 @@
       debugWolfEl.style.top = (isoY - qtrTile) + "px";
     }
 
-    function placeCritterSprite(wolf) {
-      const [isoX, isoY] = isoProject(wolf.gx, wolf.gy);
+    function placeCritterSprite(a) {
+      const [isoX, isoY] = isoProject(a.gx, a.gy);
 
-      // wolf image is offset so its noon-shadow center is at its grid coordinate
-      const frameData = frameDataBySpeciesAndPose[wolf.species][wolf.pose];
+      // critter image is offset so its noon-shadow center is at its grid coordinate
+      const frameData = frameDataBySpeciesAndPose[a.species][a.pose];
       const leftOffset = frameData.frameW / 2;
       const topOffset = frameData.hasOwnProperty('topToShadow')
         ? frameData.topToShadow : (frameData.frameH / 2);
 
-      wolf.element.style.left = (isoX - leftOffset) + "px";
-      wolf.element.style.top = (isoY - topOffset) + "px";
-      wolf.element.style.zIndex = wolf.gx + wolf.gy;
+      a.element.style.left = (isoX - leftOffset) + "px";
+      a.element.style.top = (isoY - topOffset) + "px";
+      a.element.style.zIndex = a.gx + a.gy;
 
-      if (wolf === wolves[0]) placeDebugWolfEl(wolf);
+      if (a === pcWolf) placeDebugWolfEl();
     }
 
     // Wolf setup
     const nWolves = 10;
     const wolves = Array.from({length: nWolves}, () => ({}));
+    const pcWolf = wolves[0];
 
     const nDeer = 10;
     const deer = Array.from({length: nDeer}, () => ({}));
@@ -377,7 +388,6 @@
     deer.forEach(aDeer => { initCritter(aDeer, "deer"); });
 
     const allCritters = wolves.concat(deer);
-    const pcWolf = wolves[0];
 
     forbidOverlapsOnStart();
     const cameraSpeed = 50;
@@ -825,10 +835,10 @@
       let overlapPairs = findCollidingPairs(allCritters);
       for (let tries = 0; overlapPairs.length && tries < 10; tries++) {
         overlapPairs.forEach(pair =>  {
-          const wolf = allCritters[pair[1]];
-          randomlyPlaceCritter(wolf);
-          wolf.nextGX = wolf.gx;
-          wolf.nextGY = wolf.gy;
+          const a = allCritters[pair[1]];
+          randomlyPlaceCritter(a);
+          a.nextGX = a.gx;
+          a.nextGY = a.gy;
         });
         // recollect for next cycle
         overlapPairs = findCollidingPairs(allCritters);
@@ -879,14 +889,9 @@
       // rotate by -1 to convert Pixel vector to Grid vector
       let dir = getDir(mouseVecX, mouseVecY) - 1;
       if (dir < 0) dir = 7;
-      
-      // current: 1-speed
-      setCritterMoving(pcWolf, dir);
 
-      // WIP: 3-speed
-      // const mag = Math.hypot(mouseVecX, mouseVecY);
-      // const newPose = mag >= 0.667 ? "sprint" : (mag >= 0.333 ? "run" : "walk"); 
-      // setCritterMoving(pcWolf, dir, newPose);
+      const newPose = mag >= 0.7 ? "sprint" : (mag >= 0.4 ? "run" : "walk"); 
+      setCritterMoving(pcWolf, dir, newPose);
     }
 
     function addCursorTracker() {
@@ -900,7 +905,7 @@
           const ctrPX = rect.left + rect.width / 2
           const ctrPY = rect.top + rect.height / 2;
           const [vx, vy] = [e.clientX - ctrPX, e.clientY - ctrPY]
-          const minCircMag = Math.min(rect.width / 2, rect.height / 2) * ROOT2;
+          const minCircMag = Math.min(rect.width / 2, rect.height / 2);
           [mouseVecX, mouseVecY] = [vx / minCircMag, vy / minCircMag];
           updateMovementByMouse();
         }
@@ -919,23 +924,23 @@
       });
     }
 
-    function setCritterIdle(wolf) {
-      if (wolf.pose === "idle") return;
-      wolf.speed = 0;
-      wolf.nextGX = wolf.gx;
-      wolf.nextGY = wolf.gy;
-      wolf.pose = "idle";
-      updateCritterFrame(wolf);
+    function setCritterIdle(a) {
+      if (a.pose === "idle") return;
+      a.speed = 0;
+      a.nextGX = a.gx;
+      a.nextGY = a.gy;
+      a.pose = "idle";
+      updateCritterFrame(a);
     }
 
     const wolfAudibleToDeerL2ByTerrainAndSpeed = {
-      dirt:    { walk: sqr(4),  run: sqr(15), sprint: sqr(40) },
-      rock:    { walk: sqr(8),  run: sqr(30), sprint: sqr(80) },
-      leafcover: { walk: sqr(6),  run: sqr(22), sprint: sqr(60) },
       grass:   { walk: sqr(3),  run: sqr(11), sprint: sqr(30) },
+      dirt:    { walk: sqr(4),  run: sqr(15), sprint: sqr(40) },
+      leaves:  { walk: sqr(6),  run: sqr(22), sprint: sqr(60) },
+      rock:    { walk: sqr(8),  run: sqr(30), sprint: sqr(80) },
       gravel:  { walk: sqr(9),  run: sqr(37), sprint: sqr(95) },
-      water:   { walk: sqr(9),  run: sqr(37), sprint: sqr(95) }, // fix this
-      bush:    { walk: sqr(3),  run: sqr(11), sprint: sqr(30) }, // fix this
+      water:   { walk: sqr(9),  run: sqr(37), sprint: sqr(95) }, // placeholder
+      bush:    { walk: sqr(3),  run: sqr(11), sprint: sqr(30) }, // placeholder
     };
 
     function vecTo(a, b) { return [b[0] - a[0], b[1] - a[1]]; }
@@ -971,17 +976,22 @@
       return distBetweenL2(a, b) <= rangeByPoseL2[b.pose];
     }
 
-    const kphToTpTk = 0.0046296; // kilometers/hour to tiles/tick
-    const wolfSprintSpeed = 55 * kphToTpTk; // a few seconds only
-    const wolfTrotSpeed = 10 * kphToTpTk; // 8 hours
-
-    const deerSprintSpeed = 65 * kphToTpTk; // a few seconds only; 0.3 tiles/tick
-    const deerGallopSpeed = 45 * kphToTpTk; // 2-3 minutes
-    const deerWalkSpeed = 6  * kphToTpTk; // all day
-
+    const kphToTpTk = 0.0046296; // kilometers-per-hour to tiles-per-tick
     const travelSpeedBySpeciesAndPose = {
-      "wolf": { "walk": wolfTrotSpeed, "run": wolfSprintSpeed, "idle": 0, "death": 0},
-      "deer": { "walk": deerWalkSpeed, "run": deerSprintSpeed, "idle": 0, "death": 0}
+      "wolf": {
+        "walk": 6 * kphToTpTk, // all day
+        "run": 10 * kphToTpTk, // 8 hours
+        "sprint": 55 * kphToTpTk, // a few seconds only
+        "idle": 0,
+        "death": 0
+      },
+      "deer": { 
+        "walk": 6 * kphToTpTk, // all day 
+        "run": 45 * kphToTpTk, // 2 minutes
+        "sprint": 65 * kphToTpTk, // a few seconds only; 0.3 tiles/tick
+        "idle": 0, 
+        "death": 0
+      }
     }
 
     function setCritterMoving(a, dir, newPose = 'walk') {
@@ -1075,38 +1085,38 @@
       }
     }
 
-    function setCritterDeath(q) {
-      if (!q || q.species !== "deer") return alert("Invalid arg to setCritterDeath");
+    function setCritterDeath(a) {
+      if (!a || a.species !== "deer") return alert("Invalid arg to setCritterDeath");
 
-      if (q.pose === "death") return;
-      q.speed = 0;
-      q.nextGX = q.gx;
-      q.nextGY = q.gy;
-      q.pose = "death";
-      updateCritterFrame(q);
+      if (a.pose === "death") return;
+      a.speed = 0;
+      a.nextGX = a.gx;
+      a.nextGY = a.gy;
+      a.pose = "death";
+      updateCritterFrame(a);
     }
 
-    function updateCritterAction(wolf) {
-      if (wolf === wolves[0] && handMovesWolf()) return;
-      wolf.redecideCd = 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
+    function updateCritterAction(a) {
+      if (a === wolves[0] && handMovesWolf()) return;
+      a.redecideCd = 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
       // note this is the default time, decisions may override
 
-      const decision = makeDecision(wolf);
+      const decision = makeDecision(a);
       if (decision) { 
-        enactDecision(wolf, decision); 
+        enactDecision(a, decision); 
         return;
       }
 
-      // if (wolf.species === "deer") {
+      // if (a.species === "deer") {
       //   console.log("others:")
-      //   console.log([...getOthers(wolf)])
+      //   console.log([...getOthers(a)])
       // }
 
       // no decision, update action at random
-      if (Math.random() < 0.1) { setCritterIdle(wolf); return; }
+      if (Math.random() < 0.1) { setCritterIdle(a); return; }
 
       const dir = Math.floor(Math.random() * 4) * 2;
-      setCritterMoving(wolf, dir);
+      setCritterMoving(a, dir);
     }
 
     function getOccupiedTiles(gx, gy, boxRad = 0.4) {

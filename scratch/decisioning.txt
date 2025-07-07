@@ -25,7 +25,7 @@ mode select
   if THIRSTY, drink / seek water
   if HUNGRY, feed / track food / seek food
   if TIRED, sleep / bed
-  if UNBONDED ADULT in BREEDING SEASON, court / track pomate / seek pomate
+  if UNBONDED ADULT in BREEDING SEASON, court / track premate / seek premate
   if SEPERATED from mate or parent, track / seek mate or parent
   if ISOLATED, seek others
     * TODO: consider when to allow adult Wolves to prefer hunting solo?  
@@ -33,8 +33,13 @@ mode select
     near others: follow social patrol explore
     alone: patrol explore
 
+  note (7/7/2025) this version of pre-determined strict priority will be replaced
+  with three-tiered evo-controlled ratios; such that the actual priority results
+  from selective structuring. We keep this original plan in mind, expecting
+  the average selective result to resemble it, and should support all
+  the required specifics.
 
-  // every critter's highest decision Wt should be fixed at 1.0
+  // every critter's highest decision Wt should be fixed at 1.0 [or 0xFF?]
   // and others scaled accordingly
 
   evos

@@ -3,28 +3,28 @@ Mon Jun 30
     By 2:16 made 'stag circle draft 0' as approach plan, to 2:16p [31m]
 
 Tue Jul 1
-    Task: Fix redecisioning so deer are consistantly driven from the nearest wolf
+    Task: Fix redecisioning so deer are consistantly driven from  nearest wolf
         in open terrain
     11:25 - 11:45 (20m):
         * Fixed redecideCd so fleeing creature is not locked into default action
-        * Diagnostics, suggest lostSignals are not being stored leading to getOthers empty
+        * Diagnostics suggest lostSignals not stored leads to getOthers empty
         
 Wed Jul 2
-  Task: Fix redecisioning for fleeing
+    Task: Fix redecisioning for fleeing
     11:56 - 12:04 (25m):
         * Refactor control flow in updateAllCritters
     
 Thu Jun 3
     Task: Fix flee directioning in general
-        ~10:35 - 11:03 (27m)
-            * Fixed key semicardinal math error in getDir
-            * Testing
+    ~10:35 - 11:03 (27m)
+        * Fixed key semicardinal math error in getDir
+        * Testing
 
 Fri Jul 4
     Task: Restore other & signal processing for decisioning
-        9:14 - 9:39 (25m)
-            * console diagnostics for signal processing, no findings
-            * add pause and step through keyboard controls
+    9:14 - 9:39 (25m)
+        * console diagnostics for signal processing, no findings
+        * add pause and step through keyboard controls
 
 Sun Jul 6
     Task: Add utility to project 3D linesets to isometric sprites
@@ -32,5 +32,10 @@ Sun Jul 6
 
 Mon Jul 7
     Task: Implement move-to-cursor controls for 3-speed movement
-        9:55 - 10:32 (37m)
-            * added mouse control of movement all-or-none and direction
+    9:55 - 10:32 (37m)
+        * added mouse control of movement all-or-none and direction
+    Task: Implement three moving speeds as three moving poses in logic,
+        re-using currently available sprites across poses as needed,
+        no restrictions on pose changes (e.g. fatigue/cooldown) in scope
+    1:05 - 1:34 (29m)
+      * added 3-speed mouse follow control
