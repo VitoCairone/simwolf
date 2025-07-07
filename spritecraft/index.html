@@ -11,7 +11,7 @@
 </head>
 <body>
   <h2>Isometric Renderer</h2>
-  <canvas id="main-canvas" width="600" height="600"></canvas><br>
+  <canvas id="main-canvas" width="100" height="100"></canvas><br>
   <button onclick="rotateModel(45)">Rotate 45°</button>
   <button onclick="downloadImage()">Download Image</button>
 
@@ -28,13 +28,13 @@
 
     // Translate and scale to canvas
     function toCanvasCoords(x, y) {
-      const scale = 1; // cm to pixels, adjustable
+      const scale = 0.08; // cm to pixels, adjustable
       const offsetX = canvas.width / 2;
       const offsetY = canvas.height / 2;
       return [offsetX + x * scale, offsetY + y * scale];
     }
 
-    function drawPoint(x, y, color = 'red', size = 2) {
+    function drawPoint(x, y, color = 'red', size = 1) {
       ctx.fillStyle = color;
       ctx.fillRect(x - size / 2, y - size / 2, size, size);
     }
@@ -105,23 +105,23 @@
       drawLine(projected.kneeHR, projected.hipHR);
 
       // Draw spine
-      drawLine(projected.tailBase, projected.neckBase, 'red', 2);
+      drawLine(projected.tailBase, projected.neckBase, 'red');
 
       // head triangle
-      drawLine(projected.earL, projected.nose, 'magenta', 2);
-      drawLine(projected.earR, projected.nose, 'magenta', 2);
-      drawLine(projected.earL, projected.earR, 'magenta', 2);
+      drawLine(projected.earL, projected.nose, 'magenta');
+      drawLine(projected.earR, projected.nose, 'magenta');
+      drawLine(projected.earL, projected.earR, 'magenta');
 
       // Draw all points except eyes first
       for (const key in projected) {
         if (!key.startsWith('eye')) {
-          drawPoint(...projected[key], 'red', 4);
+          drawPoint(...projected[key], 'red');
         }
       }
 
       // Draw black eye points last and slightly larger
-      drawPoint(...projected.eyeL, 'black', 4);
-      drawPoint(...projected.eyeR, 'black', 4);
+      drawPoint(...projected.eyeL, 'black');
+      drawPoint(...projected.eyeR, 'black');
 
       ctx.endPath();
     }
