@@ -32,4 +32,5 @@ Sun Jul 6
 
 Mon Jul 7
     Task: Implement move-to-cursor controls for 3-speed movement
-        9:55 - 
+        9:55 - 10:32 (37m)
+            * added mouse control of movement all-or-none and direction
