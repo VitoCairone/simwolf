@@ -25,3 +25,11 @@ Fri Jul 4
         9:14 - 9:39 (25m)
             * console diagnostics for signal processing, no findings
             * add pause and step through keyboard controls
+
+Sun Jul 6
+    Task: Add utility to project 3D linesets to isometric sprites
+        * done
+
+Mon Jul 7
+    Task: Implement move-to-cursor controls for 3-speed movement
+        9:55 - 

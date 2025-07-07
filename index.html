@@ -383,17 +383,18 @@
     const cameraSpeed = 50;
     const keysPressed = {};
 
-    const ir2 = 1 / Math.sqrt(2);
+    const ROOT2 = Math.sqrt(2);
+    const INVROOT2 = 1 / Math.sqrt(2);
 
     const moveVecByDir = [
       [ 1, 0 ],
-      [ ir2, ir2 ],
+      [ INVROOT2, INVROOT2 ],
       [ 0, 1 ],
-      [ -ir2, ir2 ],
+      [ -INVROOT2, INVROOT2 ],
       [ -1, 0 ],
-      [ -ir2, -ir2 ],
+      [ -INVROOT2, -INVROOT2 ],
       [ 0, -1 ],
-      [ ir2, -ir2 ],
+      [ INVROOT2, -INVROOT2 ],
     ];
 
     const arrowKeyNames = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
@@ -401,7 +402,12 @@
     const arrowsIcon = document.getElementById('arrow-mode-icon');
     arrowsIcon.innerHTML = cameraIconSVG;
 
+    let mouseMovesWolf = true;
     let arrowsMoveWolf = false;
+    
+    function handMovesWolf() {
+      return arrowsMoveWolf || mouseMovesWolf;
+    }
 
     function centerCameraOnGXY(gx, gy) {
       const [px , py] = isoProject(gx, gy);
@@ -587,6 +593,7 @@
     }
 
     function isVisionFacing(a, b) {
+      return true; // TODO: FIX! isVisonFacing still causes deer to jitter in place
       const dirTo = getDir(...vecToObj(a, b));
       const diff = dirDiff(dirTo, a.currentDirection);
       return diff <= 1 || (a.species === "deer" && diff === 2);
@@ -787,7 +794,7 @@
           // this is the ONLY PLACE ANYWHERE that mover gx and gy should change!
           mover.gx = mover.nextGX;
           mover.gy = mover.nextGY;
-          if (mover === pcWolf && arrowsMoveWolf) {
+          if (mover === pcWolf && handMovesWolf()) {
             setCameraToPCWolf();
           }
           placeCritterSprite(mover);
@@ -857,12 +864,47 @@
       if (!isPaused) requestAnimationFrame(gameLoop);
     }
 
+    let mouseVecX = 0;
+    let mouseVecY = 0;
+
+    function updateMovementByMouse() {
+      if (!mouseMovesWolf) return alert("Called updateMovevementByMouse out of context");
+      const mag = Math.hypot(mouseVecX, mouseVecY);
+      console.log(mag);
+      if (mag < 0.1) {
+        setCritterIdle(pcWolf);
+        return;
+      }
+
+      // rotate by -1 to convert Pixel vector to Grid vector
+      let dir = getDir(mouseVecX, mouseVecY) - 1;
+      if (dir < 0) dir = 7;
+      
+      // current: 1-speed
+      setCritterMoving(pcWolf, dir);
+
+      // WIP: 3-speed
+      // const mag = Math.hypot(mouseVecX, mouseVecY);
+      // const newPose = mag >= 0.667 ? "sprint" : (mag >= 0.333 ? "run" : "walk"); 
+      // setCritterMoving(pcWolf, dir, newPose);
+    }
+
     function addCursorTracker() {
       const fieldWrapper = document.getElementById("field-wrapper");
       const cursorCoords = document.getElementById("cursor-coords");
 
       fieldWrapper.addEventListener("mousemove", (e) => {
         const rect = fieldWrapper.getBoundingClientRect();
+
+        if (mouseMovesWolf) {
+          const ctrPX = rect.left + rect.width / 2
+          const ctrPY = rect.top + rect.height / 2;
+          const [vx, vy] = [e.clientX - ctrPX, e.clientY - ctrPY]
+          const minCircMag = Math.min(rect.width / 2, rect.height / 2) * ROOT2;
+          [mouseVecX, mouseVecY] = [vx / minCircMag, vy / minCircMag];
+          updateMovementByMouse();
+        }
+
         const mousePX = e.clientX - rect.left + worldShiftPX;
         const mousePY = e.clientY - rect.top + worldShiftPY;
 
@@ -1045,7 +1087,7 @@
     }
 
     function updateCritterAction(wolf) {
-      if (wolf === wolves[0] && arrowsMoveWolf) return;
+      if (wolf === wolves[0] && handMovesWolf()) return;
       wolf.redecideCd = 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
       // note this is the default time, decisions may override
 
