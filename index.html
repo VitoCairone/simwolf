@@ -896,7 +896,6 @@
     function updateMovementByMouse() {
       if (!mouseMovesWolf) return alert("Called updateMovevementByMouse out of context");
       const mag = Math.hypot(mouseVecX, mouseVecY);
-      console.log(mag);
       if (mag < 0.1) {
         setCritterIdle(pcWolf);
         return;
@@ -1010,8 +1009,8 @@
       }
     }
 
+    // FUTURE: consider tracking hiPowFatigue and loPowFatigue distinctly
     const fatigueBySpeciesAndPose = {
-      // enterMax = forceEnd * 0.7
       "wolf": {
         "idle": { forceEnd: Infinity, dps: -1, downTo: "idle" },
         "walk": { forceEnd: 60000, dps: -0.25, downTo: "idle" },
@@ -1026,7 +1025,7 @@
       }
     }
 
-    function canSprint(a, isAleady = false) {
+    function canSprint(a, isAlready = false) {
       const limit = fatigueBySpeciesAndPose[a.species].sprint.forceEnd
         * (isAlready ? 1 : 0.7);
       return a.fatigue <= limit;
@@ -1039,25 +1038,16 @@
     }
 
     function setCritterMoving(a, dir, newPose = "walk") {
-      if ((!newPose || newPose === a.pose) && a.currentDirection === dir) return;
-      a.currentDirection = dir;
+      if (newPose === a.pose && a.currentDirection === dir) return;
 
-      // fatigue implementation: fatigue rises when sprinting or running,
-      // falls very slowly walking, and falls faster idle.
-      // To prevent jitter, a creature already in a certain pose
-      // should be able to maintain that pose down to a fatigue level
-      // which is lower than the limit to initiate it.
-      // FUTURE: consider tracking hiPowFatig and loPowFatig distinctly
-
-      if (newPose === "sprint" && !canSprint(a)) {
+      if (newPose === "sprint" && !canSprint(a, a.pose === "sprint"))
         newPose = "run";
-      }
-      if (newPose === "run" && !canRun(a)) {
+      if (newPose === "run" && !canRun(a, a.pose === "run"))
         newPose = "walk";
-      }
+      if (newPose === a.pose && a.currentDirection === dir) return;
 
-      if (newPose) a.pose = newPose;
-      else if (a.pose === "idle") a.pose = "walk";
+      a.pose = newPose;
+      a.currentDirection = dir;
       a.speed = travelSpeedBySpeciesAndPose[a.species][a.pose];
       updateCritterFrame(a);
 
