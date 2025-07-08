@@ -352,21 +352,22 @@
     }
 
     // searchmeta makeCritter createCritter makeWolf createWolf makeWisp createWisp
-    function initCritter(wisp, species) {
-      if (!wisp) return alert("Falsy ref to initCritter");
-      if (wisp.kind) return alert("Already-kind ref to initCritter");
-      wisp.kind = 'critter';
-      wisp.species = species;
+    function initCritter(a, species) {
+      if (!a) return alert("Falsy ref to initCritter");
+      if (a.kind) return alert("Already-kind ref to initCritter");
+      a.kind = 'critter';
+      a.species = species;
 
-      wisp.speed = 0;
-      wisp.heldInfo = {};
-      wisp.holdInfoUntil = {};
+      a.speed = 0;
+      a.heldInfo = {};
+      a.holdInfoUntil = {};
+      a.fatigue = 0;
 
       const el = document.createElement("div");
       el.classList.add(species);
       spriteLayer.appendChild(el);
-      wisp.element = el;
-      randomlyPlaceCritter(wisp);
+      a.element = el;
+      randomlyPlaceCritter(a);
     }
 
     let viewportWidth = document.getElementById('field-wrapper').clientWidth;
@@ -771,6 +772,20 @@
       moveAllTogether(allCritters);
     }
 
+    function applyFatigue(a) {
+      const fatigueBySpecies = fatigueBySpeciesAndPose[a.species];
+      if (!fatigueBySpecies.hasOwnProperty(a.pose)) return;
+      const fatigueData = fatigueBySpecies[a.pose];
+      a.fatigue += fatigueData.dps / 60;
+      if (a.fatigue >= fatigueData.forceEnd) {
+        if (fatigueData.downTo === "idle") {
+          setCritterIdle(a);
+        } else {
+          setCritterMoving(a, a.currentDirection, fatigueData.downTo);
+        }
+      }
+    }
+
     function moveAllTogether(movers) {
       const collidePairs = findCollidingPairs(movers);
       let didCollide = {};
@@ -786,7 +801,7 @@
       });
 
       movers.forEach((mover, idx) => {
-        // for a stationary mover that gets collided into, do nothing
+        // for a stationary mover, do nothing
         if (mover.nextGX === mover.gx && mover.nextGY === mover.gy) return;
 
         if (didCollide[idx]) {
@@ -808,6 +823,7 @@
             setCameraToPCWolf();
           }
           placeCritterSprite(mover);
+          applyFatigue(mover);
         }
       });
     }
@@ -994,9 +1010,52 @@
       }
     }
 
-    function setCritterMoving(a, dir, newPose = 'walk') {
+    const fatigueBySpeciesAndPose = {
+      // enterMax = forceEnd * 0.7
+      "wolf": {
+        "idle": { forceEnd: Infinity, dps: -1, downTo: "idle" },
+        "walk": { forceEnd: 60000, dps: -0.25, downTo: "idle" },
+        "run": { forceEnd: 30000, dps: 1, downTo: "walk" }, // ~8 hours
+        "sprint": { forceEnd: 15000, dps: 1500, downTo: "run" } // 10 seconds
+      },
+      "deer": {
+        "idle": { forceEnd: Infinity, dps: -1, downTo: "idle" },
+        "walk": { forceEnd: 60000, dps: -0.25, downTo: "idle" },
+        "run": { forceEnd: 30000, dps: 250, downTo: "walk" }, // 2 minutes
+        "sprint": { forceEnd: 15000, dps: 1500, downTo: "run" } // 10 seconds
+      }
+    }
+
+    function canSprint(a, isAleady = false) {
+      const limit = fatigueBySpeciesAndPose[a.species].sprint.forceEnd
+        * (isAlready ? 1 : 0.7);
+      return a.fatigue <= limit;
+    }
+
+    function canRun(a, isAlready = false) {
+      const limit = fatigueBySpeciesAndPose[a.species].run.forceEnd
+        * (isAlready ? 1 : 0.7);
+      return a.fatigue <= limit;
+    }
+
+    function setCritterMoving(a, dir, newPose = "walk") {
       if ((!newPose || newPose === a.pose) && a.currentDirection === dir) return;
       a.currentDirection = dir;
+
+      // fatigue implementation: fatigue rises when sprinting or running,
+      // falls very slowly walking, and falls faster idle.
+      // To prevent jitter, a creature already in a certain pose
+      // should be able to maintain that pose down to a fatigue level
+      // which is lower than the limit to initiate it.
+      // FUTURE: consider tracking hiPowFatig and loPowFatig distinctly
+
+      if (newPose === "sprint" && !canSprint(a)) {
+        newPose = "run";
+      }
+      if (newPose === "run" && !canRun(a)) {
+        newPose = "walk";
+      }
+
       if (newPose) a.pose = newPose;
       else if (a.pose === "idle") a.pose = "walk";
       a.speed = travelSpeedBySpeciesAndPose[a.species][a.pose];
