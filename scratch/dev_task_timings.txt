@@ -48,3 +48,5 @@ Mon Jul 7
       * add some cooldown tracking for sprint
     7:31 - 8:17 (46m)
       * add fatigue tracking -- incomplete, does not allow sprint from start
+    10:02 - 10:14 (12m)
+      * fix errors with sprinting & fatigue
