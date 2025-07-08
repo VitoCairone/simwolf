@@ -1,0 +1,36 @@
+STORIES
+
+<<<
+OUT-OF-SCOPE FOR SUMMER:
+    additional critter species [beyond wolf and deer]
+    any control mode other than Wolf
+    sum mass constancy
+    sum momentum constancy
+>>>
+
+[24 Tasks from Jul 8 Roadmap]
+
+* Extend all exising sprite poses to 8-dir
+* 3-speed motion poses for wolf and deer
+* Tile variety within terrain for grass, dirt, rock, water
+* Elevation of terrain
+* Trees (as function of coords!)
+* Seasonality of trees and terrain
+* Wind
+* Rain
+* Snow
+* Fatigue indicators on panel
+* Jumping (pose + logic) for wolf and deer
+* Eating (pose + logic) for wolf and deer
+* Sleeping (pose + logic) for wolf and deer
+* Drinking (pose + logic) for wolf and deer
+* Scent tracking
+* Day and Night cycle
+* Online pure clientside version, github pages
+* Domain .net (and .com redirect)
+* Zoom without CSS transform
+* Sounds: Walking, bleating
+* Courting+ + mating (pose + logic)
+* Pup and fawn sprites
+* Pup and fawn create logic
+* Nursing sprites

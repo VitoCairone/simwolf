@@ -1,4 +1,4 @@
 This project includes original pixel art by Scrabling
 downloaded from https://scrabling.itch.io/pixel-isometric-tiles
 which under Creative Commons license (CC BY 4.0)
-allows free use and modification of those assets.
+allows free use and modification of said information.

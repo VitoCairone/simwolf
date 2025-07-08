@@ -13,7 +13,7 @@ Wed Jul 2
     Task: Fix redecisioning for fleeing
     11:56 - 12:04 (25m):
         * Refactor control flow in updateAllCritters
-    
+
 Thu Jun 3
     Task: Fix flee directioning in general
     ~10:35 - 11:03 (27m)
@@ -39,14 +39,18 @@ Mon Jul 7
         re-using currently available sprites across poses as needed,
         no restrictions on pose changes (e.g. fatigue/cooldown) in scope
     1:05 - 1:34 (29m)
-      * added 3-speed mouse follow control
+        * added 3-speed mouse follow control
     1:34 - 1:45 (16m)
-      * replace wolf as generic var, check styling vs beautifier.io
+        * replace wolf as generic var, check styling vs beautifier.io
     
     Task: Limit run and sprint time
     1:50 - 2:04 (14m)
-      * add some cooldown tracking for sprint
+        * add some cooldown tracking for sprint
     7:31 - 8:17 (46m)
-      * add fatigue tracking -- incomplete, does not allow sprint from start
+        * add fatigue tracking -- incomplete, does not allow sprint from start
     10:02 - 10:14 (12m)
-      * fix errors with sprinting & fatigue
+        * fix errors with sprinting & fatigue
+
+Tue Jul 8
+    9:35 - 9:58 (23m)
+         * project roadmapping; 24 tasks for summer & out-of-scope set
