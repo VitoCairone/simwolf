@@ -10,6 +10,7 @@ OUT-OF-SCOPE FOR SUMMER:
 
 [24 Tasks from Jul 8 Roadmap]
 
+* Fatigue indicators on panel
 * Extend all exising sprite poses to 8-dir
 * 3-speed motion poses for wolf and deer
 * Tile variety within terrain for grass, dirt, rock, water
@@ -19,7 +20,6 @@ OUT-OF-SCOPE FOR SUMMER:
 * Wind
 * Rain
 * Snow
-* Fatigue indicators on panel
 * Jumping (pose + logic) for wolf and deer
 * Eating (pose + logic) for wolf and deer
 * Sleeping (pose + logic) for wolf and deer
@@ -29,8 +29,8 @@ OUT-OF-SCOPE FOR SUMMER:
 * Online pure clientside version, github pages
 * Domain .net (and .com redirect)
 * Zoom without CSS transform
-* Sounds: Walking, bleating
-* Courting+ + mating (pose + logic)
+* Sounds: Walking, bleating, etc
+* Courting + mating (pose + logic)
 * Pup and fawn sprites
 * Pup and fawn create logic
-* Nursing sprites
+* Nursing (pose + logic) for wolf and deer

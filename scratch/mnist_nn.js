@@ -1,8 +1,9 @@
 // This file is UNTESTED
 
 // mnist_nn.js
-// A simple neural network in Node.js for recognizing handwritten digits (MNIST)
-// No use of high-level ML libraries like TensorFlow or Brain.js
+// A simple neural network in node.js for recognizing handwritten digits (MNIST)
+// n.b. small neural networks, even toy ones, are generally written in Python,
+// the only actual use case for JavaScript would be clientside (browser-run)
 
 const fs = require('fs');
 const zlib = require('zlib');

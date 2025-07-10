@@ -47,6 +47,16 @@
       justify-content: center;
       padding: 10px;
     }
+    #fatigue-meter {
+      height: 10px;
+      width: 100%;
+      background-color: darkslategrey;
+    }
+    #fatigue-meter-fill {
+      height: 90%;
+      width: 0%;
+      background-color: yellow;
+    }
     #field-wrapper {
       flex: 1;
       position: relative;
@@ -153,6 +163,11 @@
         </button>
 
       </div>
+
+      <div id="fatigue-meter">
+        <div id="fatigue-meter-fill"></div>
+      </div>
+
       <div id="cursor-coords" style="margin-top: auto; font-size: 12px; color: #aaa;">
         x: –, y: –
       </div>
@@ -178,6 +193,7 @@
     const debugWolfEl = document.getElementById("dbel-pc-wolf");
 
     let g_tick = 0; // updates ONE PLACE ONLY in gameLoop
+    let g_next_uid = 0;
     let isPaused = false;
     // #zoom is mostly working except for two issues:
     // (1) temporary artifacting when zooming out and then panning
@@ -357,6 +373,10 @@
       if (a.kind) return alert("Already-kind ref to initCritter");
       a.kind = 'critter';
       a.species = species;
+      
+      // UIDs are unique across all kind objects and permanent
+      a.uid = g_next_uid++;
+      a.isMale = Math.random() < 0.5;
 
       a.speed = 0;
       a.heldInfo = {};
@@ -377,6 +397,9 @@
     let initY = 0;
     // rendering errors occur abruptly at x == 1677740
     // unknown why at this time
+    // also observed at: [369092, 1404710] and other values which are 
+    // close to 1500k in Y and 300k+ in X
+    
     const safeX = Math.min(gridWidthN, 1500000);
     const safeY = Math.min(gridHeightN, 1500000);
     for (let t = 0; t < 1000 && getTerrainAt(initX, initY) === "water"; t++) {
@@ -783,6 +806,10 @@
         } else {
           setCritterMoving(a, a.currentDirection, fatigueData.downTo);
         }
+      }
+      if (a === pcWolf && g_tick % 6 === 0) {
+        document.getElementById("fatigue-meter-fill").style.width =
+          `${Math.min(100 * a.fatigue / fatigueBySpecies.run.forceEnd, 100)}%`;
       }
     }
 
