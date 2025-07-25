@@ -59,3 +59,8 @@ Thu Jul 11
     Task: Fatigue indicators on panel
     9:26 - 9:56 (30m)
         * added fatigue meter
+
+Fri Jul 25
+    9:43 - 9:59
+        * move JS to own file
+        * rescue from split errors with single file for now
