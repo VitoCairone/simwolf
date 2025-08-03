@@ -252,9 +252,10 @@ arrowsIcon.innerHTML = cameraIconSVG;
 
 let mouseMovesWolf = true;
 let arrowsMoveWolf = false;
+let mouseInInputField = false;
 
 function handMovesWolf() {
-  return arrowsMoveWolf || mouseMovesWolf;
+  return arrowsMoveWolf || (mouseMovesWolf && mouseInInputField);
 }
 
 function centerCameraOnGXY(gx, gy) {
@@ -660,7 +661,7 @@ function moveAllTogether(movers) {
       // this is the ONLY PLACE ANYWHERE that mover gx and gy should change!
       mover.gx = mover.nextGX;
       mover.gy = mover.nextGY;
-      if (mover === pcWolf && handMovesWolf()) {
+      if (mover === pcWolf) { // TODO: allow for detaching camera from wolf
         setCameraToPCWolf();
       }
       placeCritterSprite(mover);
@@ -737,6 +738,12 @@ let mouseVecY = 0;
 function updateMovementByMouse() {
   if (!mouseMovesWolf) return alert("Called updateMovevementByMouse out of context");
   const mag = Math.hypot(mouseVecX, mouseVecY);
+
+  if (mag >= 0.9) {
+    mouseInInputField = false;
+    return;
+  }
+  mouseInInputField = true;
   if (mag < 0.1) {
     setCritterIdle(pcWolf);
     return;
