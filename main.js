@@ -122,10 +122,14 @@ function spriteRow(a) {
   return (Math.floor(a.currentDirection / 2) + 1) % 4;
 }
 
-function updateCritterFrame(a) {
+function updateCritterFrame(a, rezero = false) {
   a.animTimer = 0;
   const frameData = frameDataBySpeciesAndPose[a.species][a.pose];
-  a.frame = (a.frame + 1) % frameData.nFrames;
+  a.frame = rezero ? 0 : ( (a.frame + 1) % frameData.nFrames );
+  if (!rezero && a.frame === 0 && frameData.onceThenPose) {
+    a.pose = frameData.onceThenPose;
+    return updateCritterFrame(a, true);
+  }
   const frameCol = frameData.colZero + a.frame;
   a.element.style.backgroundPosition =
     `-${frameCol * frameData.frameW}px -${spriteRow(a) * frameData.frameH}px`;
@@ -167,18 +171,18 @@ const deer = Array.from({length: nDeer}, () => ({}));
 let worldShiftPX = 0;
 let worldShiftPY = 0;
 
-function randomlyPlaceCritter(wisp) {
+function randomlyPlaceCritter(a) {
   // used for initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
-  wisp.gx = boundVal(initX + Math.floor(Math.random() * 50), 0.5, gridWidthN - 0.5);
-  wisp.gy = boundVal(initY + Math.floor(Math.random() * 50), 0.5, gridHeightN - 0.5);
-  wisp.animTimer = 0;
-  wisp.redecideCd = 0; // Cd = Cooldown (ticks)
-  wisp.currentDirection = Math.floor(Math.random() * 4) * 2;
-  wisp.frame = 0;
-  setCritterIdle(wisp);
+  a.gx = boundVal(initX + Math.floor(Math.random() * 50), 0.5, gridWidthN - 0.5);
+  a.gy = boundVal(initY + Math.floor(Math.random() * 50), 0.5, gridHeightN - 0.5);
+  a.animTimer = 0;
+  a.redecideCd = 0; // Cd = Cooldown (ticks)
+  a.currentDirection = Math.floor(Math.random() * 4) * 2;
+  a.frame = 0;
+  setCritterIdle(a);
 
-  updateCritterFrame(wisp);
-  placeCritterSprite(wisp);
+  updateCritterFrame(a, true);
+  placeCritterSprite(a);
 }
 
 // searchmeta makeCritter createCritter makeWolf createWolf makeWisp createWisp
@@ -209,13 +213,14 @@ let viewportHeight = document.getElementById('field-wrapper').clientHeight;
 
 let initX = 0;
 let initY = 0;
+
 // rendering errors occur abruptly at x == 1677740
 // unknown why at this time
 // also observed at: [369092, 1404710] and other values which are 
 // close to 1500k in Y and 300k+ in X
-
 const safeX = Math.min(gridWidthN, 1500000);
 const safeY = Math.min(gridHeightN, 1500000);
+
 for (let t = 0; t < 1000 && getTerrainAt(initX, initY) === "water"; t++) {
   initX = Math.floor(Math.random() * safeX);
   initY = Math.floor(Math.random() * safeY);
@@ -232,7 +237,7 @@ const cameraSpeed = 50;
 const keysPressed = {};
 
 const ROOT2 = Math.sqrt(2);
-const INVROOT2 = 1 / Math.sqrt(2);
+const INVROOT2 = 1 / ROOT2;
 
 const moveVecByDir = [
   [ 1, 0 ],
@@ -633,13 +638,20 @@ function moveAllTogether(movers) {
   let didCollide = {};
 
   collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
+
+  // RESOLVE COLLISIONS
+
   // lazy first pass: halt colliders pre-collisions
 
-  const wasKilled = {};
+  const wasKilledBy = {};
 
   collidePairs.forEach(pair => {
-    if (pair[0] < 0 || pair[0].species === pair[1]. species) return;
-    wasKilled[pair[pair[1].species === "deer" ? 1 : 0]] = true;
+    // CURRENT: wolf KOs deer on any collide
+    // FUTURE: kill only when wolf is in Bite pose and front-on
+    if (pair[0] === -1 || pair[0].species === pair[1].species) return;
+    const deerIdx = pair[1].species === "deer" ? 1 : 0;
+    const wolfIdx = deerIdx ? 0 : 1;
+    wasKilledBy[pair[deerIdx]] = pair[wolfIdx];
   });
 
   movers.forEach((mover, idx) => {
@@ -647,8 +659,8 @@ function moveAllTogether(movers) {
     if (mover.nextGX === mover.gx && mover.nextGY === mover.gy) return;
 
     if (didCollide[idx]) {
-      if (wasKilled[idx]) {
-        setCritterDeath(movers[idx]);
+      if (wasKilledBy[idx]) {
+        startCritterDeath(movers[idx], wasKilledBy[idx]);
       } else {
         // this mover's gx and gy do NOT get updated this tick
         // and it should decide on a new movement to try for next tick
@@ -793,7 +805,7 @@ function setCritterIdle(a) {
   a.nextGX = a.gx;
   a.nextGY = a.gy;
   a.pose = "idle";
-  updateCritterFrame(a);
+  updateCritterFrame(a, true);
 }
 
 const wolfAudibleToDeerL2ByTerrainAndSpeed = {
@@ -982,15 +994,20 @@ function enactDecision(a, decision) {
   }
 }
 
-function setCritterDeath(a) {
-  if (!a || a.species !== "deer") return alert("Invalid arg to setCritterDeath");
+function enqDelayed(rxn, ticks, opts = {}) {
+  return;
+}
 
-  if (a.pose === "death") return;
+function startCritterDeath(a, killer) {
+  if (!a || a.species !== "deer") return alert("Invalid arg to startCritterDeath");
+
+  if (a.pose === "death" || a.pose === "dead") return;
   a.speed = 0;
   a.nextGX = a.gx;
   a.nextGY = a.gy;
   a.pose = "death";
-  updateCritterFrame(a);
+  enqDelayed("eat", frameDataBySpeciesAndPose[a.species]["death"], { a: a, killer: killer });
+  updateCritterFrame(a, true);
 }
 
 function updateCritterAction(a) {

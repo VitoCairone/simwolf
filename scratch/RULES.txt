@@ -5,20 +5,3 @@
     (b) keyboard key icons
 
 (3) No METERS anywhere on the field
-
-NEXT STEP
-    set Tue 6-17:
-        (1) implement Wolf kills Deer on collide
-        [WIP] (2) implement Deer threat detection [done by 6-23]
-        [WIP] (3) implement Deer flee on threat [done by 6-23]
-        (4) implement three speeds for Wolf and Deer with Fatigue/Coldown
-        (5) implement eight facing sprites for Wolf and Deer
-
-    set Wed 6-18:
-        [DONE] (6) revise visible tiles method for efficiency: [done by 6-23]
-            -> collect appropriate minimal collection
-            -> update only when necessary
-        [DONE] (7) fix zoom to preserve visible area center [done by 6-23]
-
-    set Thu 6-19
-        (8) break JavaScript into files
