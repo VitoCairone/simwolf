@@ -72,4 +72,5 @@ Sun Aug 1
 
 Mon Aug 11
     Task: Add logic for onCollide
-    11:28 - 
+    11:28 - 11:52
+        * add kill-eat logic: onceThenPose, startCritterDeath
