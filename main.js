@@ -1045,25 +1045,21 @@ function startCritterDeath(a, killer) {
   a.nextGX = a.gx;
   a.nextGY = a.gy;
   a.pose = "death";
-  enqDelayed("decontrol", frameDataBySpeciesAndPose[a.species]["death"], { a: a, killer: killer });
+  const deathAnimTks = 20; // TODO: put in sprite data
+  enqDelayed("decontrol", deathAnimTks, { a: a, killer: killer });
   updateCritterFrame(a, true);
 }
 
 function updateCritterAction(a) {
   if (a === wolves[0] && handMovesWolf()) return;
   a.redecideCd = 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
-  // note this is the default time, decisions may override
+  // note this is only the default time, decisions may override
 
   const decision = makeDecision(a);
   if (decision) { 
     enactDecision(a, decision); 
     return;
   }
-
-  // if (a.species === "deer") {
-  //   console.log("others:")
-  //   console.log([...getOthers(a)])
-  // }
 
   // no decision, update action at random
   if (Math.random() < 0.1) { setCritterIdle(a); return; }
