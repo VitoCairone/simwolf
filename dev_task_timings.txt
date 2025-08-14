@@ -74,3 +74,9 @@ Mon Aug 11
     Task: Add logic for onCollide
     11:28 - 11:52
         * add kill-eat logic: onceThenPose, startCritterDeath
+
+Thu Aug 15
+    Micro: Add code . to Macbook shell
+    Task: Continue logic for onCollide
+    2:14 - 2:45 (31m)
+        * add decontrol reaction 2:45

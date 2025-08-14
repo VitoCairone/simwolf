@@ -231,6 +231,7 @@ wolves.forEach(wolf => { initCritter(wolf, "wolf"); });
 deer.forEach(aDeer => { initCritter(aDeer, "deer"); });
 
 const allCritters = wolves.concat(deer);
+const allCorpses = [];
 
 forbidOverlapsOnStart();
 const cameraSpeed = 50;
@@ -683,11 +684,11 @@ function moveAllTogether(movers) {
 }
 
 function deleteCritter(critter) {
-  if (critter === 0) return alert("cannot delete critter 0 in this version");
   if (!critter) return; // return alert("falsy arg to deleteCritter");
   if (typeof critter !== "object") return alert("invalid arg type to deleteCritter");
   const idx = allCritters.indexOf(critter);
   if (idx === -1) return alert("arg object to deleteCritter not in list");
+  if (idx === 0) return alert("cannot delete critter 0 in this version");
 
   critter.element.remove();
   allCritters.splice(idx, 1);
@@ -721,6 +722,7 @@ function forbidOverlapsOnStart() {
 
 function gameLoop(isStepThrough = false) {
   if (isPaused && !isStepThrough) return;
+
   let hasInput = arrowKeyNames.some(ak => keysPressed[ak]);
   if (hasInput) {
     if (arrowsMoveWolf) {
@@ -737,6 +739,8 @@ function gameLoop(isStepThrough = false) {
       updateCamera();
     }
   }
+
+  deqCurrentDelayed();
 
   updateAllCritters();
 
@@ -994,8 +998,43 @@ function enactDecision(a, decision) {
   }
 }
 
+// TODO: array is currently used for simplicity, but
+// it is slow to insert-in-place sorted. Consider using
+// Linked List instead which is both fast insert-in-place and 
+// fast deque.
+// The arr version is stored DESCENDING sorted for fast deque.
+const delayedRxnArr = []
+
 function enqDelayed(rxn, ticks, opts = {}) {
+  const tick = g_tick + ticks;
+  var iNew = 0;
+  // list is sorted decreasing
+  while (iNew < delayedRxnArr.length && delayedRxnArr[iNew].tick > tick) iNew++;
+  delayedRxnArr.splice(iNew, 0, {rxn: rxn, opts: opts, tick: tick});
   return;
+}
+
+function runRxn(rxn) {
+  const opts = rxn.opts;
+  switch (rxn.rxn) {
+    case 'decontrol':
+      if (a.kind !== 'critter') {
+        console.log('Err: Non-critter to decontrol rxn');
+        return;
+      }
+      deleteCritter(a);
+      a.kind = 'corpse';
+      allCorpses.push(a);
+    break;
+    default:
+      console.log("Err: Unknown reaction to runRxn");
+      return;
+  }
+}
+
+function deqCurrentDelayed() {
+  while (delayedRxnArr.length && delayedRxnArr.at(-1).tick <= g_tick)
+    runRxn(delayedRxnArr.pop());
 }
 
 function startCritterDeath(a, killer) {
@@ -1006,7 +1045,7 @@ function startCritterDeath(a, killer) {
   a.nextGX = a.gx;
   a.nextGY = a.gy;
   a.pose = "death";
-  enqDelayed("eat", frameDataBySpeciesAndPose[a.species]["death"], { a: a, killer: killer });
+  enqDelayed("decontrol", frameDataBySpeciesAndPose[a.species]["death"], { a: a, killer: killer });
   updateCritterFrame(a, true);
 }
 
