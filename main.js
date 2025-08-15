@@ -586,7 +586,7 @@ function updateAllCritters() {
 
   allCritters.forEach(a => {
     // todo: combine this better with setPresentOthers() so that a wolf
-    // which spots a deer or vice versa will respond on a predictable short delay
+    // which spots a deer or vice versa will respond on a predictable delay
     // e.g. a realistic reaction time of 120 ms (7 ticks)
     a.redecideCd--;
     if (a.redecideCd <= 0) updateCritterAction(a);
@@ -613,7 +613,7 @@ function updateAllCritters() {
     }
   });
 
-  moveAllTogether(allCritters);
+  moveAllTogether(allCritters, allCorpses);
 }
 
 function applyFatigue(a) {
@@ -634,8 +634,9 @@ function applyFatigue(a) {
   }
 }
 
-function moveAllTogether(movers) {
-  const collidePairs = findCollidingPairs(movers);
+function moveAllTogether(movers, statics = []) {
+  const allColliders = movers.concat(statics);
+  const collidePairs = findCollidingPairs(allColliders);
   let didCollide = {};
 
   collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
@@ -650,6 +651,11 @@ function moveAllTogether(movers) {
     // CURRENT: wolf KOs deer on any collide
     // FUTURE: kill only when wolf is in Bite pose and front-on
     if (pair[0] === -1 || pair[0].species === pair[1].species) return;
+    if (pair[1].kind === "corpse" && pair[0].kind === "critter"
+      && pair[0].species === "wolf") {
+        startEat(pair[0], pair[1]);
+        return;
+    }
     const deerIdx = pair[1].species === "deer" ? 1 : 0;
     const wolfIdx = deerIdx ? 0 : 1;
     wasKilledBy[pair[deerIdx]] = pair[wolfIdx];
@@ -931,6 +937,7 @@ function getOthers(a) {
 
 // makeDecision should not write any world or body state
 function makeDecision(a) {
+  if (a.isHalted) return ["halted", {}];
   // currently only decision making is deer fleeing
   if (a.species !== "deer") return null;
 
@@ -991,8 +998,9 @@ function enactDecision(a, decision) {
         fleeY += fleeVec[1] * wt;
       });
       setCritterMoving(a, getDir(fleeX, fleeY));
-      return;
-    
+      break;
+    case "halted":
+      break;
     default:
       return alert("unknown decision to enactDecision");
   }
@@ -1050,6 +1058,10 @@ function startCritterDeath(a, killer) {
   updateCritterFrame(a, true);
 }
 
+function onStruck(a, by = null) {
+  haltCritter(a, 2 * 60);
+}
+
 function updateCritterAction(a) {
   if (a === wolves[0] && handMovesWolf()) return;
   a.redecideCd = 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
@@ -1100,7 +1112,7 @@ function isOpaque(terrain) {
 // returns a list of pairs of integers e.g. [[1,2], [3,6]]
 function findCollidingPairs(creatures) {
 
-  const tileMap = new Map();  // key: tile "x_y", value: index of creature
+  const tileMap = new Map();  // key: tile "x_y", value: critter indexes
   const potentialPairs = new Set();  // store "i|j" where i < j
 
   for (let i = 0; i < creatures.length; i++) {
@@ -1139,17 +1151,6 @@ function findCollidingPairs(creatures) {
 
   return collisions;
 }
-
-// function classedCollisions(masterList, collidePairs) {
-//   if (!masterList || !collidePairs) return alert("invalid args to classedCollisions");
-//   return collidePairs.map(pair => {
-//     if (pair[0] < 0) return [pair[0], pair[1], "imps"];
-//     const [m1, m2] = pair.map(idx => masterList[idx]);
-//     if (m1.species === m2.species) return [pair[0], pair[1], "bump"]
-//     // order attacks with target first
-//     return m1.species === "wolf" ? [pair[0], pair[1], "atck"] : [pair[1], pair[0], "atck"]
-//   });
-// }
 
 
 const DIR_E  = 0;
