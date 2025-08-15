@@ -937,7 +937,6 @@ function getOthers(a) {
 
 // makeDecision should not write any world or body state
 function makeDecision(a) {
-  if (a.isHalted) return ["halted", {}];
   // currently only decision making is deer fleeing
   if (a.species !== "deer") return null;
 
@@ -999,8 +998,6 @@ function enactDecision(a, decision) {
       });
       setCritterMoving(a, getDir(fleeX, fleeY));
       break;
-    case "halted":
-      break;
     default:
       return alert("unknown decision to enactDecision");
   }
@@ -1058,12 +1055,16 @@ function startCritterDeath(a, killer) {
   updateCritterFrame(a, true);
 }
 
-function onStruck(a, by = null) {
-  haltCritter(a, 2 * 60);
+function onStruck(a) {
+  a.isHaltedUntil = g_tick + 120;
 }
 
 function updateCritterAction(a) {
   if (a === wolves[0] && handMovesWolf()) return;
+  if (a.isHaltedUntil) {
+    if (a.isHaltedUntil <= g_tick) delete a.isHaltedUntil;
+    return;
+  }
   a.redecideCd = 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
   // note this is only the default time, decisions may override
 
