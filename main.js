@@ -1056,6 +1056,13 @@ function startCritterDeath(a, killer) {
 }
 
 function onStruck(a) {
+  if (a.pose !== "halted") {
+    a.speed = 0;
+    a.nextGX = a.gx;
+    a.nextGY = a.gy;
+    a.pose = "halted";
+    updateCritterFrame(a, true);
+  }
   a.isHaltedUntil = g_tick + 120;
 }
 

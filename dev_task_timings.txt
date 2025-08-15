@@ -80,5 +80,5 @@ Thu Aug 15
     Task: Continue logic for onCollide
     2:14 - 2:45 (31m)
         * add decontrol reaction 2:45
-    9:30 - 9:47 (17m)
+    9:30 - 9:58 (28m)
         * revise collisions + add onStruck
