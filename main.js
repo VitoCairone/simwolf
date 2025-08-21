@@ -1,11 +1,7 @@
-const fieldElement = document.getElementById("field");
-const tileLayer = document.getElementById("tile-layer");
-const spriteLayer = document.getElementById("sprite-layer");
-const debugLayer = document.getElementById("debug-layer");
 const zoomInBtn = document.getElementById("zoom-in");
 const zoomOutBtn = document.getElementById("zoom-out");
-const debugWolfEl = document.getElementById("dbel-pc-wolf");
 
+let animat = null;
 let g_tick = 0; // updates ONE PLACE ONLY in gameLoop
 let g_next_uid = 0;
 let isPaused = false;
@@ -116,13 +112,10 @@ const frameDataBySpeciesAndPose = {
   }
 }
 
-// TODO: rearrange sprite rows to match DIR_NAME order
-function spriteRow(a) {
-  // TODO: rearrange sprite rows for simpler formula floor(dir/2)
-  return (Math.floor(a.currentDirection / 2) + 1) % 4;
-}
-
+// TODO: revise this name and calling method for use of tempo
 function updateCritterFrame(a, rezero = false) {
+  // At present World needs to control this method for proper
+  // onceThenPose behavior to shift between poses
   a.animTimer = 0;
   const frameData = frameDataBySpeciesAndPose[a.species][a.pose];
   a.frame = rezero ? 0 : ( (a.frame + 1) % frameData.nFrames );
@@ -130,34 +123,7 @@ function updateCritterFrame(a, rezero = false) {
     a.pose = frameData.onceThenPose;
     return updateCritterFrame(a, true);
   }
-  const frameCol = frameData.colZero + a.frame;
-  a.element.style.backgroundPosition =
-    `-${frameCol * frameData.frameW}px -${spriteRow(a) * frameData.frameH}px`;
-}
-
-function placeDebugWolfEl() {
-  const [isoX, isoY] = isoProject(pcWolf.gx, pcWolf.gy);
-  // debug element, which has the dimensions of a tile (32 x 16),
-  // should be placed so that its center is the same as the wolf's center;
-  // to simplify the math it is its own image with no extra pixels.
-  debugWolfEl.style.left = (isoX - halfTile) + "px";
-  debugWolfEl.style.top = (isoY - qtrTile) + "px";
-}
-
-function placeCritterSprite(a) {
-  const [isoX, isoY] = isoProject(a.gx, a.gy);
-
-  // critter image is offset so its noon-shadow center is at its grid coordinate
-  const frameData = frameDataBySpeciesAndPose[a.species][a.pose];
-  const leftOffset = frameData.frameW / 2;
-  const topOffset = frameData.hasOwnProperty('topToShadow')
-    ? frameData.topToShadow : (frameData.frameH / 2);
-
-  a.element.style.left = (isoX - leftOffset) + "px";
-  a.element.style.top = (isoY - topOffset) + "px";
-  a.element.style.zIndex = a.gx + a.gy;
-
-  if (a === pcWolf) placeDebugWolfEl();
+  animat.updateCritterFrame(a, frameData);
 }
 
 // Wolf setup
@@ -182,7 +148,7 @@ function randomlyPlaceCritter(a) {
   setCritterIdle(a);
 
   updateCritterFrame(a, true);
-  placeCritterSprite(a);
+  animat.placeCritterSprite(a);
 }
 
 // searchmeta makeCritter createCritter makeWolf createWolf makeWisp createWisp
@@ -201,13 +167,13 @@ function initCritter(a, species) {
   a.holdInfoUntil = {};
   a.fatigue = 0;
 
-  const el = document.createElement("div");
-  el.classList.add(species);
-  spriteLayer.appendChild(el);
-  a.element = el;
+  animat.addCritter(a);
   randomlyPlaceCritter(a);
+
+  return a;
 }
 
+// DOUBLECHECK if these are needed in main
 let viewportWidth = document.getElementById('field-wrapper').clientWidth;
 let viewportHeight = document.getElementById('field-wrapper').clientHeight;
 
@@ -227,10 +193,7 @@ for (let t = 0; t < 1000 && getTerrainAt(initX, initY) === "water"; t++) {
 }
 if (getTerrainAt(initX, initY) === "water") alert("No land found in map");
 
-wolves.forEach(wolf => { initCritter(wolf, "wolf"); });
-deer.forEach(aDeer => { initCritter(aDeer, "deer"); });
-
-const allCritters = wolves.concat(deer);
+const allCritters = [];
 const allCorpses = [];
 
 forbidOverlapsOnStart();
@@ -264,53 +227,29 @@ function handMovesWolf() {
   return arrowsMoveWolf || (mouseMovesWolf && mouseInInputField);
 }
 
-function centerCameraOnGXY(gx, gy) {
-  const [px , py] = isoProject(gx, gy);
-  worldShiftPX = px - viewportWidth / 2;
-  worldShiftPY = py - viewportHeight / 2;
-  updateCamera();
-}
-
-function setCameraToPCWolf() { centerCameraOnGXY(pcWolf.gx, pcWolf.gy); }
-
 arrowsToggle.addEventListener('click', () => {
   arrowsMoveWolf = !arrowsMoveWolf;
   arrowsIcon.innerHTML = arrowsMoveWolf ? wolfIconSVG : cameraIconSVG;
-  if (arrowsMoveWolf) setCameraToPCWolf();
+  if (arrowsMoveWolf) animat.setCameraToPCWolf();
 });
 
-function updateZoomButtons() {
-  zoomInBtn.disabled = zoom >= zoomMax;
-  zoomOutBtn.disabled = zoom <= zoomMin;
-}
-
 zoomInBtn.addEventListener("click", () => {
+  if (!animat) return;
   if (zoom < zoomMax) {
     zoom *= 2;
-    updateCamera();
-    updateZoomButtons();
+    animat.updateCamera();
+    animat.updateZoomButtons();
   }
 });
 
 zoomOutBtn.addEventListener("click", () => {
   if (zoom > zoomMin) {
     zoom /= 2;
-    clearAllRenderedTiles();
-    updateCamera();
-    updateZoomButtons();
+    animat.clearAllRenderedTiles();
+    animat.updateCamera();
+    animat.updateZoomButtons();
   }
 });
-
-updateZoomButtons();
-
-const renderedTiles = new Map();
-
-function clearAllRenderedTiles() {
-  for (const key of renderedTiles.keys()) {
-    tileLayer.removeChild(renderedTiles.get(key));
-    renderedTiles.delete(key);
-  }
-}
 
 function jag(x) {
   return 2 * Math.abs(x - Math.floor(x + 0.5));
@@ -356,66 +295,6 @@ function getTerrainAt(gx, gy) {
 
 function getTileClassAt(x, y) {
   return getTerrainAt(x, y)
-}
-
-function renderVisibleTiles() {
-  // Note the absence of factoring for zoom;
-  // this method collects the square which contains
-  // all tiles (actually twice as many because it surrounds the displayed diamond)
-  // at zoom = 1, ergo always more than enough at higher zoom.
-
-  const cornerPs = [
-    [worldShiftPX, worldShiftPY], // TopLeft
-    [worldShiftPX + viewportWidth, worldShiftPY], // TopRight
-    [worldShiftPX, worldShiftPY + viewportHeight], // BotLeft
-    [worldShiftPX + viewportWidth, worldShiftPY + viewportHeight] // BotRight
-  ];
-  const cornerGs = cornerPs.map(pair => rectiProject(...pair));
-
-  const iMin = Math.max(0, Math.floor(cornerGs[0][0]));
-  const iMax = Math.min(gridWidthN - 1, Math.floor(cornerGs[3][0]));
-  const jMin = Math.max(0, Math.floor(cornerGs[1][1]));
-  const jMax = Math.min(gridHeightN - 1 ,Math.floor(cornerGs[2][1]));
-
-  for (const key of renderedTiles.keys()) {
-    const [i, j] = key.split('_').map(Number);
-    if (i < iMin || i > iMax || j < jMin || j > jMax) {
-      tileLayer.removeChild(renderedTiles.get(key));
-      renderedTiles.delete(key);
-    }
-  }
-
-  for (let j = jMin; j <= jMax; j++) {
-    for (let i = iMin; i <= iMax; i++) {
-      const key = `${i}_${j}`;
-      if (renderedTiles.has(key)) continue;
-
-      // TODO: cache this check to reduce redundant work
-      const tileClass = getTileClassAt(i, j);
-
-      const tile = document.createElement("div");
-      tile.className = `tile ${tileClass}`;
-      tile.style.zIndex = i + j;
-
-      const [px, py] = isoProject(i, j);
-      tile.style.left = `${px - halfTile}px`;
-      tile.style.top = `${py - tileRiserPY}px`;
-
-      tileLayer.appendChild(tile);
-      renderedTiles.set(key, tile);
-    }
-  }
-}
-
-function updateCamera() {
-  worldShiftPX = boundVal(worldShiftPX, -worldRadPX, worldRadPX - viewportWidth);
-  worldShiftPY = boundVal(worldShiftPY, 0, (worldDiamPY + tileRiserPY) - viewportHeight);
-  
-  renderVisibleTiles();
-
-  const [zoX, zoY] = [worldShiftPX + viewportWidth / 2, worldShiftPY + viewportHeight / 2];
-  document.getElementById("field").style.transformOrigin = `${zoX}px ${zoY}px`;
-  document.getElementById("field").style.transform = `translate(${-worldShiftPX}px, ${-worldShiftPY}px) scale(${zoom})`;
 }
 
 function getOnTileXY(a) {
@@ -554,22 +433,23 @@ function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
   return fullTrace ? shifts.map(s => shiftToGrid(s)) : shiftToGrid([i, j]);
 }
 
-function updateSinals(a) {
-  if (areSetsEqual(a.priorOthers, a.presentOthers)) return;
+// currently not called
+// function updateSignals(a) {
+//   if (areSetsEqual(a.priorOthers, a.presentOthers)) return;
 
-  const newSignals = a.presentOthers.difference(a.priorOthers);
-  const lostSignals = a.priorOthers.difference(a.presentOthers);
+//   const newSignals = a.presentOthers.difference(a.priorOthers);
+//   const lostSignals = a.priorOthers.difference(a.presentOthers);
 
-  if (lostSignals.size) {
-    console.log(`${a.species} lost signal`);
-    holdInfo(a, "lostSignals", {signals: lostSignals }, 360);
-  }
+//   if (lostSignals.size) {
+//     console.log(`${a.species} lost signal`);
+//     holdInfo(a, "lostSignals", {signals: lostSignals }, 360);
+//   }
 
-  if (newSignals.size) {
-    console.log(`${a.species} got new signal`);
-    if (a.redecideCd < 7) a.redecideCd = 7;
-  }
-}
+//   if (newSignals.size) {
+//     console.log(`${a.species} got new signal`);
+//     if (a.redecideCd < 7) a.redecideCd = 7;
+//   }
+// }
 
 function updateAllCritters() {
   setPresentOthersIneffMethod();
@@ -628,10 +508,7 @@ function applyFatigue(a) {
       setCritterMoving(a, a.currentDirection, fatigueData.downTo);
     }
   }
-  if (a === pcWolf && g_tick % 6 === 0) {
-    document.getElementById("fatigue-meter-fill").style.width =
-      `${Math.min(100 * a.fatigue / fatigueBySpecies.run.forceEnd, 100)}%`;
-  }
+  if (a === pcWolf && g_tick % 6 === 0) animat.updateFatigueMeter();
 }
 
 function moveAllTogether(movers, statics = []) {
@@ -681,9 +558,9 @@ function moveAllTogether(movers, statics = []) {
       mover.gx = mover.nextGX;
       mover.gy = mover.nextGY;
       if (mover === pcWolf) { // TODO: allow for detaching camera from wolf
-        setCameraToPCWolf();
+        animat.setCameraToPCWolf();
       }
-      placeCritterSprite(mover);
+      animat.placeCritterSprite(mover);
       applyFatigue(mover);
     }
   });
@@ -742,7 +619,7 @@ function gameLoop(isStepThrough = false) {
       if (keysPressed["ArrowDown"]) { worldShiftPY += cameraSpeed; }
       if (keysPressed["ArrowLeft"]) { worldShiftPX -= cameraSpeed; }
       if (keysPressed["ArrowRight"]) { worldShiftPX += cameraSpeed; }
-      updateCamera();
+      animat.updateCamera();
     }
   }
 
@@ -1219,11 +1096,14 @@ document.addEventListener("keyup", (e) => { keysPressed[e.key] = false; });
 window.addEventListener('resize', () => {
   viewportWidth = document.getElementById('field-wrapper').clientWidth;
   viewportHeight = document.getElementById('field-wrapper').clientHeight;
-  updateCamera();
+  animat.updateCamera();
 });
 
 window.onload = function () {
-  setCameraToPCWolf();
+  wolves.forEach(wolf => { allCritters.push(initCritter(wolf, "wolf")); });
+  deer.forEach(aDeer => { allCritters.push(initCritter(aDeer, "deer")); });
+
+  animat.setCameraToPCWolf();
   addCursorTracker();
   gameLoop();
 };

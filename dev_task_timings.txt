@@ -82,3 +82,8 @@ Thu Aug 15
         * add decontrol reaction 2:45
     9:30 - 9:58 (28m)
         * revise collisions + add onStruck
+
+Fri Aug 16
+    Task: Split out renderer from core logic
+    11:13 - 11:51 (38m)
+        * split main.js into main and animat
