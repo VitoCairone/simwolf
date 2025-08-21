@@ -92,3 +92,5 @@ Fri Aug 16
         * add tempo
     4:49 - 5:16
         * add consoleOnlyMode
+    5:45 - 6:07
+        * add canAtAgeBySpecies

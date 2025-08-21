@@ -119,6 +119,39 @@ const frameDataBySpeciesAndPose = {
   }
 }
 
+const hourS = 60 * 60;
+const dayS = 24 * hourS;
+const yearS = dayS * 365;
+const monthS = yearS / 12;
+
+// full table here fo reference is simplified for MVP use to one value each
+const canAtAgeBySpecies =  {
+  wolf: {
+    see:    { min: 9 * dayS,  avg: 12 * dayS,  max: 15 * dayS },
+    hear:   { min: 10 * dayS, avg: 14 * dayS,  max: 18 * dayS },
+    walk:   { min: 14 * dayS, avg: 18 * dayS,  max: 21 * dayS },
+    eat:    { min: 19 * dayS, avg: 25 * dayS,  max: 35 * dayS },
+    run:    { min: 25 * dayS, avg: 28 * dayS,  max: 35 * dayS },
+    mate:   { min: 18 * monthS, avg: 24 * monthS,  max: 36 * monthS },
+    liveTo: { min: 6 * yearS, avg: 8 * yearS, max: 16 * yearS }
+  },
+  deer: {
+    see:    { min: 0, avg: 0, max: 0 },
+    hear:   { min: 0, avg: 0, max: 0 },
+    walk:   { min: 0.25 * hourS, avg: 0.5 * hourS, max: 1 * hourS},
+    eat:    { min: 10 * dayS, avg: 20 * dayS,  max: 30 * dayS },
+    run:    { min: 1 * dayS, avg: 2 * dayS, max: 3 * dayS },
+    mate:   { min: 16 * monthS, avg: 24 * monthS,  max: 36 * monthS },
+    liveTo: { min: 8 * yearS, avg: 12 * yearS, max: 25 * yearS }
+  }
+}
+['wolf', 'deer'].forEach(species => {
+  ['see', 'hear', 'walk', 'eat', 'run', 'mate'].forEach(can => {
+    canAtAgeBySpecies[species][can] = canAtAgeBySpecies[species][can].avg;
+  });
+  canAtAgeBySpecies[species].liveTo = canAtAgeBySpecies[species].liveTo.max;
+});
+
 // TODO: revise this name and calling method for use of tempo
 function updateCritterFrame(a, rezero = false) {
   // At present World needs to control this method for proper

@@ -78,6 +78,10 @@ if (!consoleOnlyMode) {
     document.getElementById("field").style.transform = `translate(${-worldShiftPX}px, ${-worldShiftPY}px) scale(${zoom})`;
   }
 
+  // TODO: animat currently creates critters when world does and updates
+  // all critters per frame. Change to have only the number of divs needed
+  // for the number of critters visible in the window, and only update
+  // sprite frames and placements for those which are visible.
   animat.addCritter = function(a) {
     const el = document.createElement("div");
     el.classList.add(a.species);
