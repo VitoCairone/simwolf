@@ -1,6 +1,7 @@
 const zoomInBtn = document.getElementById("zoom-in");
 const zoomOutBtn = document.getElementById("zoom-out");
 
+let consoleOnlyMode = true;
 let animat = null;
 let g_tick = 0; // updates ONE PLACE ONLY in gameLoop
 let g_next_uid = 0;
@@ -13,6 +14,7 @@ const zoomMin = 1;
 const zoomMax = 8;
 
 let tempo = 1/60;
+// TODO: change speed convert so it responds when tempo is changed at runtime
 
 // parameters
 const tileSize = 32;
@@ -128,7 +130,7 @@ function updateCritterFrame(a, rezero = false) {
     a.pose = frameData.onceThenPose;
     return updateCritterFrame(a, true);
   }
-  animat.updateCritterFrame(a, frameData);
+  animat?.updateCritterFrame(a, frameData);
 }
 
 // Wolf setup
@@ -153,7 +155,7 @@ function randomlyPlaceCritter(a) {
   setCritterIdle(a);
 
   updateCritterFrame(a, true);
-  animat.placeCritterSprite(a);
+  animat?.placeCritterSprite(a);
 }
 
 // searchmeta makeCritter createCritter makeWolf createWolf makeWisp createWisp
@@ -172,7 +174,7 @@ function initCritter(a, species) {
   a.holdInfoUntil = {};
   a.fatigue = 0;
 
-  animat.addCritter(a);
+  animat?.addCritter(a);
   randomlyPlaceCritter(a);
 
   return a;
@@ -229,30 +231,30 @@ let arrowsMoveWolf = false;
 let mouseInInputField = false;
 
 function handMovesWolf() {
-  return arrowsMoveWolf || (mouseMovesWolf && mouseInInputField);
+  return !consoleOnlyMode && (arrowsMoveWolf || (mouseMovesWolf && mouseInInputField));
 }
 
 arrowsToggle.addEventListener('click', () => {
   arrowsMoveWolf = !arrowsMoveWolf;
   arrowsIcon.innerHTML = arrowsMoveWolf ? wolfIconSVG : cameraIconSVG;
-  if (arrowsMoveWolf) animat.setCameraToPCWolf();
+  if (arrowsMoveWolf) animat?.setCameraToPCWolf();
 });
 
 zoomInBtn.addEventListener("click", () => {
   if (!animat) return;
   if (zoom < zoomMax) {
     zoom *= 2;
-    animat.updateCamera();
-    animat.updateZoomButtons();
+    animat?.updateCamera();
+    animat?.updateZoomButtons();
   }
 });
 
 zoomOutBtn.addEventListener("click", () => {
   if (zoom > zoomMin) {
     zoom /= 2;
-    animat.clearAllRenderedTiles();
-    animat.updateCamera();
-    animat.updateZoomButtons();
+    animat?.clearAllRenderedTiles();
+    animat?.updateCamera();
+    animat?.updateZoomButtons();
   }
 });
 
@@ -513,7 +515,7 @@ function applyFatigue(a) {
       setCritterMoving(a, a.currentDirection, fatigueData.downTo);
     }
   }
-  if (a === pcWolf && g_tick % 6 === 0) animat.updateFatigueMeter();
+  if (a === pcWolf && g_tick % 6 === 0) animat?.updateFatigueMeter();
 }
 
 function moveAllTogether(movers, statics = []) {
@@ -563,9 +565,9 @@ function moveAllTogether(movers, statics = []) {
       mover.gx = mover.nextGX;
       mover.gy = mover.nextGY;
       if (mover === pcWolf) { // TODO: allow for detaching camera from wolf
-        animat.setCameraToPCWolf();
+        animat?.setCameraToPCWolf();
       }
-      animat.placeCritterSprite(mover);
+      animat?.placeCritterSprite(mover);
       applyFatigue(mover);
     }
   });
@@ -611,20 +613,25 @@ function forbidOverlapsOnStart() {
 function gameLoop(isStepThrough = false) {
   if (isPaused && !isStepThrough) return;
 
-  let hasInput = arrowKeyNames.some(ak => keysPressed[ak]);
-  if (hasInput) {
-    if (arrowsMoveWolf) {
-      // for simplicity, the arrow keys currently move along grid axis and don't combine
-      if (keysPressed["ArrowUp"]) { setCritterMoving(pcWolf, DIR_N); }
-      if (keysPressed["ArrowDown"]) { setCritterMoving(pcWolf, DIR_S); }
-      if (keysPressed["ArrowLeft"]) { setCritterMoving(pcWolf, DIR_W); }
-      if (keysPressed["ArrowRight"]) { setCritterMoving(pcWolf, DIR_E); }
-    } else {
-      if (keysPressed["ArrowUp"]) { worldShiftPY -= cameraSpeed; }
-      if (keysPressed["ArrowDown"]) { worldShiftPY += cameraSpeed; }
-      if (keysPressed["ArrowLeft"]) { worldShiftPX -= cameraSpeed; }
-      if (keysPressed["ArrowRight"]) { worldShiftPX += cameraSpeed; }
-      animat.updateCamera();
+  if (consoleOnlyMode) {
+    const tps = g_tick / ((Date.now() - startRealtime) / 1000)
+    console.log("Begin gameLoop tick=" + g_tick + " + tps=" + tps);
+  } else {
+    const hasInput = arrowKeyNames.some(ak => keysPressed[ak]);
+    if (hasInput) {
+      if (arrowsMoveWolf) {
+        // for simplicity, the arrow keys currently move along grid axis and don't combine
+        if (keysPressed["ArrowUp"]) { setCritterMoving(pcWolf, DIR_N); }
+        if (keysPressed["ArrowDown"]) { setCritterMoving(pcWolf, DIR_S); }
+        if (keysPressed["ArrowLeft"]) { setCritterMoving(pcWolf, DIR_W); }
+        if (keysPressed["ArrowRight"]) { setCritterMoving(pcWolf, DIR_E); }
+      } else {
+        if (keysPressed["ArrowUp"]) { worldShiftPY -= cameraSpeed; }
+        if (keysPressed["ArrowDown"]) { worldShiftPY += cameraSpeed; }
+        if (keysPressed["ArrowLeft"]) { worldShiftPX -= cameraSpeed; }
+        if (keysPressed["ArrowRight"]) { worldShiftPX += cameraSpeed; }
+        animat?.updateCamera();
+      }
     }
   }
 
@@ -633,14 +640,25 @@ function gameLoop(isStepThrough = false) {
   updateAllCritters();
 
   g_tick++; // nowhere else may update g_tick
-  if (!isPaused) requestAnimationFrame(gameLoop);
+  if (!isPaused) {
+    if (consoleOnlyMode) {
+      // using setTimeout will trigger gameLoop in the next execution frame,
+      // avoiding any issue of stack overflow from unbounded recursion
+      return setTimeout(gameLoop, 0);
+      // TODO: recursion achieves a speed on same hardware of 1045 tk/s
+      // vs only 165 tk/s with setTimeout. See about implementing limited
+      // iterative or recursive gameLoops() in batches to improve
+      // runspeed.
+    }
+    requestAnimationFrame(gameLoop);
+  }
 }
 
 let mouseVecX = 0;
 let mouseVecY = 0;
 
 function updateMovementByMouse() {
-  if (!mouseMovesWolf) return alert("Called updateMovevementByMouse out of context");
+  if (consoleOnlyMode || !mouseMovesWolf) return alert("Called updateMovevementByMouse out of context");
   const mag = Math.hypot(mouseVecX, mouseVecY);
 
   if (mag >= 0.9) {
@@ -1102,14 +1120,16 @@ document.addEventListener("keyup", (e) => { keysPressed[e.key] = false; });
 window.addEventListener('resize', () => {
   viewportWidth = document.getElementById('field-wrapper').clientWidth;
   viewportHeight = document.getElementById('field-wrapper').clientHeight;
-  animat.updateCamera();
+  animat?.updateCamera();
 });
+
+let startRealtime = Date.now();
 
 window.onload = function () {
   wolves.forEach(wolf => { allCritters.push(initCritter(wolf, "wolf")); });
   deer.forEach(aDeer => { allCritters.push(initCritter(aDeer, "deer")); });
 
-  animat.setCameraToPCWolf();
-  addCursorTracker();
+  animat?.setCameraToPCWolf();
+  if (!consoleOnlyMode) addCursorTracker();
   gameLoop();
 };

@@ -87,3 +87,8 @@ Fri Aug 16
     Task: Split out renderer from core logic
     11:13 - 11:51 (38m)
         * split main.js into main and animat
+    Task: Add tempo
+    4:40 - 4:49
+        * add tempo
+    4:49 - 5:16
+        * add consoleOnlyMode
