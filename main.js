@@ -12,6 +12,8 @@ let zoom = 1;
 const zoomMin = 1;
 const zoomMax = 8;
 
+let tempo = 1/60;
+
 // parameters
 const tileSize = 32;
 const tileRiserPY = 8;
@@ -89,6 +91,9 @@ function rectiProject(px, py) {
 
 // TODO: consider what data should be allowed to vary by pose and what data 
 // is fixed for the species
+// TODO: consider if frame holds should be in time or in ticks,
+// for now assumone animat only runs when tempo == 1/60 and adjust
+// for main logic only
 const frameDataBySpeciesAndPose = {
   wolf: { 
     walk: {nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
@@ -738,7 +743,7 @@ function canHear(a, b) {
   return distBetweenL2(a, b) <= rangeByPoseL2[b.pose];
 }
 
-const kphToTpTk = 0.0046296; // kilometers-per-hour to tiles-per-tick
+const kphToTpTk = 0.277777 * tempo; // kilometers-per-hour to tiles-per-tick
 const travelSpeedBySpeciesAndPose = {
   "wolf": {
     "walk": 6 * kphToTpTk, // all day
@@ -887,12 +892,12 @@ function enactDecision(a, decision) {
 // The arr version is stored DESCENDING sorted for fast deque.
 const delayedRxnArr = []
 
-function enqDelayed(rxn, ticks, opts = {}) {
-  const tick = g_tick + ticks;
+function enqDelayed(rxn, timeS, opts = {}) {
+  const end = g_tick * tempo + timeS;
   var iNew = 0;
   // list is sorted decreasing
-  while (iNew < delayedRxnArr.length && delayedRxnArr[iNew].tick > tick) iNew++;
-  delayedRxnArr.splice(iNew, 0, {rxn: rxn, opts: opts, tick: tick});
+  while (iNew < delayedRxnArr.length && delayedRxnArr[iNew].end > end) iNew++;
+  delayedRxnArr.splice(iNew, 0, {rxn: rxn, opts: opts, end: end});
   return;
 }
 
@@ -915,7 +920,8 @@ function runRxn(rxn) {
 }
 
 function deqCurrentDelayed() {
-  while (delayedRxnArr.length && delayedRxnArr.at(-1).tick <= g_tick)
+  const now = g_tick * tempo;
+  while (delayedRxnArr.length && delayedRxnArr.at(-1).end <= now)
     runRxn(delayedRxnArr.pop());
 }
 
@@ -927,8 +933,8 @@ function startCritterDeath(a, killer) {
   a.nextGX = a.gx;
   a.nextGY = a.gy;
   a.pose = "death";
-  const deathAnimTks = 20; // TODO: put in sprite data
-  enqDelayed("decontrol", deathAnimTks, { a: a, killer: killer });
+  const deathAnimTime = 20 * tempo; // TODO: put in sprite data
+  enqDelayed("decontrol", deathAnimTime, { a: a, killer: killer });
   updateCritterFrame(a, true);
 }
 
