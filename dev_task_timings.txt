@@ -94,3 +94,8 @@ Fri Aug 16
         * add consoleOnlyMode
     5:45 - 6:07
         * add canAtAgeBySpecies
+
+Fri Aug 22
+    Task: add g_now and implement can method
+    11:35 - 11:52
+        * add g_now and implement can method

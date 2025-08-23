@@ -3,7 +3,11 @@ const zoomOutBtn = document.getElementById("zoom-out");
 
 let consoleOnlyMode = true;
 let animat = null;
+let tempo = 1/60;
+// TODO: change speed convert so it responds when tempo is changed at runtime
 let g_tick = 0; // updates ONE PLACE ONLY in gameLoop
+let g_now = 0; // also updates ONLY ONE PLACE in gameLoop
+// g_now is elapsed seconds; IFF tempo stays constant, g_now = g_tick * tempo
 let g_next_uid = 0;
 let isPaused = false;
 // #zoom is mostly working except for two issues:
@@ -12,9 +16,6 @@ let isPaused = false;
 let zoom = 1;
 const zoomMin = 1;
 const zoomMax = 8;
-
-let tempo = 1/60;
-// TODO: change speed convert so it responds when tempo is changed at runtime
 
 // parameters
 const tileSize = 32;
@@ -146,11 +147,27 @@ const canAtAgeBySpecies =  {
   }
 }
 ['wolf', 'deer'].forEach(species => {
-  ['see', 'hear', 'walk', 'eat', 'run', 'mate'].forEach(can => {
-    canAtAgeBySpecies[species][can] = canAtAgeBySpecies[species][can].avg;
+  ['see', 'hear', 'walk', 'eat', 'run', 'mate'].forEach(cap => {
+    canAtAgeBySpecies[species][cap] = canAtAgeBySpecies[species][cap].avg;
   });
   canAtAgeBySpecies[species].liveTo = canAtAgeBySpecies[species].liveTo.max;
 });
+
+function can(a, capability) {
+  return g_now - a.birthTime >= canAtAgeBySpecies[a.species][capability];
+}
+
+//  wolf
+//  halfWeight:  { min: 5 * monthS, avg: 6.5 * monthS, max: 7 * monthS },
+//  fullWeight:  { min: 18 * monthS, avg: 21 * monthS,  max: 24 * monthS},
+//  gestation:   { min: 61 * dayS, avg: 62 * dayS,  max: 63 * dayS }
+
+// redDeer: {
+//    halfWeight:   { min: 10, avg: 12, max: 14 },  // months
+//    fullWeight:   { min: 48, avg: 54, max: 60 },  // months
+//    gestation:    { min: 230, avg: 233, max: 240 } // days
+//  }
+
 
 // TODO: revise this name and calling method for use of tempo
 function updateCritterFrame(a, rezero = false) {
@@ -191,12 +208,19 @@ function randomlyPlaceCritter(a) {
   animat?.placeCritterSprite(a);
 }
 
+function randBetween(a, b) {
+  return a + Math.random() * (b - a);
+}
+
 // searchmeta makeCritter createCritter makeWolf createWolf makeWisp createWisp
-function initCritter(a, species) {
+function initCritter(a, species, isNewborn = false) {
   if (!a) return alert("Falsy ref to initCritter");
   if (a.kind) return alert("Already-kind ref to initCritter");
   a.kind = 'critter';
   a.species = species;
+  a.birthTime = g_now - (isNewborn ? 0 : randBetween(
+    canAtAgeBySpecies[species].mate, canAtAgeBySpecies[species].liveTo * 0.5
+  ));
   
   // UIDs are unique across all kind objects and permanent
   a.uid = g_next_uid++;
@@ -673,6 +697,7 @@ function gameLoop(isStepThrough = false) {
   updateAllCritters();
 
   g_tick++; // nowhere else may update g_tick
+  g_now += tempo; //nowhere else may update g_now
   if (!isPaused) {
     if (consoleOnlyMode) {
       // using setTimeout will trigger gameLoop in the next execution frame,
@@ -828,13 +853,17 @@ const fatigueBySpeciesAndPose = {
   }
 }
 
+
+// TODO: consider rolling canSprint and canRun into can()
 function canSprint(a, isAlready = false) {
+  if (!can(a, 'run')) return false; // age check
   const limit = fatigueBySpeciesAndPose[a.species].sprint.forceEnd
     * (isAlready ? 1 : 0.7);
   return a.fatigue <= limit;
 }
 
 function canRun(a, isAlready = false) {
+  if (!can(a, 'run')) return false; // age check
   const limit = fatigueBySpeciesAndPose[a.species].run.forceEnd
     * (isAlready ? 1 : 0.7);
   return a.fatigue <= limit;
@@ -971,8 +1000,7 @@ function runRxn(rxn) {
 }
 
 function deqCurrentDelayed() {
-  const now = g_tick * tempo;
-  while (delayedRxnArr.length && delayedRxnArr.at(-1).end <= now)
+  while (delayedRxnArr.length && delayedRxnArr.at(-1).end <= g_now)
     runRxn(delayedRxnArr.pop());
 }
 
