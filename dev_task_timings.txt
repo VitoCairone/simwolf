@@ -99,3 +99,7 @@ Fri Aug 22
     Task: add g_now and implement can method
     11:35 - 11:52
         * add g_now and implement can method
+
+Sat Aug 23
+    Task: add plants
+    12:08 - 

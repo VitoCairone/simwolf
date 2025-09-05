@@ -1,7 +1,7 @@
 const zoomInBtn = document.getElementById("zoom-in");
 const zoomOutBtn = document.getElementById("zoom-out");
 
-let consoleOnlyMode = true;
+let consoleOnlyMode = false;
 let animat = null;
 let tempo = 1/60;
 // TODO: change speed convert so it responds when tempo is changed at runtime
@@ -126,7 +126,7 @@ const yearS = dayS * 365;
 const monthS = yearS / 12;
 
 // full table here fo reference is simplified for MVP use to one value each
-const canAtAgeBySpecies =  {
+const canAtAgeBySpecies = {
   wolf: {
     see:    { min: 9 * dayS,  avg: 12 * dayS,  max: 15 * dayS },
     hear:   { min: 10 * dayS, avg: 14 * dayS,  max: 18 * dayS },
@@ -145,7 +145,8 @@ const canAtAgeBySpecies =  {
     mate:   { min: 16 * monthS, avg: 24 * monthS,  max: 36 * monthS },
     liveTo: { min: 8 * yearS, avg: 12 * yearS, max: 25 * yearS }
   }
-}
+};
+
 ['wolf', 'deer'].forEach(species => {
   ['see', 'hear', 'walk', 'eat', 'run', 'mate'].forEach(cap => {
     canAtAgeBySpecies[species][cap] = canAtAgeBySpecies[species][cap].avg;
@@ -283,7 +284,7 @@ const arrowsToggle = document.getElementById('arrow-mode-toggle');
 const arrowsIcon = document.getElementById('arrow-mode-icon');
 arrowsIcon.innerHTML = cameraIconSVG;
 
-let mouseMovesWolf = true;
+let mouseMovesWolf = false;
 let arrowsMoveWolf = false;
 let mouseInInputField = false;
 
@@ -345,9 +346,9 @@ function getTerrainAt(gx, gy) {
   if (unitVariant < 0.25) return "water";
   if (unitVariant > 0.75) return "rock";
 
-  // const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
-  // const pseudoRandom = hash - Math.floor(hash); // [0, 1)
-  // if (pseudoRandom < 0.75 * Math.pow(1 - (unitVariant * 2 - 0.5), 3)) return "bush";
+  const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
+  const pseudoRandom = hash - Math.floor(hash); // [0, 1)
+  if (pseudoRandom < 0.75 * Math.pow(1 - (unitVariant * 2 - 0.5), 3)) return "bush";
 
   // const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
   // const types = ["dirt", "grass", "bush"];
@@ -355,10 +356,6 @@ function getTerrainAt(gx, gy) {
 
   if (unitVariant < 0.5) return "grass";
   if (unitVariant < 0.75) return "dirt";
-}
-
-function getTileClassAt(x, y) {
-  return getTerrainAt(x, y)
 }
 
 function getOnTileXY(a) {
@@ -896,15 +893,95 @@ function getOthers(a) {
   const present = a.presentOthers || new Set();
   return present.union(a.heldInfo?.lostSignals?.signals || new Set());
 }
+const forcingModes = ["eat", "sleep", "drink"];
+const freeModes = []; // expore rest bed follow fight court protect social
+  // groom track patrol
+const allModes = mustModes.concat(freeModes).concat("flee");
+
+initDecideWts(a) {
+  a.decideWts = {
+    forceLevels: [
+      {"eat": 0.3, "sleep": 0.9, "drink": 0.6}, // priority forcing
+      {"eat": 0.3, "sleep": 0.9, "drink": 0.6}, // forcing
+      {"eat": 0.2, "sleep": 0.4, "drink": 0.7}, // free
+    ],
+    forceWts: [
+      {"eat": 0.3, "sleep": 0.9, "drink": 0.6}, // priority forcing
+      {"eat": 0.3, "sleep": 0.9, "drink": 0.6}, // forcing
+    ],
+    freeWts: {  
+      "eat": 10,
+      "sleep": 10,
+      "drink": 10,
+      "explore": 100,
+      "rest": 100,
+      "court": 0,
+      "fight": 0,
+      "follow": 100,
+      "groom": 0,
+      "patrol": 0,
+      "protect": 0, 
+      "social": 0,
+      "track": 0,
+    }
+  }
+
+// weights should be an object mapping choices to numbers
+function weightedChoice(choices, weights) {
+  if (choices.length === 1) return choices[0];
+  var wSum = 0;
+  choices.forEach(ch => wSum += weights[ch]);
+  normed = choices.map(ch => weights[ch] / wSum);
+  const rand = Math.random();
+  let rSum = 0;
+  for (var i = 0; i < choices.length; i++) {
+    rSum += normed[i];
+    if (rSum > rand) return choices[i];
+  }
+  return choices.at(-1);
+}
+
+function needLevel(a, mode) {
+  return alert("needLevels not yet implemented");
+}
 
 // makeDecision should not write any world or body state
 function makeDecision(a) {
-  // currently only decision making is deer fleeing
+
+  // currently the only decision making implemented is for deer
+
   if (a.species !== "deer") return null;
 
   const predators = [...getOthers(a)].filter(o => o.species !== 'deer');
-  if (!predators.length) return null;
-  return ["flee", { from: predators } ];
+  if (predators.length) return ["flee", { from: predators } ];
+
+  let choices = [];
+  let needLevels = {
+    "eat": needLevel(a, "eat"),
+    "sleep": needLevel(a, "sleep"),
+    "drink": needLevel(a, "drink")
+  }
+  
+  // priority forcing at level 0
+  choices = forcingModes.filter(mode => {
+    a.decideWts.forceLevels[0] > needLevels[mode];
+  });
+  if (choices.length)
+    return weightedChoice(choices, a.decideWts.forceWts[0]);
+
+  // forcing at level 1
+  choices = forcingModes.filter(mode => {
+    a.decideWts.forceLevels[1] > needLevels[mode];
+  });
+  if (choices.length)
+    return weightedChoice(choices, a.decideWts.forceWts[1]);
+
+  // optional at level 2
+  choices = freeModes.concat(forcingModes.filter(mode => {
+    a.decideWts.freeLevel[2] > needLevels[mode];
+  }));
+
+  return weightedChoice(choices, a.decideWts.freeWts);
 }
 
 // function getNearestIdx(obj, choices) {
