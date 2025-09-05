@@ -2,6 +2,7 @@ const zoomInBtn = document.getElementById("zoom-in");
 const zoomOutBtn = document.getElementById("zoom-out");
 let consoleOnlyMode = false;
 let animat = null;
+let senses = null;
 let tempo = 1 / 60;
 // TODO: change speed convert so it responds when tempo is changed at runtime
 let g_tick = 0; // updates ONE PLACE ONLY in gameLoop
@@ -66,27 +67,23 @@ const cameraIconSVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="non
   <!-- Right-facing lens hood / extension -->
   <path d="M13 10 L17 7 V17 L13 14 Z" />
 </svg>`
-
-function sqr(x) { return x * x; }
-
-function boundVal(val, min, max) { return Math.max(min, Math.min(val, max)); }
-
-function isoProject(gx, gy) {
-  const px = (gx - gy) * halfTile;
-  const py = (gx + gy) * qtrTile;
-  return [px, py];
+const kphToTpTk = 0.277777 * tempo; // kilometers-per-hour to tiles-per-tick
+const travelSpeedBySpeciesAndPose = {
+  "wolf": {
+    "walk": 6 * kphToTpTk, // all day
+    "run": 10 * kphToTpTk, // 8 hours
+    "sprint": 55 * kphToTpTk, // a few seconds only
+    "idle": 0,
+    "death": 0
+  },
+  "deer": {
+    "walk": 6 * kphToTpTk, // all day 
+    "run": 45 * kphToTpTk, // 2 minutes
+    "sprint": 65 * kphToTpTk, // a few seconds only; 0.3 tiles/tick
+    "idle": 0,
+    "death": 0
+  }
 }
-
-function rectiProject(px, py) {
-  const gx = (px / tileSize + py / halfTile);
-  const gy = (py / halfTile - px / tileSize);
-  return [gx, gy];
-}
-// TODO: consider what data should be allowed to vary by pose and what data 
-// is fixed for the species
-// TODO: consider if frame holds should be in time or in ticks,
-// for now assumone animat only runs when tempo == 1/60 and adjust
-// for main logic only
 const frameDataBySpeciesAndPose = {
   wolf: {
     walk: {
@@ -181,6 +178,15 @@ const canAtAgeBySpecies = {
     mate: { min: 16 * monthS, avg: 24 * monthS, max: 36 * monthS },
     liveTo: { min: 8 * yearS, avg: 12 * yearS, max: 25 * yearS }
   }
+  //  wolf
+  //  halfWeight:  { min: 5 * monthS, avg: 6.5 * monthS, max: 7 * monthS },
+  //  fullWeight:  { min: 18 * monthS, avg: 21 * monthS,  max: 24 * monthS},
+  //  gestation:   { min: 61 * dayS, avg: 62 * dayS,  max: 63 * dayS }
+  // redDeer: {
+  //    halfWeight:   { min: 10, avg: 12, max: 14 },  // months
+  //    fullWeight:   { min: 48, avg: 54, max: 60 },  // months
+  //    gestation:    { min: 230, avg: 233, max: 240 } // days
+  //  }
 };
 ['wolf', 'deer'].forEach(species => {
   ['see', 'hear', 'walk', 'eat', 'run', 'mate'].forEach(cap => {
@@ -188,57 +194,124 @@ const canAtAgeBySpecies = {
   });
   canAtAgeBySpecies[species].liveTo = canAtAgeBySpecies[species].liveTo.max;
 });
-
-function can(a, capability) {
-  return g_now - a.birthTime >= canAtAgeBySpecies[a.species][capability];
-}
-//  wolf
-//  halfWeight:  { min: 5 * monthS, avg: 6.5 * monthS, max: 7 * monthS },
-//  fullWeight:  { min: 18 * monthS, avg: 21 * monthS,  max: 24 * monthS},
-//  gestation:   { min: 61 * dayS, avg: 62 * dayS,  max: 63 * dayS }
-// redDeer: {
-//    halfWeight:   { min: 10, avg: 12, max: 14 },  // months
-//    fullWeight:   { min: 48, avg: 54, max: 60 },  // months
-//    gestation:    { min: 230, avg: 233, max: 240 } // days
-//  }
-// TODO: revise this name and calling method for use of tempo
-function updateCritterFrame(a, rezero = false) {
-  // At present World needs to control this method for proper
-  // onceThenPose behavior to shift between poses
-  a.animTimer = 0;
-  const frameData = frameDataBySpeciesAndPose[a.species][a.pose];
-  a.frame = rezero ? 0 : ((a.frame + 1) % frameData.nFrames);
-  if (!rezero && a.frame === 0 && frameData.onceThenPose) {
-    a.pose = frameData.onceThenPose;
-    return updateCritterFrame(a, true);
-  }
-  animat?.updateCritterFrame(a, frameData);
-}
-// Wolf setup
 const nWolves = 10;
 const wolves = Array.from({ length: nWolves }, () => ({}));
 const pcWolf = wolves[0];
 const nDeer = 10;
 const deer = Array.from({ length: nDeer }, () => ({}));
+const allCritters = [];
+const allCorpses = [];
+const cameraSpeed = 50;
+const keysPressed = {};
+const ROOT2 = Math.sqrt(2);
+const INVROOT2 = 1 / ROOT2;
+const moveVecByDir = [
+  [1, 0],
+  [INVROOT2, INVROOT2],
+  [0, 1],
+  [-INVROOT2, INVROOT2],
+  [-1, 0],
+  [-INVROOT2, -INVROOT2],
+  [0, -1],
+  [INVROOT2, -INVROOT2],
+];
+const arrowKeyNames = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+const arrowsToggle = document.getElementById('arrow-mode-toggle');
+const arrowsIcon = document.getElementById('arrow-mode-icon');
+const DIR_E = 0;
+const DIR_SE = 1;
+const DIR_S = 2;
+const DIR_SW = 3;
+const DIR_W = 4;
+const DIR_NW = 5;
+const DIR_N = 6;
+const DIR_NE = 7;
+const DIR_NAME = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"];
+// rendering errors occur abruptly at x == 1677740
+// unknown why at this time
+// also observed at: [369092, 1404710] and other values which are 
+// close to 1500k in Y and 300k+ in X
+const safeX = Math.min(gridWidthN, 1500000);
+const safeY = Math.min(gridHeightN, 1500000);
+// TODO: array is currently used for simplicity, but
+// it is slow to insert-in-place sorted. Consider using
+// Linked List instead which is both fast insert-in-place and 
+// fast deque.
+// The arr version is stored DESCENDING sorted for fast deque.
+const delayedRxnArr = [];
+// FUTURE: consider tracking hiPowFatigue and loPowFatigue distinctly
+const fatigueBySpeciesAndPose = {
+  "wolf": {
+    "idle": { forceEnd: Infinity, dps: -1, downTo: "idle" },
+    "walk": { forceEnd: 60000, dps: -0.25, downTo: "idle" },
+    "run": { forceEnd: 30000, dps: 1, downTo: "walk" }, // ~8 hours
+    "sprint": { forceEnd: 15000, dps: 1500, downTo: "run" } // 10 seconds
+  },
+  "deer": {
+    "idle": { forceEnd: Infinity, dps: -1, downTo: "idle" },
+    "walk": { forceEnd: 60000, dps: -0.25, downTo: "idle" },
+    "run": { forceEnd: 30000, dps: 250, downTo: "walk" }, // 2 minutes
+    "sprint": { forceEnd: 15000, dps: 1500, downTo: "run" } // 10 seconds
+  }
+}
 let worldShiftPX = 0;
 let worldShiftPY = 0;
+let startRealtime = Date.now();
+// DOUBLECHECK if these are needed in main
+let viewportWidth = document.getElementById('field-wrapper')
+  .clientWidth;
+let viewportHeight = document.getElementById('field-wrapper')
+  .clientHeight;
+let initX = 0;
+let initY = 0;
+let mouseVecX = 0;
+let mouseVecY = 0;
 
-function randomlyPlaceCritter(a) {
-  // used for initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
-  a.gx = boundVal(initX + Math.floor(Math.random() * 50), 0.5, gridWidthN - 0.5);
-  a.gy = boundVal(initY + Math.floor(Math.random() * 50), 0.5, gridHeightN - 0.5);
-  a.animTimer = 0;
-  a.redecideCd = 0; // Cd = Cooldown (ticks)
-  a.currentDirection = Math.floor(Math.random() * 4) * 2;
-  a.frame = 0;
-  setCritterIdle(a);
-  updateCritterFrame(a, true);
-  animat?.placeCritterSprite(a);
+function boundVal(val, min, max) { return Math.max(min, Math.min(val, max)); }
+
+// TODO: consider what data should be allowed to vary by pose and what data 
+// is fixed for the species
+// TODO: consider if frame holds should be in time or in ticks,
+// for now assumone animat only runs when tempo == 1/60 and adjust
+// for main logic only
+function can(a, capability) {
+  return g_now - a.birthTime >= canAtAgeBySpecies[a.species][capability];
+}
+function doNextBoundingBoxesOverlap(a, b) {
+  // TODO: fix this hardcoded box size
+  return Math.abs(a.nextGX - b.nextGX) < 1.0 && Math.abs(a.nextGY - b.nextGY) < 1.0;
 }
 
-function randBetween(a, b) {
-  return a + Math.random() * (b - a);
+function getDir(x, y, defaultRV = 0) {
+  if (x === 0) return y === 0 ? defaultRV : (y > 0 ? DIR_S : DIR_N);
+  if (y === 0) return (x > 0 ? DIR_E : DIR_W)
+  const absX = Math.abs(x);
+  const absY = Math.abs(y);
+  // tan(1/8 circle) ~= 0.414, tan(3/8 circle) ~= 2.414
+  if (absX >= absY * 2.414) return x > 0 ? DIR_E : DIR_W;
+  if (absY >= absX * 2.414) return y > 0 ? DIR_S : DIR_N;
+  return x > 0 ? (y > 0 ? DIR_SE : DIR_NE) : (y > 0 ? DIR_SW : DIR_NW);
 }
+
+function getOccupiedTiles(gx, gy, boxRad = 0.4) {
+  const left = Math.floor(gx - boxRad);
+  const right = Math.floor(gx + boxRad);
+  const top = Math.floor(gy - boxRad);
+  const bottom = Math.floor(gy + boxRad);
+  const tiles = [];
+  for (let x = left; x <= right; x++) {
+    for (let y = top; y <= bottom; y++) {
+      tiles.push(`${x}_${y}`); // string key
+    }
+  }
+  return tiles;
+}
+
+function getOthers(a) {
+  const present = a.presentOthers || new Set();
+  return present.union(a.heldInfo?.lostSignals?.signals || new Set());
+}
+
 // searchmeta makeCritter createCritter makeWolf createWolf makeWisp createWisp
 function initCritter(a, species, isNewborn = false) {
   if (!a) return alert("Falsy ref to initCritter");
@@ -259,44 +332,134 @@ function initCritter(a, species, isNewborn = false) {
   randomlyPlaceCritter(a);
   return a;
 }
-// DOUBLECHECK if these are needed in main
-let viewportWidth = document.getElementById('field-wrapper')
-  .clientWidth;
-let viewportHeight = document.getElementById('field-wrapper')
-  .clientHeight;
-let initX = 0;
-let initY = 0;
-// rendering errors occur abruptly at x == 1677740
-// unknown why at this time
-// also observed at: [369092, 1404710] and other values which are 
-// close to 1500k in Y and 300k+ in X
-const safeX = Math.min(gridWidthN, 1500000);
-const safeY = Math.min(gridHeightN, 1500000);
+
+function initDecideWts(a) {
+  a.decideWts = {
+    forceLevels: [
+      { "eat": 0.3, "sleep": 0.9, "drink": 0.6 }, // priority forcing
+      { "eat": 0.3, "sleep": 0.9, "drink": 0.6 }, // forcing
+      { "eat": 0.2, "sleep": 0.4, "drink": 0.7 }, // free
+  ],
+    forceWts: [
+      { "eat": 0.3, "sleep": 0.9, "drink": 0.6 }, // priority forcing
+      { "eat": 0.3, "sleep": 0.9, "drink": 0.6 }, // forcing
+  ],
+    freeWts: {
+      "eat": 10,
+      "sleep": 10,
+      "drink": 10,
+      "explore": 100,
+      "rest": 100,
+      "court": 0,
+      "fight": 0,
+      "follow": 100,
+      "groom": 0,
+      "patrol": 0,
+      "protect": 0,
+      "social": 0,
+      "track": 0,
+    }
+  };
+}
+
+function isoProject(gx, gy) {
+  const px = (gx - gy) * halfTile;
+  const py = (gx + gy) * qtrTile;
+  return [px, py];
+}
+
+function pairL2(pair) { return pair[0] * pair[0] + pair[1] * pair[1]; }
+
+function pause() {
+  isPaused = true;
+}
+
+function randBetween(a, b) {
+  return a + Math.random() * (b - a);
+}
+
+function randomlyPlaceCritter(a) {
+  // used for initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
+  a.gx = boundVal(initX + Math.floor(Math.random() * 50), 0.5, gridWidthN - 0.5);
+  a.gy = boundVal(initY + Math.floor(Math.random() * 50), 0.5, gridHeightN - 0.5);
+  a.animTimer = 0;
+  a.redecideCd = 0; // Cd = Cooldown (ticks)
+  a.currentDirection = Math.floor(Math.random() * 4) * 2;
+  a.frame = 0;
+  setCritterIdle(a);
+  updateCritterFrame(a, true);
+  animat?.placeCritterSprite(a);
+}
+
+// produces a random distribution in [0, 1) with a parabolic curve
+function randomPara() {
+  const x = Math.random();
+  return 4 * x * (1 - x);
+}
+
+function rectiProject(px, py) {
+  const gx = (px / tileSize + py / halfTile);
+  const gy = (py / halfTile - px / tileSize);
+  return [gx, gy];
+}
+
+function rpMod(x) {
+  return x * (0.8 + 0.4 * randomPara());
+}
+
+function sqr(x) { return x * x; }
+
+// TODO: revise this name and calling method for use of tempo
+function updateCritterFrame(a, rezero = false) {
+  // At present World needs to control this method for proper
+  // onceThenPose behavior to shift between poses
+  a.animTimer = 0;
+  const frameData = frameDataBySpeciesAndPose[a.species][a.pose];
+  a.frame = rezero ? 0 : ((a.frame + 1) % frameData.nFrames);
+  if (!rezero && a.frame === 0 && frameData.onceThenPose) {
+    a.pose = frameData.onceThenPose;
+    return updateCritterFrame(a, true);
+  }
+  animat?.updateCritterFrame(a, frameData);
+}
+
+// makeDecision should not write any world or body state
+function makeDecision(a) {
+  // currently the only decision making implemented is for deer
+  if (a.species !== "deer") return null;
+  const predators = [...getOthers(a)].filter(o => o.species !== 'deer');
+  if (predators.length) return ["flee", { from: predators }];
+  let choices = [];
+  let needLevels = {
+    "eat": needLevel(a, "eat"),
+    "sleep": needLevel(a, "sleep"),
+    "drink": needLevel(a, "drink")
+  }
+  // priority forcing at level 0
+  choices = forcingModes.filter(mode => {
+    a.decideWts.forceLevels[0] > needLevels[mode];
+  });
+  if (choices.length)
+    return weightedChoice(choices, a.decideWts.forceWts[0]);
+  // forcing at level 1
+  choices = forcingModes.filter(mode => {
+    a.decideWts.forceLevels[1] > needLevels[mode];
+  });
+  if (choices.length)
+    return weightedChoice(choices, a.decideWts.forceWts[1]);
+  // optional at level 2
+  choices = freeModes.concat(forcingModes.filter(mode => {
+    a.decideWts.freeLevel[2] > needLevels[mode];
+  }));
+  return weightedChoice(choices, a.decideWts.freeWts);
+}
+
 for (let t = 0; t < 1000 && getTerrainAt(initX, initY) === "water"; t++) {
   initX = Math.floor(Math.random() * safeX);
   initY = Math.floor(Math.random() * safeY);
 }
 if (getTerrainAt(initX, initY) === "water") alert("No land found in map");
-const allCritters = [];
-const allCorpses = [];
 forbidOverlapsOnStart();
-const cameraSpeed = 50;
-const keysPressed = {};
-const ROOT2 = Math.sqrt(2);
-const INVROOT2 = 1 / ROOT2;
-const moveVecByDir = [
-  [1, 0],
-  [INVROOT2, INVROOT2],
-  [0, 1],
-  [-INVROOT2, INVROOT2],
-  [-1, 0],
-  [-INVROOT2, -INVROOT2],
-  [0, -1],
-  [INVROOT2, -INVROOT2],
-];
-const arrowKeyNames = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
-const arrowsToggle = document.getElementById('arrow-mode-toggle');
-const arrowsIcon = document.getElementById('arrow-mode-icon');
 arrowsIcon.innerHTML = cameraIconSVG;
 let mouseMovesWolf = false;
 let arrowsMoveWolf = false;
@@ -366,15 +529,6 @@ function getOnTileXY(a) {
   return [a.gx, a.gy].map(v => Math.floor(v));
 }
 
-function canSee(a, b) {
-  if (!a || !b || a.kind !== 'critter') return alert("Invalid arg to canSee");
-  if (distBetweenL2(a, b) > 10000) return false;
-  const [aX, aY] = getOnTileXY(a);
-  const [bX, bY] = getOnTileXY(b);
-  const [visX, visY] = traverseGrid(aX, aY, bX, bY);
-  return visX === bX && visY === bY;
-}
-
 function areSetsEqual(setA, setB) {
   if (!setA || !setB) return (!setA && !setB);
   if (setA.size !== setB.size) return false;
@@ -383,9 +537,22 @@ function areSetsEqual(setA, setB) {
   return true;
 }
 
+function canSee(a, b) {
+  if (senses) return senses.canSee(a, b);
+  return (distBetweenL2(a, b) < 10000);
+}
+
 function dirDiff(dirA, dirB) {
   const diff = Math.abs(dirA - dirB);
   return Math.min(diff, 8 - diff);
+}
+
+function isImpassable(terrain) {
+  return terrain === "rock" || terrain === "bush" || terrain === "water";
+}
+
+function isOpaque(terrain) {
+  return terrain === "rock";
 }
 
 function isVisionFacing(a, b) {
@@ -420,82 +587,7 @@ function setPresentOthersIneffMethod() {
     }
   }
 }
-// function signalSnapshots(others) {
-//   // produces snapshots of critters so that the gx, gy of these objects
-//   // will not continue to update
-//   // TODO: record actual signal data only, expect and handle nodata
-//   if (!others || !others.size) return [];
-//   return [...others].map(o => {
-//     return {
-//       kind: o.kind,
-//       species: o.species,
-//       gx: o.gx,
-//       gy: o.gy,
-//       speed: o.speed,
-//       currentDirection: o.currentDirection
-//     };
-//   });
-// }
-function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
-  // For simplicity we are tracing from tile center to tile center,
-  // not from exact point to point
-  const [sI, sJ] = [aX, aY].map(v => Math.floor(v));
-  const [eI, eJ] = [bX, bY].map(v => Math.floor(v));
-  let [crossI, crossJ] = [eI - sI, eJ - sJ];
-  if (crossI === 0 && crossJ === 0) return fullTrace ? [[sI, sJ]] : [sI, sJ];
-  const [xSign, ySign] = [crossI, crossJ].map(v => Math.sign(v));
-  [crossI, crossJ] = [crossI, crossJ].map(v => Math.abs(v));
-  // Imagine the 'time' of the tracing === 1,
-  // then recipCx is the time it takes between each X boundary
-  // and recipCy is the time between each Y boundary.
-  const [recipCx, recipCy] = [crossI, crossJ].map(v => {
-    return v === 0 ? Infinity : 1 / v
-  });
-  // start at center i.e. halfway between boundaries
-  let [timeToX, timeToY] = [recipCx, recipCy].map(v => v / 2);
-  const shifts = [];
-  let [i, j] = [0, 0];
 
-  function shiftToGrid(s) { return [sI + xSign * s[0], sJ + ySign * s[1]]; }
-  while (i < crossI || j < crossJ) {
-    if (i > crossI || j > crossJ)
-      return alert("axis crossing error in traverseGrid");
-    if (timeToX === timeToY) {
-      i++;
-      j++;
-      timeToX = recipCx;
-      timeToY = recipCy;
-    } else if (timeToX < timeToY) {
-      i++;
-      timeToY -= timeToX;
-      timeToX = recipCx;
-    } else {
-      j++;
-      timeToX -= timeToY;
-      timeToY = recipCy;
-    }
-    if (fullTrace) {
-      shifts.push([i, j]);
-    } else {
-      if (isOpaque(getTerrainAt(...shiftToGrid([i, j])))) break;
-    }
-  }
-  return fullTrace ? shifts.map(s => shiftToGrid(s)) : shiftToGrid([i, j]);
-}
-// currently not called
-// function updateSignals(a) {
-//   if (areSetsEqual(a.priorOthers, a.presentOthers)) return;
-//   const newSignals = a.presentOthers.difference(a.priorOthers);
-//   const lostSignals = a.priorOthers.difference(a.presentOthers);
-//   if (lostSignals.size) {
-//     console.log(`${a.species} lost signal`);
-//     holdInfo(a, "lostSignals", {signals: lostSignals }, 360);
-//   }
-//   if (newSignals.size) {
-//     console.log(`${a.species} got new signal`);
-//     if (a.redecideCd < 7) a.redecideCd = 7;
-//   }
-// }
 function updateAllCritters() {
   setPresentOthersIneffMethod();
   allCritters.forEach(a => {
@@ -673,8 +765,6 @@ function gameLoop(isStepThrough = false) {
     requestAnimationFrame(gameLoop);
   }
 }
-let mouseVecX = 0;
-let mouseVecY = 0;
 
 function updateMovementByMouse() {
   if (consoleOnlyMode || !mouseMovesWolf) return alert("Called updateMovevementByMouse out of context");
@@ -727,6 +817,7 @@ function setCritterIdle(a) {
   a.pose = "idle";
   updateCritterFrame(a, true);
 }
+
 const wolfAudibleToDeerL2ByTerrainAndSpeed = {
   grass: { walk: sqr(3), run: sqr(11), sprint: sqr(30) },
   dirt: { walk: sqr(4), run: sqr(15), sprint: sqr(40) },
@@ -741,7 +832,6 @@ function vecTo(a, b) { return [b[0] - a[0], b[1] - a[1]]; }
 
 function vecToObj(a, b) { return vecTo([a.gx, a.gy], [b.gx, b.gy]); }
 
-function pairL2(pair) { return pair[0] * pair[0] + pair[1] * pair[1]; }
 // distBetweenL2 returns the SQUARED distance (L2) between points
 // which assumes we only need to sort or compare against another L2
 function distBetweenL2(a, b) {
@@ -750,64 +840,8 @@ function distBetweenL2(a, b) {
 }
 
 function canHear(a, b) {
-  // a is the listener, and b is the potential sound origin
-  // movement is currently the only source of sound
-  // for now we use one table based on moving wolf and listening deer
-  // revise in future to account for actual origin and listener species
-  if (b.hasOwnProperty('speed') && b.speed === 0) return false;
-  const terrain = getTerrainAt(...getOnTileXY(b));
-  if (!wolfAudibleToDeerL2ByTerrainAndSpeed.hasOwnProperty(terrain))
-    return alert("Unknown terrain type for canHear origin");
-  const rangeByPoseL2 = wolfAudibleToDeerL2ByTerrainAndSpeed[terrain];
-  if (!rangeByPoseL2.hasOwnProperty(b.pose))
-    return alert("Uknown pose for canHear origin");
-  return distBetweenL2(a, b) <= rangeByPoseL2[b.pose];
-}
-const kphToTpTk = 0.277777 * tempo; // kilometers-per-hour to tiles-per-tick
-const travelSpeedBySpeciesAndPose = {
-  "wolf": {
-    "walk": 6 * kphToTpTk, // all day
-    "run": 10 * kphToTpTk, // 8 hours
-    "sprint": 55 * kphToTpTk, // a few seconds only
-    "idle": 0,
-    "death": 0
-  },
-  "deer": {
-    "walk": 6 * kphToTpTk, // all day 
-    "run": 45 * kphToTpTk, // 2 minutes
-    "sprint": 65 * kphToTpTk, // a few seconds only; 0.3 tiles/tick
-    "idle": 0,
-    "death": 0
-  }
-}
-// FUTURE: consider tracking hiPowFatigue and loPowFatigue distinctly
-const fatigueBySpeciesAndPose = {
-  "wolf": {
-    "idle": { forceEnd: Infinity, dps: -1, downTo: "idle" },
-    "walk": { forceEnd: 60000, dps: -0.25, downTo: "idle" },
-    "run": { forceEnd: 30000, dps: 1, downTo: "walk" }, // ~8 hours
-    "sprint": { forceEnd: 15000, dps: 1500, downTo: "run" } // 10 seconds
-  },
-  "deer": {
-    "idle": { forceEnd: Infinity, dps: -1, downTo: "idle" },
-    "walk": { forceEnd: 60000, dps: -0.25, downTo: "idle" },
-    "run": { forceEnd: 30000, dps: 250, downTo: "walk" }, // 2 minutes
-    "sprint": { forceEnd: 15000, dps: 1500, downTo: "run" } // 10 seconds
-  }
-}
-// TODO: consider rolling canSprint and canRun into can()
-function canSprint(a, isAlready = false) {
-  if (!can(a, 'run')) return false; // age check
-  const limit = fatigueBySpeciesAndPose[a.species].sprint.forceEnd *
-    (isAlready ? 1 : 0.7);
-  return a.fatigue <= limit;
-}
-
-function canRun(a, isAlready = false) {
-  if (!can(a, 'run')) return false; // age check
-  const limit = fatigueBySpeciesAndPose[a.species].run.forceEnd *
-    (isAlready ? 1 : 0.7);
-  return a.fatigue <= limit;
+  if (senses) return senses.canHear(a, b);
+  return distBetweenL2(a, b) <= 400;
 }
 
 function setCritterMoving(a, dir, newPose = "walk") {
@@ -830,44 +864,13 @@ function setCritterMoving(a, dir, newPose = "walk") {
   }
 }
 
-function getOthers(a) {
-  const present = a.presentOthers || new Set();
-  return present.union(a.heldInfo?.lostSignals?.signals || new Set());
-}
 const forcingModes = ["eat", "sleep", "drink"];
 const freeModes = []; // expore rest bed follow fight court protect social
 // groom track patrol
 const allModes = mustModes.concat(freeModes)
   .concat("flee");
 
-function initDecideWts(a) {
-  a.decideWts = {
-    forceLevels: [
-      { "eat": 0.3, "sleep": 0.9, "drink": 0.6 }, // priority forcing
-      { "eat": 0.3, "sleep": 0.9, "drink": 0.6 }, // forcing
-      { "eat": 0.2, "sleep": 0.4, "drink": 0.7 }, // free
-  ],
-    forceWts: [
-      { "eat": 0.3, "sleep": 0.9, "drink": 0.6 }, // priority forcing
-      { "eat": 0.3, "sleep": 0.9, "drink": 0.6 }, // forcing
-  ],
-    freeWts: {
-      "eat": 10,
-      "sleep": 10,
-      "drink": 10,
-      "explore": 100,
-      "rest": 100,
-      "court": 0,
-      "fight": 0,
-      "follow": 100,
-      "groom": 0,
-      "patrol": 0,
-      "protect": 0,
-      "social": 0,
-      "track": 0,
-    }
-  };
-}
+
 // weights should be an object mapping choices to numbers
 function weightedChoice(choices, weights) {
   if (choices.length === 1) return choices[0];
@@ -886,36 +889,7 @@ function weightedChoice(choices, weights) {
 function needLevel(a, mode) {
   return alert("needLevels not yet implemented");
 }
-// makeDecision should not write any world or body state
-function makeDecision(a) {
-  // currently the only decision making implemented is for deer
-  if (a.species !== "deer") return null;
-  const predators = [...getOthers(a)].filter(o => o.species !== 'deer');
-  if (predators.length) return ["flee", { from: predators }];
-  let choices = [];
-  let needLevels = {
-    "eat": needLevel(a, "eat"),
-    "sleep": needLevel(a, "sleep"),
-    "drink": needLevel(a, "drink")
-  }
-  // priority forcing at level 0
-  choices = forcingModes.filter(mode => {
-    a.decideWts.forceLevels[0] > needLevels[mode];
-  });
-  if (choices.length)
-    return weightedChoice(choices, a.decideWts.forceWts[0]);
-  // forcing at level 1
-  choices = forcingModes.filter(mode => {
-    a.decideWts.forceLevels[1] > needLevels[mode];
-  });
-  if (choices.length)
-    return weightedChoice(choices, a.decideWts.forceWts[1]);
-  // optional at level 2
-  choices = freeModes.concat(forcingModes.filter(mode => {
-    a.decideWts.freeLevel[2] > needLevels[mode];
-  }));
-  return weightedChoice(choices, a.decideWts.freeWts);
-}
+
 // function getNearestIdx(obj, choices) {
 //   if (!choices || !choices.length) return -1;
 //   let idx = -1;
@@ -929,6 +903,7 @@ function makeDecision(a) {
 //   });
 //   return idx;
 // }
+
 function holdInfo(a, key, options, ticks) {
   if (key === "lostSignals") {
     // TODO: provide some per-signal expiry mechanism so the restack effect
@@ -968,12 +943,6 @@ function enactDecision(a, decision) {
     return alert("unknown decision to enactDecision");
   }
 }
-// TODO: array is currently used for simplicity, but
-// it is slow to insert-in-place sorted. Consider using
-// Linked List instead which is both fast insert-in-place and 
-// fast deque.
-// The arr version is stored DESCENDING sorted for fast deque.
-const delayedRxnArr = []
 
 function enqDelayed(rxn, timeS, opts = {}) {
   const end = g_tick * tempo + timeS;
@@ -1050,32 +1019,6 @@ function updateCritterAction(a) {
   setCritterMoving(a, dir);
 }
 
-function getOccupiedTiles(gx, gy, boxRad = 0.4) {
-  const left = Math.floor(gx - boxRad);
-  const right = Math.floor(gx + boxRad);
-  const top = Math.floor(gy - boxRad);
-  const bottom = Math.floor(gy + boxRad);
-  const tiles = [];
-  for (let x = left; x <= right; x++) {
-    for (let y = top; y <= bottom; y++) {
-      tiles.push(`${x}_${y}`); // string key
-    }
-  }
-  return tiles;
-}
-
-function doNextBoundingBoxesOverlap(a, b) {
-  // TODO: fix this hardcoded box size
-  return Math.abs(a.nextGX - b.nextGX) < 1.0 && Math.abs(a.nextGY - b.nextGY) < 1.0;
-}
-
-function isImpassable(terrain) {
-  return terrain === "rock" || terrain === "bush" || terrain === "water";
-}
-
-function isOpaque(terrain) {
-  return terrain === "rock";
-}
 // returns a list of pairs of integers e.g. [[1,2], [3,6]]
 function findCollidingPairs(creatures) {
   const tileMap = new Map(); // key: tile "x_y", value: critter indexes
@@ -1116,45 +1059,14 @@ function findCollidingPairs(creatures) {
   }
   return collisions;
 }
-const DIR_E = 0;
-const DIR_SE = 1;
-const DIR_S = 2;
-const DIR_SW = 3;
-const DIR_W = 4;
-const DIR_NW = 5;
-const DIR_N = 6;
-const DIR_NE = 7;
-const DIR_NAME = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]
-// produces a random distribution in [0, 1) with a parabolic curve
-function randomPara() {
-  const x = Math.random();
-  return 4 * x * (1 - x);
-}
-
-function rpMod(x) {
-  return x * (0.8 + 0.4 * randomPara());
-}
-
-function getDir(x, y, defaultRV = 0) {
-  if (x === 0) return y === 0 ? defaultRV : (y > 0 ? DIR_S : DIR_N);
-  if (y === 0) return (x > 0 ? DIR_E : DIR_W)
-  const absX = Math.abs(x);
-  const absY = Math.abs(y);
-  // tan(1/8 circle) ~= 0.414, tan(3/8 circle) ~= 2.414
-  if (absX >= absY * 2.414) return x > 0 ? DIR_E : DIR_W;
-  if (absY >= absX * 2.414) return y > 0 ? DIR_S : DIR_N;
-  return x > 0 ? (y > 0 ? DIR_SE : DIR_NE) : (y > 0 ? DIR_SW : DIR_NW);
-}
-
-function pause() {
-  isPaused = true;
-}
 
 function unpause() {
   if (!isPaused) return;
   isPaused = false;
   gameLoop();
 }
+
+
 document.addEventListener("keydown", (e) => {
   if (e.key === "p") {
     isPaused ? unpause() : pause();
@@ -1173,7 +1085,7 @@ window.addEventListener('resize', () => {
     .clientHeight;
   animat?.updateCamera();
 });
-let startRealtime = Date.now();
+
 window.onload = function () {
   wolves.forEach(wolf => { allCritters.push(initCritter(wolf, "wolf")); });
   deer.forEach(aDeer => { allCritters.push(initCritter(aDeer, "deer")); });
