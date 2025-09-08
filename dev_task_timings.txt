@@ -100,6 +100,8 @@ Fri Aug 22
     11:35 - 11:52
         * add g_now and implement can method
 
-Sat Aug 23
-    Task: add plants
-    12:08 - 
+<record gap>
+
+Mon Sep 9
+    Task: Clean code and sort functions
+    ~11:40 - 

@@ -103,3 +103,18 @@ function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
 //     if (a.redecideCd < 7) a.redecideCd = 7;
 //   }
 // }
+
+
+// function getNearestIdx(obj, choices) {
+//   if (!choices || !choices.length) return -1;
+//   let idx = -1;
+//   let minDistL2 = Infinity;
+//   choices.forEach((c, i) => {
+//     const distL2 = distBetweenL2(obj, c);
+//     if (distL2 < minDistL2) {
+//       idx = i;
+//       minDistL2 = distL2;
+//     }
+//   });
+//   return idx;
+// }
