@@ -51,7 +51,7 @@ if (!consoleOnlyMode) {
         if (renderedTiles.has(key)) continue;
 
         // TODO: cache this check to reduce redundant work
-        const tileClass = getTileClassAt(i, j);
+        const tileClass = getTerrainAt(i, j);
 
         const tile = document.createElement("div");
         tile.className = `tile ${tileClass}`;

@@ -104,4 +104,5 @@ Fri Aug 22
 
 Mon Sep 9
     Task: Clean code and sort functions
-    ~11:40 - 
+    ~11:40 - 12:10
+        * clean and alphabetize
