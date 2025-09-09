@@ -19,8 +19,8 @@ const zoomMax = 8;
 // parameters
 const tileSize = 32;
 const tileRiserPY = 8;
-const gridWidthN = 3533088; // c * 1 tick / root2
-const gridHeightN = 3533088;
+const gridWidthN = 500; // v1 at 533088 = c * 1/60 sec / root2
+const gridHeightN = 500;
 const deerFrameW = 32;
 const deerFrameH = 41;
 // derived constants, set once on startup
@@ -267,45 +267,11 @@ let initY = 0;
 let mouseVecX = 0;
 let mouseVecY = 0;
 const forcingModes = ["eat", "sleep", "drink"];
-const freeModes = []; // expore rest bed follow fight court protect social
-// groom track patrol
+const freeModes = ["explore", "rest", "follow", "fight", "court",
+  "protect", "social", "groom", "track", "patrol"];
 const allModes = forcingModes.concat(freeModes).concat("flee");
 
 function sqr(x) { return x * x; }
-
-const wolfAudibleToDeerL2ByTerrainAndSpeed = {
-  grass: { walk: sqr(3), run: sqr(11), sprint: sqr(30) },
-  dirt: { walk: sqr(4), run: sqr(15), sprint: sqr(40) },
-  leaves: { walk: sqr(6), run: sqr(22), sprint: sqr(60) },
-  rock: { walk: sqr(8), run: sqr(30), sprint: sqr(80) },
-  gravel: { walk: sqr(9), run: sqr(37), sprint: sqr(95) },
-  water: { walk: sqr(9), run: sqr(37), sprint: sqr(95) }, // placeholder
-  bush: { walk: sqr(3), run: sqr(11), sprint: sqr(30) }, // placeholder
-};
-
-function addCursorTracker() {
-  const fieldWrapper = document.getElementById("field-wrapper");
-  const cursorCoords = document.getElementById("cursor-coords");
-  fieldWrapper.addEventListener("mousemove", (e) => {
-    const rect = fieldWrapper.getBoundingClientRect();
-    if (mouseMovesWolf) {
-      const ctrPX = rect.left + rect.width / 2
-      const ctrPY = rect.top + rect.height / 2;
-      const [vx, vy] = [e.clientX - ctrPX, e.clientY - ctrPY]
-      const minCircMag = Math.min(rect.width / 2, rect.height / 2);
-      [mouseVecX, mouseVecY] = [vx / minCircMag, vy / minCircMag];
-      updateMovementByMouse();
-    }
-    const mousePX = e.clientX - rect.left + worldShiftPX;
-    const mousePY = e.clientY - rect.top + worldShiftPY;
-    const [mouseGX, mouseGY] = rectiProject(mousePX, mousePY);
-    const [dispGX, dispGY] = [mouseGX.toFixed(3), mouseGY.toFixed(3)];
-    cursorCoords.textContent = `x: ${dispGX}, y: ${dispGY}`;
-  });
-  fieldWrapper.addEventListener("mouseleave", () => {
-    cursorCoords.textContent = `x: –, y: –`;
-  });
-}
 
 function applyFatigue(a) {
   const fatigueBySpecies = fatigueBySpeciesAndPose[a.species];
@@ -409,8 +375,8 @@ function enactDecision(a, decision) {
     });
     setCritterMoving(a, getDir(fleeX, fleeY));
     break;
-  default:
-    return alert("unknown decision to enactDecision");
+  // default:
+  //   return alert("unknown decision to enactDecision");
   }
 }
 
@@ -664,10 +630,6 @@ function isImpassable(terrain) {
   return terrain === "rock" || terrain === "bush" || terrain === "water";
 }
 
-function isOpaque(terrain) {
-  return terrain === "rock";
-}
-
 function isoProject(gx, gy) {
   const px = (gx - gy) * halfTile;
   const py = (gx + gy) * qtrTile;
@@ -689,6 +651,7 @@ function jag(x) {
 function makeDecision(a) {
   // currently the only decision making implemented is for deer
   if (a.species !== "deer") return null;
+  if (!a.decideWts) initDecideWts(a);
   const predators = [...getOthers(a)].filter(o => o.species !== 'deer');
   if (predators.length) return ["flee", { from: predators }];
   let choices = [];
@@ -711,7 +674,7 @@ function makeDecision(a) {
     return weightedChoice(choices, a.decideWts.forceWts[1]);
   // optional at level 2
   choices = freeModes.concat(forcingModes.filter(mode => {
-    a.decideWts.freeLevel[2] > needLevels[mode];
+    a.decideWts.forceLevels[3] > needLevels[mode];
   }));
   return weightedChoice(choices, a.decideWts.freeWts);
 }
@@ -764,7 +727,8 @@ function moveAllTogether(movers, statics = []) {
 }
 
 function needLevel(a, mode) {
-  return alert("needLevels not yet implemented");
+  // STUB
+  return 0.5;
 }
 
 function onStruck(a) {
@@ -801,24 +765,14 @@ function randomlyPlaceCritter(a) {
   animat?.placeCritterSprite(a);
 }
 
-// produces a random distribution in [0, 1) with a parabolic curve
-function randomPara() {
-  const x = Math.random();
-  return 4 * x * (1 - x);
-}
-
 function rectiProject(px, py) {
   const gx = (px / tileSize + py / halfTile);
   const gy = (py / halfTile - px / tileSize);
   return [gx, gy];
 }
 
-function rpMod(x) {
-  return x * (0.8 + 0.4 * randomPara());
-}
-
 function runRxn(rxn) {
-  const opts = rxn.opts;
+  // const opts = rxn.opts;
   switch (rxn.rxn) {
   case 'decontrol':
     if (a.kind !== 'critter') {
@@ -832,32 +786,6 @@ function runRxn(rxn) {
   default:
     console.log("Err: Unknown reaction to runRxn");
     return;
-  }
-}
-
-function setPresentOthersIneffMethod() {
-  // this scales O(n^2), rendering somewhat irrelevant
-  // the efficiency benefits in other methods like collision detection.
-  // TODO: replace with faster logic,
-  // e.g. a similar tile-based nearness groupings with larger scale tiles
-  allCritters.forEach(a => {
-    // TODO: evaluate whether there is a clean way to do everything we
-    // want in-place with two sets, or better yet one,
-    // and not write a new set every time
-    a.priorOthers = a.presentOthers || new Set();
-    a.presentOthers = new Set();
-  });
-  for (var iA = 0; iA < allCritters.length; iA++) {
-    const a = allCritters[iA];
-    for (var iB = iA + 1; iB < allCritters.length; iB++) {
-      const b = allCritters[iB];
-      if (canSee(a, b)) {
-        if (isVisionFacing(a, b)) a.presentOthers.add(b);
-        if (isVisionFacing(b, a)) b.presentOthers.add(a);
-      }
-      if (canHear(a, b)) a.presentOthers.add(b);
-      if (canHear(b, a)) b.presentOthers.add(a);
-    }
   }
 }
 
@@ -923,7 +851,6 @@ function unpause() {
 }
 
 function updateAllCritters() {
-  setPresentOthersIneffMethod();
   allCritters.forEach(a => {
     Object.keys(a.heldInfo)
       .forEach(key => {
@@ -981,31 +908,13 @@ function updateCritterAction(a) {
   setCritterMoving(a, dir);
 }
 
-function updateMovementByMouse() {
-  if (consoleOnlyMode || !mouseMovesWolf) return alert("Called updateMovevementByMouse out of context");
-  const mag = Math.hypot(mouseVecX, mouseVecY);
-  if (mag >= 0.9) {
-    mouseInInputField = false;
-    return;
-  }
-  mouseInInputField = true;
-  if (mag < 0.1) {
-    setCritterIdle(pcWolf);
-    return;
-  }
-  // rotate -1 converts Pixel dir to Grid dir
-  let dir = getDir(mouseVecX, mouseVecY) - 1;
-  if (dir < 0) dir = 7;
-  const newPose = mag >= 0.7 ? "sprint" : (mag >= 0.4 ? "run" : "walk");
-  setCritterMoving(pcWolf, dir, newPose);
-}
-
 function vecTo(a, b) { return [b[0] - a[0], b[1] - a[1]]; }
 
 function vecToObj(a, b) { return vecTo([a.gx, a.gy], [b.gx, b.gy]); }
 
 // weights should be an object mapping choices to numbers
 function weightedChoice(choices, weights) {
+  if (!choices?.length) return alert("No choices to weightedChoice");
   if (choices.length === 1) return choices[0];
   var wSum = 0;
   choices.forEach(ch => wSum += weights[ch]);
@@ -1078,6 +987,6 @@ window.onload = function () {
   wolves.forEach(wolf => { allCritters.push(initCritter(wolf, "wolf")); });
   deer.forEach(aDeer => { allCritters.push(initCritter(aDeer, "deer")); });
   animat?.setCameraToPCWolf();
-  if (!consoleOnlyMode) addCursorTracker();
+  // if (!consoleOnlyMode) addCursorTracker();
   gameLoop();
 };

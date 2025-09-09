@@ -5,8 +5,16 @@ const tileLayer = document.getElementById("tile-layer");
 const spriteLayer = document.getElementById("sprite-layer");
 // const debugLayer = document.getElementById("debug-layer");
 const debugWolfEl = document.getElementById("dbel-pc-wolf");
-
 const renderedTiles = new Map();
+const wolfAudibleToDeerL2ByTerrainAndSpeed = {
+  grass: { walk: sqr(3), run: sqr(11), sprint: sqr(30) },
+  dirt: { walk: sqr(4), run: sqr(15), sprint: sqr(40) },
+  leaves: { walk: sqr(6), run: sqr(22), sprint: sqr(60) },
+  rock: { walk: sqr(8), run: sqr(30), sprint: sqr(80) },
+  gravel: { walk: sqr(9), run: sqr(37), sprint: sqr(95) },
+  water: { walk: sqr(9), run: sqr(37), sprint: sqr(95) }, // placeholder
+  bush: { walk: sqr(3), run: sqr(11), sprint: sqr(30) }, // placeholder
+};
 
 if (!consoleOnlyMode) {
   animat ||= {};

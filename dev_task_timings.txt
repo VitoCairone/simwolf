@@ -102,7 +102,12 @@ Fri Aug 22
 
 <record gap>
 
-Mon Sep 9
+Mon Sep 8
     Task: Clean code and sort functions
     ~11:40 - 12:10
         * clean and alphabetize
+
+Tue Sep 9
+    Task: Reduce main to stable minimum
+    10:35 - 10:57 (22m)
+      * reduce main to stable minimum

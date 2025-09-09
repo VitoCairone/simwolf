@@ -25,6 +25,10 @@ function canSee(a, b) {
   return visX === bX && visY === bY;
 }
 
+function isOpaque(terrain) {
+  return terrain === "rock";
+}
+
 function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
   // For simplicity we are tracing from tile center to tile center,
   // not from exact point to point
