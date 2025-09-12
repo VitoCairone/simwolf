@@ -19,15 +19,13 @@ const zoomMax = 8;
 // parameters
 const tileSize = 32;
 const tileRiserPY = 8;
-const gridWidthN = 500; // v1 at 533088 = c * 1/60 sec / root2
-const gridHeightN = 500;
+const gridWidthN = 128; // v1 at 533088 = c * 1/60 sec / root2
+const gridHeightN = gridWidthN;
 const deerFrameW = 32;
 const deerFrameH = 41;
 // derived constants, set once on startup
 const gCX = gridWidthN / 2;
 const gCY = gridHeightN / 2;
-const gRadL2 = gCX * gCX + gCY * gCY;
-const gRad = Math.sqrt(gRadL2);
 // Note that a tile which is SQUARE in grid space appears as a SQUASHED DIAMOND
 // in isometric, with the surface height pixels being 1/2 of the surface width pixels
 const halfTile = tileSize / 2;
@@ -535,20 +533,23 @@ function getTerrainAt(gx, gy) {
   // For desmos.com/3d:
   // 2*abs((x*x+y*y)-floor(x*x+y*y+0.5)) - 0.5
   // for x,y in range [-1.25, 1.25]
-  const [rx, ry] = [x - gCX, y - gCY].map(v => v * 1.25 / gRad);
-  const baseAlt = jag(rx * rx + ry * ry) - 0.5 + (
-    jag(x / 103) + jag(y / 109) + jag((x + y) / 127) + jag((x - y) / 199)
-  ) * 0.04;
-  if (baseAlt < 0.5) return "water"; // sea
-  if (baseAlt > 0.875) return "rock"; // mountain
+  const [xScale, yScale] = [1.25 / (gridWidthN / 2), 1.25 / (gridHeightN / 2)]
+  const [rx, ry] = [(x - gCX) * xScale, (y - gCY) * yScale];
+  const baseAlt = jag(rx * rx + ry * ry)
+  // + (
+  //  jag(x / 103) + jag(y / 109) + jag((x + y) / 127) + jag((x - y) / 199)
+  // ) * 0.24 - 0.15;
+  // console.log(baseAlt);
+  // if (baseAlt < 0.4) return "water"; // sea
+  // if (baseAlt > 0.875) return "rock"; // mountain
   const sum = x + y;
   const dif = x - y;
   const fastNoise = jag(x / 19) + jag(y / 23) + jag(sum / 29) + jag(dif / 31); // => [0, 4]
   const slowNoise = (jag(x / 37) + jag(y / 41) + jag(sum / 43) + jag(dif / 47)) * 0.3 +
     (jag(x / 53) + jag(y / 59) + jag(sum / 61) + jag(dif / 67)) * 0.2; // => [0, 2]
   const unitVariant = (fastNoise + slowNoise) / 6;
-  if (unitVariant < 0.25) return "water";
-  if (unitVariant > 0.75) return "rock";
+  if (baseAlt + unitVariant < 1) return "water";
+  if (baseAlt + unitVariant > 1.5) return "rock";
   const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
   const pseudoRandom = hash - Math.floor(hash); // [0, 1)
   if (pseudoRandom < 0.75 * Math.pow(1 - (unitVariant * 2 - 0.5), 3)) return "bush";
@@ -754,8 +755,16 @@ function randBetween(a, b) {
 
 function randomlyPlaceCritter(a) {
   // used for initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
-  a.gx = boundVal(initX + Math.floor(Math.random() * 50), 0.5, gridWidthN - 0.5);
-  a.gy = boundVal(initY + Math.floor(Math.random() * 50), 0.5, gridHeightN - 0.5);
+  var isPlaced = 0;
+  var tries = 0;
+  const maxTries = 10;
+  for (var tries = 0; tries < maxTries && !isPlaced; tries++) {
+    a.gx = boundVal(initX + Math.floor(Math.random() * 50), 0.5, gridWidthN - 0.5);
+    a.gy = boundVal(initY + Math.floor(Math.random() * 50), 0.5, gridHeightN - 0.5);
+    isPlaced = !isImpassable(getTerrainAt(a.gx, a.gy));
+  }
+  if (!isPlaced) return false;
+
   a.animTimer = 0;
   a.redecideCd = 0; // Cd = Cooldown (ticks)
   a.currentDirection = Math.floor(Math.random() * 4) * 2;
@@ -763,6 +772,7 @@ function randomlyPlaceCritter(a) {
   setCritterIdle(a);
   updateCritterFrame(a, true);
   animat?.placeCritterSprite(a);
+  return true;
 }
 
 function rectiProject(px, py) {
