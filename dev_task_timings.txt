@@ -1,113 +1,121 @@
 Mon Jun 30
-    Task: Note Splines and Calculate for Deer Standing in 5 facings; 1:45p
-    By 2:16 made 'stag circle draft 0' as approach plan, to 2:16p [31m]
+  Task: Note Splines and Calculate for Deer Standing in 5 facings; 1:45p
+  By 2:16 made 'stag circle draft 0' as approach plan, to 2:16p [31m]
 
 Tue Jul 1
-    Task: Fix redecisioning so deer are consistantly driven from  nearest wolf
-        in open terrain
-    11:25 - 11:45 (20m):
-        * Fixed redecideCd so fleeing creature is not locked into default action
-        * Diagnostics suggest lostSignals not stored leads to getOthers empty
-        
+  Task: Fix redecisioning so deer are consistantly driven from  nearest wolf
+    in open terrain
+  11:25 - 11:45 (20m):
+    * Fixed redecideCd so fleeing creature is not locked into default action
+    * Diagnostics suggest lostSignals not stored leads to getOthers empty
+      
 Wed Jul 2
-    Task: Fix redecisioning for fleeing
-    11:56 - 12:04 (25m):
-        * Refactor control flow in updateAllCritters
+  Task: Fix redecisioning for fleeing
+  11:56 - 12:04 (25m):
+    * Refactor control flow in updateAllCritters
 
 Thu Jun 3
-    Task: Fix flee directioning in general
-    ~10:35 - 11:03 (27m)
-        * Fixed key semicardinal math error in getDir
-        * Testing
+  Task: Fix flee directioning in general
+  ~10:35 - 11:03 (27m)
+    * Fixed key semicardinal math error in getDir
+    * Testing
 
 Fri Jul 4
-    Task: Restore other & signal processing for decisioning
-    9:14 - 9:39 (25m)
-        * console diagnostics for signal processing, no findings
-        * add pause and step through keyboard controls
+  Task: Restore other & signal processing for decisioning
+  9:14 - 9:39 (25m)
+    * console diagnostics for signal processing, no findings
+    * add pause and step through keyboard controls
 
 Sun Jul 6
-    Task: Add utility to project 3D linesets to isometric sprites
-        * done
+  Task: Add utility to project 3D linesets to isometric sprites
+    * done
 
 Mon Jul 7
-    Task: Implement move-to-cursor controls for 3-speed movement
-    9:55 - 10:32 (37m)
-        * added mouse control of movement all-or-none and direction
+  Task: Implement move-to-cursor controls for 3-speed movement
+  9:55 - 10:32 (37m)
+    * added mouse control of movement all-or-none and direction
 
-    Task: Implement three moving speeds as three moving poses in logic,
-        re-using currently available sprites across poses as needed,
-        no restrictions on pose changes (e.g. fatigue/cooldown) in scope
-    1:05 - 1:34 (29m)
-        * added 3-speed mouse follow control
-    1:34 - 1:45 (16m)
-        * replace wolf as generic var, check styling vs beautifier.io
-    
-    Task: Limit run and sprint time
-    1:50 - 2:04 (14m)
-        * add some cooldown tracking for sprint
-    7:31 - 8:17 (46m)
-        * add fatigue tracking -- incomplete, does not allow sprint from start
-    10:02 - 10:14 (12m)
-        * fix errors with sprinting & fatigue
+  Task: Implement three moving speeds as three moving poses in logic,
+    re-using currently available sprites across poses as needed,
+    no restrictions on pose changes (e.g. fatigue/cooldown) in scope
+  1:05 - 1:34 (29m)
+    * added 3-speed mouse follow control
+  1:34 - 1:45 (16m)
+    * replace wolf as generic var, check styling vs beautifier.io
+  
+  Task: Limit run and sprint time
+  1:50 - 2:04 (14m)
+    * add some cooldown tracking for sprint
+  7:31 - 8:17 (46m)
+    * add fatigue tracking -- incomplete, does not allow sprint from start
+  10:02 - 10:14 (12m)
+    * fix errors with sprinting & fatigue
 
 Tue Jul 8
-    9:35 - 9:58 (23m)
-         * project roadmapping; 24 tasks for summer & out-of-scope set
+  9:35 - 9:58 (23m)
+    * project roadmapping; 24 tasks for summer & out-of-scope set
 
 Thu Jul 11
-    Task: Fatigue indicators on panel
-    9:26 - 9:56 (30m)
-        * added fatigue meter
+  Task: Fatigue indicators on panel
+  9:26 - 9:56 (30m)
+    * added fatigue meter
 
 Fri Jul 25
-    9:43 - 9:59
-        * move JS to own file
-        * rescue from split errors with single file for now
+  9:43 - 9:59
+    * move JS to own file
+    * rescue from split errors with single file for now
 
 Sun Aug 1
-    Task: No wolf command for mouse outside 90% of circle
-    1:30 - 1:42
-        * release mouse control near or outside window bounds
+  Task: No wolf command for mouse outside 90% of circle
+  1:30 - 1:42
+    * release mouse control near or outside window bounds
 
 Mon Aug 11
-    Task: Add logic for onCollide
-    11:28 - 11:52
-        * add kill-eat logic: onceThenPose, startCritterDeath
+  Task: Add logic for onCollide
+  11:28 - 11:52
+    * add kill-eat logic: onceThenPose, startCritterDeath
 
 Thu Aug 15
-    Micro: Add code . to Macbook shell
-    Task: Continue logic for onCollide
-    2:14 - 2:45 (31m)
-        * add decontrol reaction 2:45
-    9:30 - 9:58 (28m)
-        * revise collisions + add onStruck
+  Micro: Add code . to Macbook shell
+  Task: Continue logic for onCollide
+  2:14 - 2:45 (31m)
+    * add decontrol reaction 2:45
+  9:30 - 9:58 (28m)
+    * revise collisions + add onStruck
 
 Thu Aug 22
-    Task: Split out renderer from core logic
-    11:13 - 11:51 (38m)
-        * split main.js into main and animat
-    Task: Add tempo
-    4:40 - 4:49
-        * add tempo
-    4:49 - 5:16
-        * add consoleOnlyMode
-    5:45 - 6:07
-        * add canAtAgeBySpecies
+  Task: Split out renderer from core logic
+  11:13 - 11:51 (38m)
+    * split main.js into main and animat
+  Task: Add tempo
+  4:40 - 4:49
+    * add tempo
+  4:49 - 5:16
+    * add consoleOnlyMode
+  5:45 - 6:07
+    * add canAtAgeBySpecies
 
 Fri Aug 22
-    Task: add g_now and implement can method
-    11:35 - 11:52
-        * add g_now and implement can method
+  Task: add g_now and implement can method
+  11:35 - 11:52
+    * add g_now and implement can method
 
 <record gap>
 
 Mon Sep 8
-    Task: Clean code and sort functions
-    ~11:40 - 12:10
-        * clean and alphabetize
+  Task: Clean code and sort functions
+  ~11:40 - 12:10
+    * clean and alphabetize
 
 Tue Sep 9
-    Task: Reduce main to stable minimum
-    10:35 - 10:57 (22m)
-      * reduce main to stable minimum
+  Task: Reduce main to stable minimum
+  10:35 - 10:57 (22m)
+    * reduce main to stable minimum
+
+Thu Sep 11
+  * fix intended global terrain and placement at small scale
+
+Fri Sep 12
+  Task: Fix wolf camera recentering
+  11:34 - 11:55
+    * allow detatch camera from wolf
