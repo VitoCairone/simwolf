@@ -149,7 +149,15 @@ const frameDataBySpeciesAndPose = {
       frameH: 41,
       holdTks: 12,
       topToShadow: 33
-    } // placeholder
+    }, // placeholder
+    death: {
+      nFrames: 0,
+      colZero: 45,
+      frameW: 32,
+      frameH: 41,
+      holdTks: 30,
+      topToShadow: 33
+    }
   }
 }
 const hourS = 60 * 60;
@@ -693,11 +701,11 @@ function moveAllTogether(movers, statics = []) {
     // CURRENT: wolf KOs deer on any collide
     // FUTURE: kill only when wolf is in Bite pose and front-on
     if (pair[0] === -1 || pair[0].species === pair[1].species) return;
-    if (pair[1].kind === "corpse" && pair[0].kind === "critter" &&
-      pair[0].species === "wolf") {
-      startEat(pair[0], pair[1]);
-      return;
-    }
+    // if (pair[1].kind === "corpse" && pair[0].kind === "critter" &&
+    //   pair[0].species === "wolf") {
+    //   startEat(pair[0], pair[1]);
+    //   return;
+    // }
     const deerIdx = pair[1].species === "deer" ? 1 : 0;
     const wolfIdx = deerIdx ? 0 : 1;
     wasKilledBy[pair[deerIdx]] = pair[wolfIdx];
@@ -803,6 +811,7 @@ function runRxn(rxn) {
 }
 
 function startCritterDeath(a, killer) {
+  console.log("startCritterDeath triggered by " + (killer === pcWolf) ? "player" : "other");
   if (!a || a.species !== "deer") return alert("Invalid arg to startCritterDeath");
   if (a.pose === "death" || a.pose === "dead") return;
   a.speed = 0;
