@@ -650,6 +650,7 @@ function jag(x) {
 
 // makeDecision should not write any world or body state
 function makeDecision(a) {
+  return null; //short-circuit for now while working on basic movement
   // currently the only decision making implemented is for deer
   if (a.species !== "deer") return null;
   if (!a.decideWts) initDecideWts(a);
@@ -712,7 +713,9 @@ function moveAllTogether(movers, statics = []) {
         // and it should decide on a new movement to try for next tick
         // TODO: allow a rear-ended collider to continue moving when space in front is open
         // this 'should' already be the behavior since creatures move all together, investigate
-        updateCritterAction(mover);
+        if (handMovesWolf && mover === pcWolf) {
+          setCritterIdle(pcWolf);
+        } else updateCritterAction(mover);
       }
     } else {
       // this is the ONLY PLACE ANYWHERE that mover gx and gy should change!
