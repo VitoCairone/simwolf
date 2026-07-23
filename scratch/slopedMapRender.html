@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+body {
+    margin:0;
+    background:black;
+}
+
+canvas {
+    display:block;
+    margin:auto;
+}
+</style>
+</head>
+<body>
+
+<canvas id="c" width="1200" height="800"></canvas>
+
+<script>
+
+const ctx = document.getElementById("c").getContext("2d");
+
+const TW = 64;
+const TH = 32;
+const H  = 24;
+
+const TOP  = "#DDCFAB";
+const WALL = "#B09568";
+const EDGE = "#4A2B16";
+
+function iso(x,y,z)
+{
+    return {
+        x:(x-y)*TW/2 + 600,
+        y:(x+y)*TH/2 - z*H + 100
+    };
+}
+
+function poly(points,color)
+{
+    ctx.beginPath();
+
+    ctx.moveTo(points[0].x,points[0].y);
+
+    for(let i=1;i<points.length;i++)
+        ctx.lineTo(points[i].x,points[i].y);
+
+    ctx.closePath();
+
+    ctx.fillStyle=color;
+    ctx.fill();
+
+    ctx.strokeStyle=EDGE;
+    ctx.lineWidth=2;
+    ctx.stroke();
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// TILE TYPES
+///////////////////////////////////////////////////////////////////////////////
+
+// const map = [
+
+// [
+// {e:0,t:"F"},
+// {e:0,t:"N"},
+// {e:0,t:"F"},
+// {e:1,t:"W"},
+// {e:1,t:"F"}
+// ],
+
+// [
+// {e:0,t:"W"},
+// {e:1,t:"NW"},
+// {e:1,t:"F"},
+// {e:1,t:"NE"},
+// {e:1,t:"E"}
+// ],
+
+// [
+// {e:0,t:"F"},
+// {e:1,t:"F"},
+// {e:2,t:"F"},
+// {e:2,t:"F"},
+// {e:1,t:"F"}
+// ],
+
+// [
+// {e:0,t:"SW"},
+// {e:1,t:"S"},
+// {e:2,t:"F"},
+// {e:2,t:"SE"},
+// {e:1,t:"F"}
+// ],
+
+// [
+// {e:0,t:"F"},
+// {e:0,t:"S"},
+// {e:0,t:"F"},
+// {e:1,t:"F"},
+// {e:1,t:"F"}
+// ]
+
+// ];
+
+const map = [
+
+[
+    {e:0,t:"NW"},
+    {e:0,t:"N"},
+    {e:0,t:"N"},
+    {e:0,t:"N"},
+    {e:0,t:"N"},
+    {e:0,t:"N"},
+    {e:0,t:"NE"}
+],
+
+[
+    {e:0,t:"W"},
+    {e:1,t:"NW"},
+    {e:1,t:"N"},
+    {e:1,t:"N"},
+    {e:1,t:"N"},
+    {e:1,t:"NE"},
+    {e:0,t:"E"}
+],
+
+[
+    {e:0,t:"W"},
+    {e:1,t:"W"},
+    {e:2,t:"NW"},
+    {e:2,t:"N"},
+    {e:2,t:"NE"},
+    {e:1,t:"E"},
+    {e:0,t:"E"}
+],
+
+[
+    {e:0,t:"W"},
+    {e:1,t:"W"},
+    {e:2,t:"W"},
+    {e:3,t:"F"},
+    {e:2,t:"E"},
+    {e:1,t:"E"},
+    {e:0,t:"E"}
+],
+
+[
+    {e:0,t:"W"},
+    {e:1,t:"W"},
+    {e:2,t:"SW"},
+    {e:2,t:"S"},
+    {e:2,t:"SE"},
+    {e:1,t:"E"},
+    {e:0,t:"E"}
+],
+
+[
+    {e:0,t:"W"},
+    {e:1,t:"SW"},
+    {e:1,t:"S"},
+    {e:1,t:"S"},
+    {e:1,t:"S"},
+    {e:1,t:"SE"},
+    {e:0,t:"E"}
+],
+
+[
+    {e:0,t:"SW"},
+    {e:0,t:"S"},
+    {e:0,t:"S"},
+    {e:0,t:"S"},
+    {e:0,t:"S"},
+    {e:0,t:"S"},
+    {e:0,t:"SE"}
+]
+
+];
+
+///////////////////////////////////////////////////////////////////////////////
+
+function corners(tile)
+{
+    const z = tile.e;
+
+    switch(tile.t)
+    {
+        case "F":
+            return [z,z,z,z];
+
+        case "S":
+            return [z+1,z+1,z,z];
+
+        case "N":
+            return [z,z,z+1,z+1];
+
+        case "W":
+            return [z,z+1,z+1,z];
+
+        case "E":
+            return [z+1,z,z,z+1];
+
+        case "SE":
+            return [z+1,z,z,z];
+
+        case "SW":
+            return [z,z+1,z,z];
+
+        case "NW":
+            return [z,z,z+1,z];
+
+        case "NE":
+            return [z,z,z,z+1];
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+function drawTop(x,y,tile)
+{
+    const [nw,ne,se,sw] = corners(tile);
+
+    poly([
+        iso(x,y,nw),
+        iso(x+1,y,ne),
+        iso(x+1,y+1,se),
+        iso(x,y+1,sw)
+    ],TOP);
+}
+
+function drawSouth(x,y,tile)
+{
+    const [,,,sw] = corners(tile);
+    const [, ,se] = corners(tile);
+
+    if(sw===0 && se===0)
+        return;
+
+    poly([
+        iso(x,y+1,sw),
+        iso(x+1,y+1,se),
+        iso(x+1,y+1,0),
+        iso(x,y+1,0)
+    ],WALL);
+}
+
+function drawEast(x,y,tile)
+{
+    const [,ne,se] = corners(tile);
+
+    if(ne===0 && se===0)
+        return;
+
+    poly([
+        iso(x+1,y,ne),
+        iso(x+1,y+1,se),
+        iso(x+1,y+1,0),
+        iso(x+1,y,0)
+    ],WALL);
+}
+
+///////////////////////////////////////////////////////////////////////////////
+
+function render()
+{
+    ctx.clearRect(0,0,1200,800);
+
+    const rows = map.length;
+    const cols = map[0].length;
+
+    for(let s=0;s<rows+cols;s++)
+    {
+        for(let y=0;y<rows;y++)
+        {
+            const x=s-y;
+
+            if(x<0 || x>=cols)
+                continue;
+
+            drawSouth(x,y,map[y][x]);
+            drawEast(x,y,map[y][x]);
+            drawTop(x,y,map[y][x]);
+        }
+    }
+}
+
+render();
+
+</script>
+
+</body>
+</html>
