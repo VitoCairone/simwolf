@@ -65,26 +65,46 @@ function neighbors(x,y){
     return out;
 }
 
+function sample(list) {
+    return list.length ? list[randInt(list.length)] : null;
+}
+
 function germinate(x, y, j) {
     let pScore=0, aScore=seed[j]*(disturbed[j]?4:1);
 
+    const pList = [];
+    const aList = [];
     // neighboring perennial mats
     for(const ni of neighbors(x,y)){
         const no=occ[ni];
-        if(no>=0 && no<7) pScore+=5;
-        if(no>=7) aScore+=1;
+        if(no>=0 && no<7) {
+            pList.push(no);
+            pScore+=5;
+        }
+        if(no>=7) {
+            aList.push(no);
+            aScore+=1;
+        }
+    }
+
+    const addAllAnnuals = function() {
+        for (let aNo = 7; aNo <= 9; aNo++) aList.push(aNo);
     }
 
     // long-distance annual dispersal
-    if(Math.random()<0.002) aScore+=20;
+    if(Math.random()<0.002) {
+        aScore += 20;
+        addAllAnnuals();
+    }
 
     if(aScore>pScore && aScore>0){
-        const val = 7+randInt(3);
+        if (!aList.length) addAllAnnuals();
+        const val = sample(aList);
         occ[j] = val;
         priorOcc[j] = val;
         if(seed[j]<500) seed[j]+=5;
     } else if(pScore>0){
-        const val = randInt(7);
+        const val = sample(pList);
         occ[j] = val;
         priorOcc[j] = val;
     }
