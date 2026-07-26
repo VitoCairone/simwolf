@@ -1,25 +1,30 @@
 <!DOCTYPE html>
 <html>
 <head>
+<meta charset="utf-8">
+
 <style>
 body {
-    margin:0;
-    background:black;
+    margin: 0;
+    background: black;
+    overflow: hidden;
 }
 
 canvas {
-    display:block;
-    margin:auto;
+    display: block;
+    margin: auto;
 }
 </style>
 </head>
+
 <body>
 
 <canvas id="c" width="1200" height="800"></canvas>
 
 <script>
 
-const ctx = document.getElementById("c").getContext("2d");
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
 
 const TW = 64;
 const TH = 32;
@@ -29,258 +34,179 @@ const TOP  = "#DDCFAB";
 const WALL = "#B09568";
 const EDGE = "#4A2B16";
 
-function iso(x,y,z)
-{
-    return {
-        x:(x-y)*TW/2 + 600,
-        y:(x+y)*TH/2 - z*H + 100
-    };
-}
+////////////////////////////////////////////////////////////////////////////////
+// VERTEX HEIGHT MAP
+//
+// Terrain is represented as an (N+1)x(M+1) grid of vertex heights.
+//
+// Every tile is:
+//
+//     NW ----- NE
+//      |       |
+//      | TILE  |
+//      |       |
+//     SW ----- SE
+//
+// Adjacent vertices in a legal map differ by at most 1.
+////////////////////////////////////////////////////////////////////////////////
 
-function poly(points,color)
-{
-    ctx.beginPath();
+const vertices = [
 
-    ctx.moveTo(points[0].x,points[0].y);
-
-    for(let i=1;i<points.length;i++)
-        ctx.lineTo(points[i].x,points[i].y);
-
-    ctx.closePath();
-
-    ctx.fillStyle=color;
-    ctx.fill();
-
-    ctx.strokeStyle=EDGE;
-    ctx.lineWidth=2;
-    ctx.stroke();
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// TILE TYPES
-///////////////////////////////////////////////////////////////////////////////
-
-// const map = [
-
-// [
-// {e:0,t:"F"},
-// {e:0,t:"N"},
-// {e:0,t:"F"},
-// {e:1,t:"W"},
-// {e:1,t:"F"}
-// ],
-
-// [
-// {e:0,t:"W"},
-// {e:1,t:"NW"},
-// {e:1,t:"F"},
-// {e:1,t:"NE"},
-// {e:1,t:"E"}
-// ],
-
-// [
-// {e:0,t:"F"},
-// {e:1,t:"F"},
-// {e:2,t:"F"},
-// {e:2,t:"F"},
-// {e:1,t:"F"}
-// ],
-
-// [
-// {e:0,t:"SW"},
-// {e:1,t:"S"},
-// {e:2,t:"F"},
-// {e:2,t:"SE"},
-// {e:1,t:"F"}
-// ],
-
-// [
-// {e:0,t:"F"},
-// {e:0,t:"S"},
-// {e:0,t:"F"},
-// {e:1,t:"F"},
-// {e:1,t:"F"}
-// ]
-
-// ];
-
-const map = [
-
-[
-    {e:0,t:"NW"},
-    {e:0,t:"N"},
-    {e:0,t:"N"},
-    {e:0,t:"N"},
-    {e:0,t:"N"},
-    {e:0,t:"N"},
-    {e:0,t:"NE"}
-],
-
-[
-    {e:0,t:"W"},
-    {e:1,t:"NW"},
-    {e:1,t:"N"},
-    {e:1,t:"N"},
-    {e:1,t:"N"},
-    {e:1,t:"NE"},
-    {e:0,t:"E"}
-],
-
-[
-    {e:0,t:"W"},
-    {e:1,t:"W"},
-    {e:2,t:"NW"},
-    {e:2,t:"N"},
-    {e:2,t:"NE"},
-    {e:1,t:"E"},
-    {e:0,t:"E"}
-],
-
-[
-    {e:0,t:"W"},
-    {e:1,t:"W"},
-    {e:2,t:"W"},
-    {e:3,t:"F"},
-    {e:2,t:"E"},
-    {e:1,t:"E"},
-    {e:0,t:"E"}
-],
-
-[
-    {e:0,t:"W"},
-    {e:1,t:"W"},
-    {e:2,t:"SW"},
-    {e:2,t:"S"},
-    {e:2,t:"SE"},
-    {e:1,t:"E"},
-    {e:0,t:"E"}
-],
-
-[
-    {e:0,t:"W"},
-    {e:1,t:"SW"},
-    {e:1,t:"S"},
-    {e:1,t:"S"},
-    {e:1,t:"S"},
-    {e:1,t:"SE"},
-    {e:0,t:"E"}
-],
-
-[
-    {e:0,t:"SW"},
-    {e:0,t:"S"},
-    {e:0,t:"S"},
-    {e:0,t:"S"},
-    {e:0,t:"S"},
-    {e:0,t:"S"},
-    {e:0,t:"SE"}
-]
+    [0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0],
+    [0,0,1,1,1,1,0,0],
+    [0,0,1,2,2,1,0,0],
+    [0,0,1,2,2,1,0,0],
+    [0,0,1,1,1,1,0,0],
+    [0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0]
 
 ];
 
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
-function corners(tile)
+function iso(x, y, z)
 {
-    const z = tile.e;
+    return {
+        x: (x - y) * TW / 2 + canvas.width / 2,
+        y: (x + y) * TH / 2 - z * H + 100
+    };
+}
 
-    switch(tile.t)
+////////////////////////////////////////////////////////////////////////////////
+
+function poly(points, fill)
+{
+    ctx.beginPath();
+
+    ctx.moveTo(points[0].x, points[0].y);
+
+    for (let i = 1; i < points.length; ++i)
     {
-        case "F":
-            return [z,z,z,z];
+        ctx.lineTo(points[i].x, points[i].y);
+    }
 
-        case "S":
-            return [z+1,z+1,z,z];
+    ctx.closePath();
 
-        case "N":
-            return [z,z,z+1,z+1];
+    ctx.fillStyle = fill;
+    ctx.fill();
 
-        case "W":
-            return [z,z+1,z+1,z];
+    ctx.strokeStyle = EDGE;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
 
-        case "E":
-            return [z+1,z,z,z+1];
+////////////////////////////////////////////////////////////////////////////////
+// BUILD TILE MAP FROM VERTEX GRID
+////////////////////////////////////////////////////////////////////////////////
 
-        case "SE":
-            return [z+1,z,z,z];
+const map = [];
 
-        case "SW":
-            return [z,z+1,z,z];
+for (let y = 0; y < vertices.length - 1; ++y)
+{
+    map[y] = [];
 
-        case "NW":
-            return [z,z,z+1,z];
+    for (let x = 0; x < vertices[0].length - 1; ++x)
+    {
+        map[y][x] = {
 
-        case "NE":
-            return [z,z,z,z+1];
+            nw: vertices[y][x],
+            ne: vertices[y][x + 1],
+            se: vertices[y + 1][x + 1],
+            sw: vertices[y + 1][x]
+
+        };
     }
 }
 
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
-function drawTop(x,y,tile)
+function drawTop(x, y, tile)
 {
-    const [nw,ne,se,sw] = corners(tile);
-
     poly([
-        iso(x,y,nw),
-        iso(x+1,y,ne),
-        iso(x+1,y+1,se),
-        iso(x,y+1,sw)
-    ],TOP);
+        iso(x,     y,     tile.nw),
+        iso(x + 1, y,     tile.ne),
+        iso(x + 1, y + 1, tile.se),
+        iso(x,     y + 1, tile.sw)
+    ], TOP);
 }
 
-function drawSouth(x,y,tile)
-{
-    const [,,,sw] = corners(tile);
-    const [, ,se] = corners(tile);
+////////////////////////////////////////////////////////////////////////////////
+// SOUTH WALL
+////////////////////////////////////////////////////////////////////////////////
 
-    if(sw===0 && se===0)
+function drawSouth(x, y, tile)
+{
+    const z1 = tile.sw;
+    const z2 = tile.se;
+
+    if (z1 === 0 && z2 === 0)
+    {
         return;
+    }
 
     poly([
-        iso(x,y+1,sw),
-        iso(x+1,y+1,se),
-        iso(x+1,y+1,0),
-        iso(x,y+1,0)
-    ],WALL);
+        iso(x,     y + 1, z1),
+        iso(x + 1, y + 1, z2),
+
+        iso(x + 1, y + 1, 0),
+        iso(x,     y + 1, 0)
+
+    ], WALL);
 }
 
-function drawEast(x,y,tile)
+////////////////////////////////////////////////////////////////////////////////
+// EAST WALL
+////////////////////////////////////////////////////////////////////////////////
+
+function drawEast(x, y, tile)
 {
-    const [,ne,se] = corners(tile);
+    const z1 = tile.ne;
+    const z2 = tile.se;
 
-    if(ne===0 && se===0)
+    if (z1 === 0 && z2 === 0)
+    {
         return;
+    }
 
     poly([
-        iso(x+1,y,ne),
-        iso(x+1,y+1,se),
-        iso(x+1,y+1,0),
-        iso(x+1,y,0)
-    ],WALL);
+        iso(x + 1, y,     z1),
+        iso(x + 1, y + 1, z2),
+
+        iso(x + 1, y + 1, 0),
+        iso(x + 1, y,     0)
+
+    ], WALL);
 }
 
-///////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 
 function render()
 {
-    ctx.clearRect(0,0,1200,800);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const rows = map.length;
     const cols = map[0].length;
 
-    for(let s=0;s<rows+cols;s++)
+    // Painter's algorithm:
+    // Render diagonally from back to front.
+
+    for (let sum = 0; sum < rows + cols; ++sum)
     {
-        for(let y=0;y<rows;y++)
+        for (let y = 0; y < rows; ++y)
         {
-            const x=s-y;
+            const x = sum - y;
 
-            if(x<0 || x>=cols)
+            if (x < 0 || x >= cols)
+            {
                 continue;
+            }
 
-            drawSouth(x,y,map[y][x]);
-            drawEast(x,y,map[y][x]);
-            drawTop(x,y,map[y][x]);
+            const tile = map[y][x];
+
+            drawSouth(x, y, tile);
+            drawEast(x, y, tile);
+            drawTop(x, y, tile);
         }
     }
 }
