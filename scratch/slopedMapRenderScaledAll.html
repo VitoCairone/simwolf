@@ -26,9 +26,9 @@ canvas {
 const canvas = document.getElementById("c");
 const ctx = canvas.getContext("2d");
 
-const TW = 64;
-const TH = 32;
-const H  = 24;
+const TW = 32;
+const TH = 16;
+const H  = 12; // TODO: confirm this one should actually be 12, not 8 or 16
 
 const TOP  = "#DDCFAB";
 const WALL = "#B09568";
@@ -50,21 +50,47 @@ const EDGE = "#4A2B16";
 // Adjacent vertices in a legal map differ by at most 1.
 ////////////////////////////////////////////////////////////////////////////////
 
-const vertices = [
+const shapes = [
+    [
+        [0,0],
+        [0,0]
+    ],
+    [
+        [0,1],
+        [0,1]
+    ],
+    [
+        [1,1],
+        [0,0]
+    ],
+    [
+        [1,0],
+        [1,0]
+    ],
+    [
+        [0,0],
+        [1,1]
+    ],
+    [
+        [0,0],
+        [0,1]
+    ],
+    [
+        [0,1],
+        [0,0]
+    ],
+    [
+        [1,0],
+        [0,0]
+    ],
+    [
+        [0,0],
+        [1,0]
+    ]
+]
 
-    // [0,0,0,0,0,0,0,0],
-    // [0,1,0,0,0,0,0,0],
-    // [0,0,1,1,1,1,0,0],
-    // [0,0,1,2,2,1,0,0],
-    // [0,0,1,2,2,1,0,0],
-    // [0,0,1,1,1,1,0,0],
-    // [0,0,0,0,0,0,0,0],
-    // [0,0,0,0,0,0,0,0]
-
-    [0,0],
-    [1,0]
-
-];
+// note that there are 4x additional three-high shapes
+// and 2x additional two-high diagonal shapes
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -78,15 +104,17 @@ function iso(x, y, z)
 
 ////////////////////////////////////////////////////////////////////////////////
 
-function poly(points, fill)
+function poly(points, fill, offset = null)
 {
     ctx.beginPath();
 
-    ctx.moveTo(points[0].x, points[0].y);
+    if (offset) ctx.moveTo(points[0].x + offset[0], points[0].y + offset[1])
+    else ctx.moveTo(points[0].x, points[0].y);
 
     for (let i = 1; i < points.length; ++i)
     {
-        ctx.lineTo(points[i].x, points[i].y);
+        if (offset) ctx.lineTo(points[i].x + offset[0], points[i].y + offset[1])
+        else ctx.lineTo(points[i].x, points[i].y);
     }
 
     ctx.closePath();
@@ -103,42 +131,49 @@ function poly(points, fill)
 // BUILD TILE MAP FROM VERTEX GRID
 ////////////////////////////////////////////////////////////////////////////////
 
-const map = [];
+let vertices = null;
+const verticesMap = [];
 
-for (let y = 0; y < vertices.length - 1; ++y)
-{
-    map[y] = [];
+function mapVertices(shapeId) {
+    vertices = shapes[shapeId];
 
-    for (let x = 0; x < vertices[0].length - 1; ++x)
+    for (let y = 0; y < vertices.length - 1; ++y)
     {
-        map[y][x] = {
+        verticesMap[y] = [];
 
-            nw: vertices[y][x],
-            ne: vertices[y][x + 1],
-            se: vertices[y + 1][x + 1],
-            sw: vertices[y + 1][x]
+        for (let x = 0; x < vertices[0].length - 1; ++x)
+        {
+            verticesMap[y][x] = {
 
-        };
+                nw: vertices[y][x],
+                ne: vertices[y][x + 1],
+                se: vertices[y + 1][x + 1],
+                sw: vertices[y + 1][x]
+
+            };
+        }
     }
 }
 
+mapVertices(0);
+
 ////////////////////////////////////////////////////////////////////////////////
 
-function drawTop(x, y, tile)
+function drawTop(x, y, tile, offset = null)
 {
     poly([
         iso(x,     y,     tile.nw),
         iso(x + 1, y,     tile.ne),
         iso(x + 1, y + 1, tile.se),
         iso(x,     y + 1, tile.sw)
-    ], TOP);
+    ], TOP, offset);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // SOUTH WALL
 ////////////////////////////////////////////////////////////////////////////////
 
-function drawSouth(x, y, tile)
+function drawSouth(x, y, tile, offset = null)
 {
     const z1 = tile.sw;
     const z2 = tile.se;
@@ -155,14 +190,14 @@ function drawSouth(x, y, tile)
         iso(x + 1, y + 1, 0),
         iso(x,     y + 1, 0)
 
-    ], WALL);
+    ], WALL, offset);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // EAST WALL
 ////////////////////////////////////////////////////////////////////////////////
 
-function drawEast(x, y, tile)
+function drawEast(x, y, tile, offset = null)
 {
     const z1 = tile.ne;
     const z2 = tile.se;
@@ -179,17 +214,16 @@ function drawEast(x, y, tile)
         iso(x + 1, y + 1, 0),
         iso(x + 1, y,     0)
 
-    ], WALL);
+    ], WALL, offset);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
-function render()
-{
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
+function renderTile(x, y, offset = null) {
+    if (x < 0 || x > verticesMap[0].length) return;
 
-    const rows = map.length;
-    const cols = map[0].length;
+    const rows = verticesMap.length;
+    const cols = verticesMap[0].length;
 
     // Painter's algorithm:
     // Render diagonally from back to front.
@@ -204,17 +238,36 @@ function render()
             {
                 continue;
             }
+            
+            const tile = verticesMap[y][x];
 
-            const tile = map[y][x];
-
-            drawSouth(x, y, tile);
-            drawEast(x, y, tile);
-            drawTop(x, y, tile);
+            drawSouth(x, y, tile, offset);
+            drawEast(x, y, tile, offset);
+            drawTop(x, y, tile, offset);
         }
     }
 }
 
-render();
+function render()
+{
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    renderTile(0, 0);
+}
+
+function renderShapeSeries() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    var offset = -250;
+
+    for (let i = 0; i < shapes.length; i++) {
+        mapVertices(i);
+        renderTile(0, 0, [offset, 0]);
+        offset += 32;
+    }
+}
+
+// render();
+renderShapeSeries();
 
 </script>
 
