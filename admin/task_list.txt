@@ -2,13 +2,17 @@
 
 [1] Generate 9 required tile shapes at scale of existing tileset
   -- Jul 30 done SD 109p (~40m)
+
 [2] Support both full map and single shape rendering scaled to 32px
+  -- Jul 30 done SD 123p (~10m)
+
+[3] Confirm 'correct' isometric tile height at 32px wide is 12px
   -- Jul 30 
 
 
 ### LOG
 Jul 30
-1230 - 111
+1230 - 123
     Refactor for scaled & offset rendering of specific single tile shapes
     Refactor fot rendering of multiple single shapes offset
     Save image for 9 tiles

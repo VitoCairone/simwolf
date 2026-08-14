@@ -50,6 +50,17 @@ const EDGE = "#4A2B16";
 // Adjacent vertices in a legal map differ by at most 1.
 ////////////////////////////////////////////////////////////////////////////////
 
+const terrainMap = [
+    [0,0,0,0,0,0,0,0],
+    [0,1,0,0,0,0,0,0],
+    [0,0,1,1,1,1,0,0],
+    [0,0,1,2,2,1,0,0],
+    [0,0,1,2,2,1,0,0],
+    [0,0,1,1,1,1,0,0],
+    [0,0,0,0,0,0,0,0],
+    [0,0,0,0,0,0,0,0]
+];
+
 const shapes = [
     [
         [0,0],
@@ -134,8 +145,11 @@ function poly(points, fill, offset = null)
 let vertices = null;
 const verticesMap = [];
 
-function mapVertices(shapeId) {
-    vertices = shapes[shapeId];
+function mapVertices(shapeIdOrTerrainMap) {
+    if (Array.isArray(shapeIdOrTerrainMap))
+        vertices = shapeIdOrTerrainMap;
+    else
+        vertices = shapes[shapeIdOrTerrainMap];
 
     for (let y = 0; y < vertices.length - 1; ++y)
     {
@@ -248,11 +262,35 @@ function renderTile(x, y, offset = null) {
     }
 }
 
-function render()
+function renderTerrain()
 {
+    mapVertices(terrainMap);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    renderTile(0, 0);
+    const rows = verticesMap.length;
+    const cols = verticesMap[0].length;
+
+    // Painter's algorithm:
+    // Render diagonally from back to front.
+
+    for (let sum = 0; sum < rows + cols; ++sum)
+    {
+        for (let y = 0; y < rows; ++y)
+        {
+            const x = sum - y;
+
+            if (x < 0 || x >= cols)
+            {
+                continue;
+            }
+
+            renderTile(x, y);
+
+            // drawSouth(x, y, tile);
+            // drawEast(x, y, tile);
+            // drawTop(x, y, tile);
+        }
+    }
 }
 
 function renderShapeSeries() {
@@ -266,7 +304,7 @@ function renderShapeSeries() {
     }
 }
 
-// render();
+// renderTerrain();
 renderShapeSeries();
 
 </script>
