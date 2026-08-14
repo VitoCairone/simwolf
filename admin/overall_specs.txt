@@ -1,0 +1,43 @@
+Required systems
+
+  display
+    (1) display terrain and creatures in isometric projection
+    (2) render all and only terrain and creatures within a window
+    (3) render any motion in the range
+    (4) render any pose changes coordinated with motion
+    (5) determine sight range and hiding places from every location
+    (6) when interface is bound to creature, display fog-of-war where creature cannot see
+  movement
+    (1) use tile grid to place all creatures
+    (2) allow for free movement limited in MVP by simple cooldowns/timers on abilities
+    (3) all creatures should be blocking to one another and overlaps forbidden
+  species
+    (1) MVP has exactly 3 animal species: wolf (predator), deer (prey), rabbit (prey) 
+  build
+    (1) creature has a width, height, and length.
+    (2) creature has a color
+    (3) creature has a mass
+  chasing
+    (1) MVP predator will always chase target or nearest prey, unless unable to eat more
+  fleeing
+    (1) MVP prey will always flee all predators known to it
+  feeding
+    (1) MVP consuming food adds the food to own mass as child, otherwise discards it
+    (2) Amount of mass which can be consumed at a time is limited
+    (3) MVP adults have fixed regular food intake requirement for speed & survival
+  combat
+    (1) MVP combat resolves immediately for predator on touch
+  sensing
+    (1) Vision: knowledge of all creatures in vision range
+    (2) Hearing: knowledge of all creatures which move within hearing range, MVP no blocking/dampening
+    (3) Scent: creatures leave scent gradients on tiles they visit and those nearby
+    (4) All senses: MVP creatures in vision or hearing range are identified and located, no uncertainty
+  mating
+    (1) adult unpaired creatures will pair-bond automatically with opposite sex adult non-relatives
+    (2) MVP pairing is random without individual selection
+    (3) use simple infant exposure rule to form relative (nonsexual conspecific) lists
+  spawning
+    (1) mated pairs will result in pregnancy of female
+    (2) female gestates, births, and nurses offspring
+    (3) male provides food for paired female during gestation, birth, and nursing
+    (4) mated pair raises offspring until independance
