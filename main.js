@@ -92,6 +92,10 @@ function rectiProject(px, py) {
   return [gx, gy];
 }
 
+function sample(list) {
+  return list.length ? list[Math.floor(Math.random() * list.length)] : null;
+}
+
 // TODO: consider what data should be allowed to vary by pose and what data 
 // is fixed for the species
 // TODO: consider if frame holds should be in time or in ticks,
@@ -195,10 +199,27 @@ const deer = Array.from({length: nDeer}, () => ({}));
 let worldShiftPX = 0;
 let worldShiftPY = 0;
 
+const allLandTiles = [];
+
 function randomlyPlaceCritter(a) {
+  if (!allLandTiles.length) {
+    if (gridHeightN * gridWidthN > 1000000) {
+      alert("ERORR: randomlyPlaceCritter not implemented yet for maps > 1M tiles");
+    }
+    // collect all land tiles once
+    for (var i = 0; i < gridWidthN; i++) {
+      for (var j = 0; j < gridHeightN; j++) {
+        let ter = getTerrainAt(i, j);
+        if (ter !== "water" && ter !== "rock") allLandTiles.push([i, j]);
+      }
+    }
+  }
+
+  const [randLandX, randLandY] = sample(allLandTiles);
+
   // used for initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
-  a.gx = boundVal(initX + Math.floor(Math.random() * 50), 0.5, gridWidthN - 0.5);
-  a.gy = boundVal(initY + Math.floor(Math.random() * 50), 0.5, gridHeightN - 0.5);
+  a.gx = randLandX;
+  a.gy = randLandY;
   a.animTimer = 0;
   a.redecideCd = 0; // Cd = Cooldown (ticks)
   a.currentDirection = Math.floor(Math.random() * 4) * 2;
@@ -242,21 +263,10 @@ function initCritter(a, species, isNewborn = false) {
 let viewportWidth = document.getElementById('field-wrapper').clientWidth;
 let viewportHeight = document.getElementById('field-wrapper').clientHeight;
 
-let initX = 0;
-let initY = 0;
-
 // rendering errors occur abruptly at x == 1677740
 // unknown why at this time
 // also observed at: [369092, 1404710] and other values which are 
 // close to 1500k in Y and 300k+ in X
-const safeX = Math.min(gridWidthN, 1500000);
-const safeY = Math.min(gridHeightN, 1500000);
-
-for (let t = 0; t < 1000 && getTerrainAt(initX, initY) === "water"; t++) {
-  initX = Math.floor(Math.random() * safeX);
-  initY = Math.floor(Math.random() * safeY);
-}
-if (getTerrainAt(initX, initY) === "water") alert("No land found in map");
 
 const allCritters = [];
 const allCorpses = [];
@@ -332,7 +342,7 @@ function getTerrainAt(gx, gy) {
     jag(x / 103) + jag(y / 109) + jag ((x + y) / 127) + jag((x - y) / 199)
   ) * 0.04;
 
-  if (baseAlt < 0.5) return "water"; // sea
+  if (baseAlt < 0.2) return "water"; // sea
   if (baseAlt > 0.875) return "rock"; // mountain
 
   const sum = x + y;
@@ -343,8 +353,8 @@ function getTerrainAt(gx, gy) {
 
   const unitVariant = (fastNoise + slowNoise) / 6;
 
-  if (unitVariant < 0.25) return "water";
-  if (unitVariant > 0.75) return "rock";
+  if (unitVariant < 0.44) return "water";
+  if (unitVariant > 0.7) return "rock";
 
   // const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
   // const pseudoRandom = hash - Math.floor(hash); // [0, 1)
@@ -354,7 +364,7 @@ function getTerrainAt(gx, gy) {
   // const types = ["dirt", "grass", "bush"];
   // return types[Math.abs(typePseudorandInt) % types.length];
 
-  if (unitVariant < 0.5) return "grass";
+  if (unitVariant < 0.6) return "grass";
   if (unitVariant < 0.75) return "dirt";
 }
 

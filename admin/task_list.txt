@@ -9,7 +9,6 @@
 [3] Confirm 'correct' isometric tile height at 32px wide is 12px
   -- Jul 30 
 
-
 ### LOG
 Jul 30
 1230 - 123
