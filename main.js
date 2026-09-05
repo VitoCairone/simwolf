@@ -144,7 +144,7 @@ const canAtAgeBySpecies =  {
     see:    { min: 0, avg: 0, max: 0 },
     hear:   { min: 0, avg: 0, max: 0 },
     walk:   { min: 0.25 * hourS, avg: 0.5 * hourS, max: 1 * hourS},
-    eat:    { min: 10 * dayS, avg: 20 * dayS,  max: 30 * dayS },
+    eat:    { min: 10 * dayS, avg: 20 * dayS, max: 30 * dayS },
     run:    { min: 1 * dayS, avg: 2 * dayS, max: 3 * dayS },
     mate:   { min: 16 * monthS, avg: 24 * monthS,  max: 36 * monthS },
     liveTo: { min: 8 * yearS, avg: 12 * yearS, max: 25 * yearS }
@@ -158,7 +158,8 @@ const canAtAgeBySpecies =  {
   canAtAgeBySpecies[species].liveTo = canAtAgeBySpecies[species].liveTo.max;
 });
 
-function can(a, capability) {
+function _can(a, capability) {
+  if (a.isHaltedUntil) return false;
   return g_now - a.birthTime >= canAtAgeBySpecies[a.species][capability];
 }
 
@@ -249,8 +250,6 @@ function initCritter(a, species, isNewborn = false) {
   a.isMale = Math.random() < 0.5;
 
   a.speed = 0;
-  a.heldInfo = {};
-  a.holdInfoUntil = {};
   a.fatigue = 0;
 
   animat?.addCritter(a);
@@ -508,36 +507,8 @@ function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
   return fullTrace ? shifts.map(s => shiftToGrid(s)) : shiftToGrid([i, j]);
 }
 
-// currently not called
-// function updateSignals(a) {
-//   if (areSetsEqual(a.priorOthers, a.presentOthers)) return;
-
-//   const newSignals = a.presentOthers.difference(a.priorOthers);
-//   const lostSignals = a.priorOthers.difference(a.presentOthers);
-
-//   if (lostSignals.size) {
-//     console.log(`${a.species} lost signal`);
-//     holdInfo(a, "lostSignals", {signals: lostSignals }, 360);
-//   }
-
-//   if (newSignals.size) {
-//     console.log(`${a.species} got new signal`);
-//     if (a.redecideCd < 7) a.redecideCd = 7;
-//   }
-// }
-
 function updateAllCritters() {
   setPresentOthersIneffMethod();
-
-  allCritters.forEach(a => {
-    Object.keys(a.heldInfo).forEach(key => {
-      if (g_tick > a.holdInfoUntil[key]) {
-        console.log(`Deleted ${key} from ${a.species}'s heldInfo`);
-        delete a.heldInfo[key];
-        delete a.holdInfoUntil[key];
-      }
-    })
-  });
 
   allCritters.forEach(a => {
     // todo: combine this better with setPresentOthers() so that a wolf
@@ -575,7 +546,7 @@ function applyFatigue(a) {
   const fatigueBySpecies = fatigueBySpeciesAndPose[a.species];
   if (!fatigueBySpecies.hasOwnProperty(a.pose)) return;
   const fatigueData = fatigueBySpecies[a.pose];
-  a.fatigue += fatigueData.dps / 60;
+  a.fatigue += fatigueData.dps * tempo;
   if (a.fatigue >= fatigueData.forceEnd) {
     if (fatigueData.downTo === "idle") {
       setCritterIdle(a);
@@ -619,6 +590,7 @@ function moveAllTogether(movers, statics = []) {
 
     if (didCollide[idx]) {
       if (wasKilledBy[idx]) {
+        alert("KO collision");
         startCritterDeath(movers[idx], wasKilledBy[idx]);
       } else {
         // this mover's gx and gy do NOT get updated this tick
@@ -812,7 +784,8 @@ function distBetweenL2(a, b) {
 
 function canHear(a, b) {
   // a is the listener, and b is the potential sound origin
-  
+  if (!_can(a, "hear")) return false;
+
   // movement is currently the only source of sound
   // for now we use one table based on moving wolf and listening deer
   // revise in future to account for actual origin and listener species
@@ -865,22 +838,24 @@ const fatigueBySpeciesAndPose = {
 }
 
 
-// TODO: consider rolling canSprint and canRun into can()
+// TODO: consider rolling canSprint and canRun into _can()
 function canSprint(a, isAlready = false) {
-  if (!can(a, 'run')) return false; // age check
+  if (!_can(a, 'run')) return false; // age check
   const limit = fatigueBySpeciesAndPose[a.species].sprint.forceEnd
     * (isAlready ? 1 : 0.7);
   return a.fatigue <= limit;
 }
 
 function canRun(a, isAlready = false) {
-  if (!can(a, 'run')) return false; // age check
+  if (!_can(a, 'run')) return false; // age check
   const limit = fatigueBySpeciesAndPose[a.species].run.forceEnd
     * (isAlready ? 1 : 0.7);
   return a.fatigue <= limit;
 }
 
 function setCritterMoving(a, dir, newPose = "walk") {
+  if (a.isHaltedUntil > g_tick) return;
+
   if (newPose === a.pose && a.currentDirection === dir) return;
 
   if (newPose === "sprint" && !canSprint(a, a.pose === "sprint"))
@@ -901,79 +876,6 @@ function setCritterMoving(a, dir, newPose = "walk") {
   if (isImpassable(getTerrainAt(nextX, nextY))) {
     a.redecideCd = Math.min(a.redecideCd, 5);
   }
-}
-
-function getOthers(a) {
-  const present = a.presentOthers || new Set();
-  return present.union(a.heldInfo?.lostSignals?.signals || new Set());
-}
-
-// makeDecision should not write any world or body state
-function makeDecision(a) {
-  // currently only decision making is deer fleeing
-  if (a.species !== "deer") return null;
-
-  const predators = [...getOthers(a)].filter(o => o.species !== 'deer');
-  if (!predators.length) return null;
-  return ["flee", { from: predators } ];
-}
-
-// function getNearestIdx(obj, choices) {
-//   if (!choices || !choices.length) return -1;
-//   let idx = -1;
-//   let minDistL2 = Infinity;
-//   choices.forEach((c, i) => {
-//     const distL2 = distBetweenL2(obj, c);
-//     if (distL2 < minDistL2) {
-//       idx = i;
-//       minDistL2 = distL2;
-//     }
-//   });
-//   return idx;
-// }
-
-function holdInfo(a, key, options, ticks) {
-  if (key === "lostSignals") {
-    // TODO: provide some per-signal expiry mechanism so the restack effect
-    // cannot refresh old data forever
-    const oldSignals = a.heldInfo?.lostSignals?.signals || new Set();
-    a.heldInfo["lostSignals"] = options.signals.union(oldSignals);
-  } else {
-    // default combine = override
-    a.heldInfo[key] = options;
-  }
-
-  a.holdInfoUntil[key] = g_tick + ticks;
-}
-
-// search-meta massTransfer
-function contentsMove(x, from, to, allowMissing = false) {
-  const had = from.contents.delete(x);
-  if (!had) {
-    if (!allowMissing) alert("contentsMove for missing entity");
-    return;
-  }
-  from.mass -= x.mass;
-  to.contents.add(x);
-  to.mass += x.mass;
-}
-
-function encloseMass(outsider, insider) {
-  contentsMove(x, outsider, insider);
-}
-
-function tearOff(x, mass) {
-  if (x.kind !== "corpse")
-    return alert("Invalid obj to tearOff");
-  const tornMass = Math.min(mass, x.mass * 0.5);
-  x.mass -= tornMass;
-  const newThing = {
-    kind: "corpse",
-    species: x.species,
-    mass: tornMass,
-  }
-  // TODO here: place in world to allow contentsMove to wolf
-  return newThing;
 }
 
 function enactDecision(a, decision) {
@@ -1001,8 +903,6 @@ function enactDecision(a, decision) {
       setCritterMoving(a, getDir(fleeX, fleeY));
       break;
     case "eat":
-      options.food = tearOff(options.food, a?.biteMass || 0.1)
-      encloseMass(a, options.food);
       break;
     case "mate":
       break;
@@ -1072,20 +972,9 @@ function startCritterDeath(a, killer) {
   a.nextGX = a.gx;
   a.nextGY = a.gy;
   a.pose = "death";
-  const deathAnimTime = 20 * tempo; // TODO: put in sprite data
-  enqDelayed("decontrol", deathAnimTime, { a: a, killer: killer });
+  const deathTransitionS = 20 * tempo;
+  enqDelayed("decontrol", deathTransitionS, { a: a, killer: killer });
   updateCritterFrame(a, true);
-}
-
-function onStruck(a) {
-  if (a.pose !== "halted") {
-    a.speed = 0;
-    a.nextGX = a.gx;
-    a.nextGY = a.gy;
-    a.pose = "halted";
-    updateCritterFrame(a, true);
-  }
-  a.isHaltedUntil = g_tick + 120;
 }
 
 function updateCritterAction(a) {
@@ -1097,7 +986,7 @@ function updateCritterAction(a) {
   a.redecideCd = 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
   // note this is only the default time, decisions may override
 
-  const decision = makeDecision(a);
+  const decision = null; // makeDecision(a); // Not Yet Implemented
   if (decision) { 
     enactDecision(a, decision); 
     return;
