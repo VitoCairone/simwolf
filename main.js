@@ -570,18 +570,18 @@ function moveAllTogether(movers, statics = []) {
 
   const wasKilledBy = {};
 
+  // console.log("collidePairs");
+  // console.log(collidePairs);
+
   collidePairs.forEach(pair => {
     // CURRENT: wolf KOs deer on any collide
     // FUTURE: kill only when wolf is in Bite pose and front-on
-    if (pair[0] === -1 || pair[0].species === pair[1].species) return;
-    if (pair[1].kind === "corpse" && pair[0].kind === "critter"
-      && pair[0].species === "wolf") {
-        startEat(pair[0], pair[1]);
-        return;
+    if (pair[0] === -1 || movers[pair[0]].species === movers[pair[1]].species) return;
+    if (movers[pair[1]].species === "deer") {
+      wasKilledBy[pair[1]] = pair[0];
+    } else {
+      wasKilledBy[pair[0]] = pair[1];
     }
-    const deerIdx = pair[1].species === "deer" ? 1 : 0;
-    const wolfIdx = deerIdx ? 0 : 1;
-    wasKilledBy[pair[deerIdx]] = pair[wolfIdx];
   });
 
   movers.forEach((mover, idx) => {
@@ -589,7 +589,7 @@ function moveAllTogether(movers, statics = []) {
     if (mover.nextGX === mover.gx && mover.nextGY === mover.gy) return;
 
     if (didCollide[idx]) {
-      if (wasKilledBy[idx]) {
+      if (idx in wasKilledBy) {
         alert("KO collision");
         startCritterDeath(movers[idx], wasKilledBy[idx]);
       } else {
