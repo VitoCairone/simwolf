@@ -96,8 +96,6 @@ function sample(list) {
   return list.length ? list[Math.floor(Math.random() * list.length)] : null;
 }
 
-// TODO: consider what data should be allowed to vary by pose and what data 
-// is fixed for the species
 // TODO: consider if frame holds should be in time or in ticks,
 // for now assumone animat only runs when tempo == 1/60 and adjust
 // for main logic only
@@ -111,6 +109,8 @@ const frameDataBySpeciesAndPose = {
       holdTks: 5, topToShadow: 39 }, // placeholder
     sprint: {nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 }, // placeholder
+    // death: {nFrames: 2, colZero: 0, frameW: 64, frameH: 64,
+    //   holdTks: 3, repeatLimit: 3, exitToPose: 'dead' }
   },
   deer: { 
     walk: {nFrames: 11, colZero: 0, frameW: 32, frameH: 41,
@@ -120,7 +120,9 @@ const frameDataBySpeciesAndPose = {
     run: {nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33},
     sprint: {nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
-      holdTks: 12, topToShadow: 33} // placeholder
+      holdTks: 12, topToShadow: 33}, // placeholder
+    death: {nFrames: 2, colZero: 0, frameW: 64, frameH: 64,
+      holdTks: 3, exitAfterTks: 18, exitToPose: 'dead' }
   }
 }
 
@@ -175,15 +177,15 @@ function _can(a, capability) {
 //  }
 
 
-// TODO: revise this name and calling method for use of tempo
+// TODO: revise this name and calling method for use of tempo ?
 function updateCritterFrame(a, rezero = false) {
-  // At present World needs to control this method for proper
-  // onceThenPose behavior to shift between poses
+  // TODO: move frame into only Animat, World should not require concept of frame
+  // any exitToPose behavior should be handled with enqDelayed
   a.animTimer = 0;
   const frameData = frameDataBySpeciesAndPose[a.species][a.pose];
   a.frame = rezero ? 0 : ( (a.frame + 1) % frameData.nFrames );
   if (!rezero && a.frame === 0 && frameData.onceThenPose) {
-    a.pose = frameData.onceThenPose;
+    a.pose = frameData.exitToPose
     return updateCritterFrame(a, true);
   }
   animat?.updateCritterFrame(a, frameData);
@@ -222,6 +224,7 @@ function randomlyPlaceCritter(a) {
   a.gx = randLandX;
   a.gy = randLandY;
   a.animTimer = 0;
+  a.poseTimer = 0;
   a.redecideCd = 0; // Cd = Cooldown (ticks)
   a.currentDirection = Math.floor(Math.random() * 4) * 2;
   a.frame = 0;
@@ -518,7 +521,11 @@ function updateAllCritters() {
     if (a.redecideCd <= 0) updateCritterAction(a);
 
     a.animTimer++;
+    a.poseTimer++;
     let holdTks = frameDataBySpeciesAndPose[a.species][a.pose].holdTks;
+    let poseLimitTks = frameDataBySpeciesAndPose[a.species][a.pose].limitTks;
+    if (poseLimitTks && a.poseTimer >= poseLimitTks)
+      
     if (a.animTimer >= holdTks) updateCritterFrame(a);
 
     if (a.speed === 0) {
@@ -561,7 +568,6 @@ function moveAllTogether(movers, statics = []) {
   const allColliders = movers.concat(statics);
   const collidePairs = findCollidingPairs(allColliders);
   let didCollide = {};
-
   collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
 
   // RESOLVE COLLISIONS
@@ -590,7 +596,6 @@ function moveAllTogether(movers, statics = []) {
 
     if (didCollide[idx]) {
       if (idx in wasKilledBy) {
-        alert("KO collision");
         startCritterDeath(movers[idx], wasKilledBy[idx]);
       } else {
         // this mover's gx and gy do NOT get updated this tick
@@ -943,6 +948,7 @@ function enqDelayed(rxn, timeS, opts = {}) {
 
 function runRxn(rxn) {
   const opts = rxn.opts;
+  const a = opts.a;
   switch (rxn.rxn) {
     case 'decontrol':
       if (a.kind !== 'critter') {
@@ -967,12 +973,12 @@ function deqCurrentDelayed() {
 function startCritterDeath(a, killer) {
   if (!a || a.species !== "deer") return alert("Invalid arg to startCritterDeath");
 
-  if (a.pose === "death" || a.pose === "dead") return;
+  if (a.pose === "death") return;
   a.speed = 0;
   a.nextGX = a.gx;
   a.nextGY = a.gy;
   a.pose = "death";
-  const deathTransitionS = 20 * tempo;
+  const deathTransitionS = 18 * tempo;
   enqDelayed("decontrol", deathTransitionS, { a: a, killer: killer });
   updateCritterFrame(a, true);
 }
@@ -1030,6 +1036,13 @@ function isOpaque(terrain) {
 
 // returns a list of pairs of integers e.g. [[1,2], [3,6]]
 function findCollidingPairs(creatures) {
+  // Note that this is a grid-based method which is O(n) for the list
+  // creatures, when creatures are close in size to tiles.
+
+  // If necessary, further runtime improvement is likely attainable.
+  // For example it is likely that the sizable majority of creatures don't
+  // change occupancy at all on any given tick, so we could set occupancy
+  // only when it changes and not have to collect it for everything every tick.
 
   const tileMap = new Map();  // key: tile "x_y", value: critter indexes
   const potentialPairs = new Set();  // store "i|j" where i < j
@@ -1037,6 +1050,7 @@ function findCollidingPairs(creatures) {
   for (let i = 0; i < creatures.length; i++) {
     const creature = creatures[i];
     // TODO: individual-specific bounding boxes, ideally rectangular rather than square
+    
     // tiles is array of strings in x_y format
     const tiles = getOccupiedTiles(creature.nextGX, creature.nextGY);
 
