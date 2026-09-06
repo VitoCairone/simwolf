@@ -224,7 +224,6 @@ function randomlyPlaceCritter(a) {
   a.gx = randLandX;
   a.gy = randLandY;
   a.animTimer = 0;
-  a.poseTimer = 0;
   a.redecideCd = 0; // Cd = Cooldown (ticks)
   a.currentDirection = Math.floor(Math.random() * 4) * 2;
   a.frame = 0;
@@ -521,10 +520,7 @@ function updateAllCritters() {
     if (a.redecideCd <= 0) updateCritterAction(a);
 
     a.animTimer++;
-    a.poseTimer++;
     let holdTks = frameDataBySpeciesAndPose[a.species][a.pose].holdTks;
-    let poseLimitTks = frameDataBySpeciesAndPose[a.species][a.pose].limitTks;
-    if (poseLimitTks && a.poseTimer >= poseLimitTks)
       
     if (a.animTimer >= holdTks) updateCritterFrame(a);
 
@@ -582,38 +578,40 @@ function moveAllTogether(movers, statics = []) {
   collidePairs.forEach(pair => {
     // CURRENT: wolf KOs deer on any collide
     // FUTURE: kill only when wolf is in Bite pose and front-on
-    if (pair[0] === -1 || movers[pair[0]].species === movers[pair[1]].species) return;
-    if (movers[pair[1]].species === "deer") {
+    console.log(pair[1])
+    console.log(allColliders[pair[1]]);
+    if (pair[0] === -1 || allColliders[pair[0]].species === allColliders[pair[1]].species) return;
+    if (allColliders[pair[1]].species === "deer") {
       wasKilledBy[pair[1]] = pair[0];
     } else {
       wasKilledBy[pair[0]] = pair[1];
     }
   });
 
-  movers.forEach((mover, idx) => {
-    // for a stationary mover, do nothing
-    if (mover.nextGX === mover.gx && mover.nextGY === mover.gy) return;
+  allColliders.forEach((thing, idx) => {
+    // for a stationary thing, do nothing (??)
+    if (thing.nextGX === thing.gx && thing.nextGY === thing.gy) return;
 
     if (didCollide[idx]) {
       if (idx in wasKilledBy) {
-        startCritterDeath(movers[idx], wasKilledBy[idx]);
+        startCritterDeath(allColliders[idx], wasKilledBy[idx]);
       } else {
-        // this mover's gx and gy do NOT get updated this tick
+        // this thing's gx and gy do NOT get updated this tick
         // and it should decide on a new movement to try for next tick
 
         // TODO: allow a rear-ended collider to continue moving when space in front is open
         // this 'should' already be the behavior since creatures move all together, investigate
-        updateCritterAction(mover);
+        updateCritterAction(thing);
       }
     } else {
-      // this is the ONLY PLACE ANYWHERE that mover gx and gy should change!
-      mover.gx = mover.nextGX;
-      mover.gy = mover.nextGY;
-      if (mover === pcWolf) { // TODO: allow for detaching camera from wolf
+      // this is the ONLY PLACE ANYWHERE that thing gx and gy should change!
+      thing.gx = thing.nextGX;
+      thing.gy = thing.nextGY;
+      if (thing === pcWolf) { // TODO: allow for detaching camera from wolf
         animat?.setCameraToPCWolf();
       }
-      animat?.placeCritterSprite(mover);
-      applyFatigue(mover);
+      animat?.placeCritterSprite(thing);
+      applyFatigue(thing);
     }
   });
 }
@@ -906,24 +904,6 @@ function enactDecision(a, decision) {
         fleeY += fleeVec[1] * wt;
       });
       setCritterMoving(a, getDir(fleeX, fleeY));
-      break;
-    case "eat":
-      break;
-    case "mate":
-      break;
-    case "follow":
-      break;
-    case "drink":
-      break;
-    case "sleep":
-      break;
-    case "go": 
-      break;
-    case "seek":
-      break;
-    case "protect": 
-      break;
-    case "rest":
       break;
     default:
       return alert("unknown decision to enactDecision");
