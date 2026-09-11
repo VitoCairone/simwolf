@@ -121,8 +121,10 @@ const frameDataBySpeciesAndPose = {
       holdTks: 12, topToShadow: 33},
     sprint: {nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33}, // placeholder
-    death: {nFrames: 2, colZero: 0, frameW: 64, frameH: 64,
-      holdTks: 3, exitAfterTks: 18, exitToPose: 'dead' }
+    death: {nFrames: 2, colZero: 45, frameW: 32, frameH: 41,
+      holdTks: 15, topToShadow: 33},
+    dead: {nFrames: 1, colZero: 45, frameW: 32, frameH: 41,
+      holdTks: Infinity, topToShadow: 33},
   }
 }
 
@@ -578,9 +580,12 @@ function moveAllTogether(movers, statics = []) {
   collidePairs.forEach(pair => {
     // CURRENT: wolf KOs deer on any collide
     // FUTURE: kill only when wolf is in Bite pose and front-on
-    console.log(pair[1])
-    console.log(allColliders[pair[1]]);
+    // console.log(pair[1])
+    // console.log(allColliders[pair[1]]);
     if (pair[0] === -1 || allColliders[pair[0]].species === allColliders[pair[1]].species) return;
+
+    console.log("KILL COLLIDE");
+
     if (allColliders[pair[1]].species === "deer") {
       wasKilledBy[pair[1]] = pair[0];
     } else {
@@ -616,19 +621,25 @@ function moveAllTogether(movers, statics = []) {
   });
 }
 
-function deleteCritter(critter) {
+function deleteCritter(critter, toCorpse = false) {
   if (!critter) return; // return alert("falsy arg to deleteCritter");
   if (typeof critter !== "object") return alert("invalid arg type to deleteCritter");
   const idx = allCritters.indexOf(critter);
   if (idx === -1) return alert("arg object to deleteCritter not in list");
   if (idx === 0) return alert("cannot delete critter 0 in this version");
 
-  critter.element.remove();
+  const el = critter.element;
+  if (toCorpse) {
+    critter.kind = "corpse";
+    critter.pose = "dead";
+    allCorpses.push(critter);
+    updateCritterFrame(critter, true);
+  } else {
+    el?.remove();
+  }
   allCritters.splice(idx, 1);
 
-  // Note: Creatures created on-init will not be actually be garbage collected
-  // because they are still referenced by the (unused) wolves and deer arrays,
-  // but they will no longer be processed on-tick or rendered
+  // NOTE initial critters remain referenced in their species initialization arrays only
 }
 
 function forbidOverlapsOnStart() {
@@ -931,13 +942,15 @@ function runRxn(rxn) {
   const a = opts.a;
   switch (rxn.rxn) {
     case 'decontrol':
-      if (a.kind !== 'critter') {
-        console.log('Err: Non-critter to decontrol rxn');
+      if (a.kind !== "critter") {
+        console.log("Err: Non-critter to decontrol rxn");
         return;
       }
-      deleteCritter(a);
-      a.kind = 'corpse';
-      allCorpses.push(a);
+      if (a.pose !== "death" && a.pose !== "dead") {
+        console.log("Err: Live-posed critter to decontrol rxn")
+        return;
+      }
+      deleteCritter(a, true);
     break;
     default:
       console.log("Err: Unknown reaction to runRxn");
