@@ -94,15 +94,29 @@ if (!consoleOnlyMode) {
       `${Math.min(100 * pcWolf.fatigue / fatigueBySpeciesAndPose.wolf.run.forceEnd, 100)}%`;
   }
 
+  // Sprite row (and horizontal mirroring) for each grid direction, indexed by DIR_*:
+  //            E(↘) SE(↓) S(↙) SW(←) W(↖) NW(↑) N(↗) NE(→)
+  // Wolf sheet rows: 0 ↗, 1 ↘, 2 ↙, 3 ↖, 4 ↑, 5 →, 6 ↓. Facing ← is row 5 mirrored.
+  const spriteRowByDir = {
+    wolf: [1, 6, 2, 5, 3, 4, 0, 5],
+  };
+  const mirrorByDir = {
+    wolf: [false, false, false, true, false, false, false, false],
+  };
+
   animat.updateCritterFrame = function(a, frameData) {
     const frameCol = frameData.colZero + a.frame;
     a.element.style.backgroundPosition =
       `-${frameCol * frameData.frameW}px -${this.spriteRow(a) * frameData.frameH}px`;
+    // the element is centered on the critter's x, so mirroring about its center is safe
+    const mirror = mirrorByDir[a.species]?.[a.currentDirection] ?? false;
+    a.element.style.transform = mirror ? "scaleX(-1)" : "";
   }
 
-  // TODO: rearrange sprite rows to match DIR_NAME order
   animat.spriteRow = function (a) {
-    // TODO: rearrange sprite rows for simpler formula floor(dir/2)
+    const rows = spriteRowByDir[a.species];
+    if (rows) return rows[a.currentDirection];
+    // species with only the 4 diagonal rows (e.g. deer): odd directions borrow a neighbor
     return (Math.floor(a.currentDirection / 2) + 1) % 4;
   }
 
