@@ -298,19 +298,75 @@ const arrowsToggle = document.getElementById('arrow-mode-toggle');
 const arrowsIcon = document.getElementById('arrow-mode-icon');
 arrowsIcon.innerHTML = cameraIconSVG;
 
-let mouseMovesWolf = true;
 let arrowsMoveWolf = false;
-let mouseInInputField = false;
+let mouseInMovePad = false;
+// Camera tracks pcWolf unless the player has panned away with the arrow keys.
+// Re-attached by entering the movement pad or switching arrows to wolf mode.
+let cameraFollowsWolf = true;
 
 function handMovesWolf() {
-  return !consoleOnlyMode && (arrowsMoveWolf || (mouseMovesWolf && mouseInInputField));
+  return !consoleOnlyMode && (arrowsMoveWolf || mouseInMovePad);
 }
 
 arrowsToggle.addEventListener('click', () => {
   arrowsMoveWolf = !arrowsMoveWolf;
   arrowsIcon.innerHTML = arrowsMoveWolf ? wolfIconSVG : cameraIconSVG;
-  if (arrowsMoveWolf) animat?.setCameraToPCWolf();
+  if (arrowsMoveWolf) {
+    cameraFollowsWolf = true;
+    animat?.setCameraToPCWolf();
+  }
 });
+
+// MOVEMENT PAD
+// Fixed on-screen joystick (see #move-pad in index.html). The pointer's offset from the
+// pad center gives the direction; which concentric ring it is in gives the pose/speed.
+// Ring radii are read from the SVG (viewBox radius 100) so drawing and logic can't drift.
+const movePadEl = document.getElementById("move-pad");
+const movePadRings = [...movePadEl.querySelectorAll(".ring")]
+  .map(c => ({ pose: c.dataset.pose, frac: Number(c.getAttribute("r")) / 100 }))
+  .sort((a, b) => a.frac - b.frac); // inner to outer
+
+function onMovePadPointer(e) {
+  if (consoleOnlyMode) return;
+  const rect = movePadEl.getBoundingClientRect();
+  const radPX = rect.width / 2;
+  // normalized vector from pad center; |v| = 1 at the outer ring
+  const vx = (e.clientX - (rect.left + radPX)) / radPX;
+  const vy = (e.clientY - (rect.top + rect.height / 2)) / radPX;
+  const ring = movePadRings.find(r => Math.hypot(vx, vy) <= r.frac);
+
+  // the pad element is square; its corners are outside the circles
+  if (!ring) return releaseMovePad();
+
+  if (!mouseInMovePad) {
+    mouseInMovePad = true;
+    cameraFollowsWolf = true;
+    animat?.setCameraToPCWolf();
+  }
+  animat?.updateMovePad(vx, vy, ring.pose);
+
+  if (ring.pose === "idle") return setCritterIdle(pcWolf);
+
+  // rotate -1 converts screen (pixel) direction to grid direction
+  let dir = getDir(vx, vy) - 1;
+  if (dir < 0) dir = 7;
+  setCritterMoving(pcWolf, dir, ring.pose);
+}
+
+function releaseMovePad() {
+  if (!mouseInMovePad) return;
+  mouseInMovePad = false;
+  animat?.updateMovePad(0, 0, null);
+  setCritterIdle(pcWolf);
+  // if the AI resumes control, let it wait a normal interval instead of instantly
+  // overriding the stop (redecideCd keeps counting down while hand-controlled)
+  pcWolf.redecideCd = Math.max(pcWolf.redecideCd, 120);
+}
+
+movePadEl.addEventListener("pointerdown", onMovePadPointer);
+movePadEl.addEventListener("pointermove", onMovePadPointer);
+movePadEl.addEventListener("pointerleave", releaseMovePad);
+movePadEl.addEventListener("pointercancel", releaseMovePad);
 
 zoomInBtn.addEventListener("click", () => {
   if (!animat) return;
@@ -627,7 +683,7 @@ function moveAllTogether(movers, statics = []) {
       // this is the ONLY PLACE ANYWHERE that thing gx and gy should change!
       thing.gx = thing.nextGX;
       thing.gy = thing.nextGY;
-      if (thing === pcWolf) { // TODO: allow for detaching camera from wolf
+      if (thing === pcWolf && cameraFollowsWolf) {
         animat?.setCameraToPCWolf();
       }
       animat?.placeCritterSprite(thing);
@@ -697,20 +753,27 @@ function gameLoop(isStepThrough = false) {
     console.log("Begin gameLoop tick=" + g_tick + " + tps=" + tps);
   } else {
     const hasInput = arrowKeyNames.some(ak => keysPressed[ak]);
-    if (hasInput) {
-      if (arrowsMoveWolf) {
-        // for simplicity, the arrow keys currently move along grid axis and don't combine
-        if (keysPressed["ArrowUp"]) { setCritterMoving(pcWolf, DIR_N); }
-        if (keysPressed["ArrowDown"]) { setCritterMoving(pcWolf, DIR_S); }
-        if (keysPressed["ArrowLeft"]) { setCritterMoving(pcWolf, DIR_W); }
-        if (keysPressed["ArrowRight"]) { setCritterMoving(pcWolf, DIR_E); }
-      } else {
-        if (keysPressed["ArrowUp"]) { worldShiftPY -= cameraSpeed; }
-        if (keysPressed["ArrowDown"]) { worldShiftPY += cameraSpeed; }
-        if (keysPressed["ArrowLeft"]) { worldShiftPX -= cameraSpeed; }
-        if (keysPressed["ArrowRight"]) { worldShiftPX += cameraSpeed; }
-        animat?.updateCamera();
+    if (arrowsMoveWolf) {
+      // the movement pad has priority: arrows are ignored entirely while it is in use
+      if (!mouseInMovePad) {
+        if (hasInput) {
+          // for simplicity, the arrow keys currently move along grid axis and don't combine
+          if (keysPressed["ArrowUp"]) { setCritterMoving(pcWolf, DIR_N); }
+          if (keysPressed["ArrowDown"]) { setCritterMoving(pcWolf, DIR_S); }
+          if (keysPressed["ArrowLeft"]) { setCritterMoving(pcWolf, DIR_W); }
+          if (keysPressed["ArrowRight"]) { setCritterMoving(pcWolf, DIR_E); }
+        } else {
+          setCritterIdle(pcWolf); // stop when the keys are released
+        }
       }
+    } else if (hasInput) {
+      // camera mode: arrows always pan, even while the pad is in use
+      cameraFollowsWolf = false;
+      if (keysPressed["ArrowUp"]) { worldShiftPY -= cameraSpeed; }
+      if (keysPressed["ArrowDown"]) { worldShiftPY += cameraSpeed; }
+      if (keysPressed["ArrowLeft"]) { worldShiftPX -= cameraSpeed; }
+      if (keysPressed["ArrowRight"]) { worldShiftPX += cameraSpeed; }
+      animat?.updateCamera();
     }
   }
 
@@ -734,46 +797,12 @@ function gameLoop(isStepThrough = false) {
   }
 }
 
-let mouseVecX = 0;
-let mouseVecY = 0;
-
-function updateMovementByMouse() {
-  if (consoleOnlyMode || !mouseMovesWolf) return alert("Called updateMovevementByMouse out of context");
-  const mag = Math.hypot(mouseVecX, mouseVecY);
-
-  if (mag >= 0.9) {
-    mouseInInputField = false;
-    return;
-  }
-  mouseInInputField = true;
-  if (mag < 0.1) {
-    setCritterIdle(pcWolf);
-    return;
-  }
-
-  // rotate -1 converts Pixel dir to Grid dir
-  let dir = getDir(mouseVecX, mouseVecY) - 1;
-  if (dir < 0) dir = 7;
-
-  const newPose = mag >= 0.7 ? "sprint" : (mag >= 0.4 ? "run" : "walk"); 
-  setCritterMoving(pcWolf, dir, newPose);
-}
-
 function addCursorTracker() {
   const fieldWrapper = document.getElementById("field-wrapper");
   const cursorCoords = document.getElementById("cursor-coords");
 
   fieldWrapper.addEventListener("mousemove", (e) => {
     const rect = fieldWrapper.getBoundingClientRect();
-
-    if (mouseMovesWolf) {
-      const ctrPX = rect.left + rect.width / 2
-      const ctrPY = rect.top + rect.height / 2;
-      const [vx, vy] = [e.clientX - ctrPX, e.clientY - ctrPY]
-      const minCircMag = Math.min(rect.width / 2, rect.height / 2);
-      [mouseVecX, mouseVecY] = [vx / minCircMag, vy / minCircMag];
-      updateMovementByMouse();
-    }
 
     const mousePX = e.clientX - rect.left + worldShiftPX;
     const mousePY = e.clientY - rect.top + worldShiftPY;

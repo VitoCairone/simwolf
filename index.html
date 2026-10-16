@@ -116,6 +116,35 @@
     #tile-layer { z-index: 1; }
     #sprite-layer { z-index: 2; }
     #debug-layer { z-index: 3; }
+    /* On-screen movement pad: lives in #field-wrapper (NOT #field) so it never scrolls or zooms. */
+    #move-pad {
+      position: absolute;
+      right: 24px;
+      bottom: 24px;
+      width: 160px;
+      height: 160px;
+      z-index: 10;
+      touch-action: none;
+      user-select: none;
+    }
+    #move-pad svg { display: block; width: 100%; height: 100%; overflow: visible; }
+    #move-pad .ring {
+      fill: rgba(20, 30, 40, 0.18);
+      stroke: rgba(255, 255, 255, 0.55);
+      stroke-width: 1.5;
+      transition: fill 0.12s;
+    }
+    #move-pad .ring.active { fill: rgba(255, 255, 160, 0.30); }
+    #move-pad .ring.deadzone { fill: rgba(20, 30, 40, 0.30); }
+    #move-pad .ring.deadzone.active { fill: rgba(255, 255, 255, 0.35); }
+    #move-pad-knob {
+      fill: rgba(255, 255, 255, 0.85);
+      stroke: rgba(0, 0, 0, 0.4);
+      stroke-width: 1;
+      pointer-events: none;
+      visibility: hidden;
+    }
+    #move-pad-knob.visible { visibility: visible; }
     .tile.dirt      { background-position: -288px    0px; }
     .tile.grass     { background-position: -64px   -64px; }
     .tile.bush      { background-position: -96px   -96px; }
@@ -179,6 +208,18 @@
         <div id="debug-layer" class="layer">
           <div id="dbel-pc-wolf"></div>
         </div>
+      </div>
+      <!-- Movement pad. Rings (outer to inner): sprint, run, walk, deadzone (stop).
+           Radii are in a 100-unit viewBox and are read by main.js, so the drawing is the
+           single source of truth for the ring sizes. -->
+      <div id="move-pad" aria-label="Movement pad">
+        <svg viewBox="-100 -100 200 200" xmlns="http://www.w3.org/2000/svg">
+          <circle class="ring" data-pose="sprint" r="100" />
+          <circle class="ring" data-pose="run" r="72" />
+          <circle class="ring" data-pose="walk" r="44" />
+          <circle class="ring deadzone" data-pose="idle" r="15" />
+          <circle id="move-pad-knob" r="10" cx="0" cy="0" />
+        </svg>
       </div>
     </div>
   </div>

@@ -142,6 +142,18 @@ if (!consoleOnlyMode) {
     if (a === pcWolf) this.placeDebugWolfEl();
   }
 
+  const movePadKnob = document.getElementById("move-pad-knob");
+  const movePadRingEls = [...document.querySelectorAll("#move-pad .ring")];
+
+  // vx, vy: pointer offset from pad center, normalized so the outer ring = 1.
+  // pose: the ring the pointer is in, or null when the pad is not in use.
+  animat.updateMovePad = function(vx, vy, pose) {
+    movePadKnob.classList.toggle("visible", pose !== null);
+    movePadKnob.setAttribute("cx", vx * 100);
+    movePadKnob.setAttribute("cy", vy * 100);
+    movePadRingEls.forEach(el => el.classList.toggle("active", el.dataset.pose === pose));
+  }
+
   animat.updateZoomButtons = function() {
     zoomInBtn.disabled = zoom >= zoomMax;
     zoomOutBtn.disabled = zoom <= zoomMin;
