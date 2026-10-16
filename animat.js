@@ -135,7 +135,9 @@ if (!consoleOnlyMode) {
 
     a.element.style.left = (isoX - leftOffset) + "px";
     a.element.style.top = (isoY - topOffset) + "px";
-    a.element.style.zIndex = a.gx + a.gy;
+    // z-index must be an integer; a fractional value is silently ignored by the
+    // browser, which froze each sprite's depth at its spawn value.
+    a.element.style.zIndex = Math.round((a.gx + a.gy) * 100);
 
     if (a === pcWolf) this.placeDebugWolfEl();
   }

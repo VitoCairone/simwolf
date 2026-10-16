@@ -121,6 +121,7 @@ const frameDataBySpeciesAndPose = {
       holdTks: 12, topToShadow: 33},
     sprint: {nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33}, // placeholder
+    // death: col 45 is a pale hit-flash, col 46 the same pose in full color
     death: {nFrames: 2, colZero: 45, frameW: 32, frameH: 41,
       holdTks: 15, topToShadow: 33},
     dead: {nFrames: 1, colZero: 45, frameW: 32, frameH: 41,
@@ -223,8 +224,9 @@ function randomlyPlaceCritter(a) {
   const [randLandX, randLandY] = sample(allLandTiles);
 
   // used for initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
-  a.gx = randLandX;
-  a.gy = randLandY;
+  // position tile centered (on half-integer vals) for simple initial overlap check
+  a.gx = randLandX + 0.5;
+  a.gy = randLandY + 0.5;
   a.animTimer = 0;
   a.redecideCd = 0; // Cd = Cooldown (ticks)
   a.currentDirection = Math.floor(Math.random() * 4) * 2;
@@ -274,7 +276,6 @@ let viewportHeight = document.getElementById('field-wrapper').clientHeight;
 const allCritters = [];
 const allCorpses = [];
 
-forbidOverlapsOnStart();
 const cameraSpeed = 50;
 const keysPressed = {};
 
@@ -515,6 +516,11 @@ function updateAllCritters() {
   setPresentOthersIneffMethod();
 
   allCritters.forEach(a => {
+    // Fatigue applies every tick for every critter's current pose, including idle
+    // (recovery) and blocked movers. It used to be applied only after a successful
+    // move, so idle recovery never happened.
+    applyFatigue(a);
+
     // todo: combine this better with setPresentOthers() so that a wolf
     // which spots a deer or vice versa will respond on a predictable delay
     // e.g. a realistic reaction time of 120 ms (7 ticks)
@@ -536,7 +542,9 @@ function updateAllCritters() {
     const [velGX, velGY] = moveVec.map(v => v * a.speed);
     const nextGX = a.gx + velGX;
     const nextGY = a.gy + velGY;
-    if (nextGX >= 0.6 && nextGX < (gridWidthN - 0.6) && nextGY >= 0.6 && nextGY < (gridHeightN - 0.6)) {
+    // keep the collision box (radius critterBoxRad) inside the grid
+    if (nextGX >= critterBoxRad && nextGX < (gridWidthN - critterBoxRad)
+      && nextGY >= critterBoxRad && nextGY < (gridHeightN - critterBoxRad)) {
       a.nextGX = nextGX;
       a.nextGY = nextGY;
     } else {
@@ -551,7 +559,8 @@ function applyFatigue(a) {
   const fatigueBySpecies = fatigueBySpeciesAndPose[a.species];
   if (!fatigueBySpecies.hasOwnProperty(a.pose)) return;
   const fatigueData = fatigueBySpecies[a.pose];
-  a.fatigue += fatigueData.dps * tempo;
+  // never bank "negative fatigue" while resting
+  a.fatigue = Math.max(0, a.fatigue + fatigueData.dps * tempo);
   if (a.fatigue >= fatigueData.forceEnd) {
     if (fatigueData.downTo === "idle") {
       setCritterIdle(a);
@@ -582,7 +591,10 @@ function moveAllTogether(movers, statics = []) {
     // FUTURE: kill only when wolf is in Bite pose and front-on
     // console.log(pair[1])
     // console.log(allColliders[pair[1]]);
-    if (pair[0] === -1 || allColliders[pair[0]].species === allColliders[pair[1]].species) return;
+    if (pair[0] === -1) return;
+    const [c0, c1] = [allColliders[pair[0]], allColliders[pair[1]]];
+    // corpses and already-dying critters can't kill or be killed
+    if (!isLiveCritter(c0) || !isLiveCritter(c1) || c0.species === c1.species) return;
 
     console.log("KILL COLLIDE");
 
@@ -594,20 +606,23 @@ function moveAllTogether(movers, statics = []) {
   });
 
   allColliders.forEach((thing, idx) => {
+    // Kills must be checked BEFORE the stationary early-return,
+    // otherwise a standing (idle) deer could never be killed.
+    if (idx in wasKilledBy) {
+      startCritterDeath(thing, allColliders[wasKilledBy[idx]]);
+      return;
+    }
+
     // for a stationary thing, do nothing (??)
     if (thing.nextGX === thing.gx && thing.nextGY === thing.gy) return;
 
     if (didCollide[idx]) {
-      if (idx in wasKilledBy) {
-        startCritterDeath(allColliders[idx], wasKilledBy[idx]);
-      } else {
-        // this thing's gx and gy do NOT get updated this tick
-        // and it should decide on a new movement to try for next tick
+      // this thing's gx and gy do NOT get updated this tick
+      // and it should decide on a new movement to try for next tick
 
-        // TODO: allow a rear-ended collider to continue moving when space in front is open
-        // this 'should' already be the behavior since creatures move all together, investigate
-        updateCritterAction(thing);
-      }
+      // TODO: allow a rear-ended collider to continue moving when space in front is open
+      // this 'should' already be the behavior since creatures move all together, investigate
+      updateCritterAction(thing);
     } else {
       // this is the ONLY PLACE ANYWHERE that thing gx and gy should change!
       thing.gx = thing.nextGX;
@@ -616,9 +631,12 @@ function moveAllTogether(movers, statics = []) {
         animat?.setCameraToPCWolf();
       }
       animat?.placeCritterSprite(thing);
-      applyFatigue(thing);
     }
   });
+}
+
+function isLiveCritter(c) {
+  return c.kind === "critter" && c.pose !== "death" && c.pose !== "dead";
 }
 
 function deleteCritter(critter, toCorpse = false) {
@@ -659,7 +677,14 @@ function forbidOverlapsOnStart() {
     overlapPairs = findCollidingPairs(allCritters);
   }
   if (overlapPairs.length) {
-    overlapPairs.forEach(pair => deleteCritter(allCritters[pair[1]]));
+    // Resolve indices to objects BEFORE deleting: deleteCritter splices allCritters,
+    // which would shift the indices of every later pair. Never delete critter 0 (pcWolf).
+    const toDelete = new Set();
+    overlapPairs.forEach(pair => {
+      const idx = pair[1] !== 0 ? pair[1] : pair[0];
+      if (idx > 0) toDelete.add(allCritters[idx]);
+    });
+    toDelete.forEach(c => deleteCritter(c));
     console.log("Initial density too high, reduced start population.");
   }
 }
@@ -766,6 +791,7 @@ function addCursorTracker() {
 
 function setCritterIdle(a) {
   if (a.pose === "idle") return;
+  if (a.pose === "death" || a.pose === "dead") return;
   a.speed = 0;
   a.nextGX = a.gx;
   a.nextGY = a.gy;
@@ -868,6 +894,7 @@ function canRun(a, isAlready = false) {
 }
 
 function setCritterMoving(a, dir, newPose = "walk") {
+  if (!isLiveCritter(a)) return;
   if (a.isHaltedUntil > g_tick) return;
 
   if (newPose === a.pose && a.currentDirection === dir) return;
@@ -929,7 +956,7 @@ function enactDecision(a, decision) {
 const delayedRxnArr = []
 
 function enqDelayed(rxn, timeS, opts = {}) {
-  const end = g_tick * tempo + timeS;
+  const end = g_now + timeS; // same clock that deqCurrentDelayed compares against
   var iNew = 0;
   // list is sorted decreasing
   while (iNew < delayedRxnArr.length && delayedRxnArr[iNew].end > end) iNew++;
@@ -959,7 +986,8 @@ function runRxn(rxn) {
 }
 
 function deqCurrentDelayed() {
-  while (delayedRxnArr.length && delayedRxnArr.at(-1).end <= g_now)
+  // half-tick tolerance so float drift in g_now can't push a reaction one tick late
+  while (delayedRxnArr.length && delayedRxnArr.at(-1).end <= g_now + tempo / 2)
     runRxn(delayedRxnArr.pop());
 }
 
@@ -971,12 +999,16 @@ function startCritterDeath(a, killer) {
   a.nextGX = a.gx;
   a.nextGY = a.gy;
   a.pose = "death";
-  const deathTransitionS = 18 * tempo;
+  // become a corpse exactly when the death animation has played through once
+  const deathAnim = frameDataBySpeciesAndPose[a.species].death;
+  const deathTransitionS = deathAnim.nFrames * deathAnim.holdTks * tempo;
   enqDelayed("decontrol", deathTransitionS, { a: a, killer: killer });
   updateCritterFrame(a, true);
 }
 
 function updateCritterAction(a) {
+  // a dying critter must not pick a new action, or it would come back to life
+  if (!isLiveCritter(a)) return;
   if (a === wolves[0] && handMovesWolf()) return;
   if (a.isHaltedUntil) {
     if (a.isHaltedUntil <= g_tick) delete a.isHaltedUntil;
@@ -998,7 +1030,9 @@ function updateCritterAction(a) {
   setCritterMoving(a, dir);
 }
 
-function getOccupiedTiles(gx, gy, boxRad = 0.4) {
+const critterBoxRad = 0.4;
+
+function getOccupiedTiles(gx, gy, boxRad = critterBoxRad) {
   const left = Math.floor(gx - boxRad);
   const right = Math.floor(gx + boxRad);
   const top = Math.floor(gy - boxRad);
@@ -1015,8 +1049,12 @@ function getOccupiedTiles(gx, gy, boxRad = 0.4) {
 
 
 function doNextBoundingBoxesOverlap(a, b) {
-  // TODO: fix this hardcoded box size
-  return Math.abs(a.nextGX - b.nextGX) < 1.0 && Math.abs(a.nextGY - b.nextGY) < 1.0;
+  // Must use the same box as getOccupiedTiles (the broad phase). Previously this used
+  // 1.0 (i.e. radius 0.5) while the broad phase used radius 0.4, so critters 0.8-1.0
+  // apart in different tiles were never tested and could walk into each other.
+  // TODO: individual-specific box sizes
+  const span = 2 * critterBoxRad;
+  return Math.abs(a.nextGX - b.nextGX) < span && Math.abs(a.nextGY - b.nextGY) < span;
 }
 
 function isImpassable(terrain) {
@@ -1145,6 +1183,7 @@ let startRealtime = Date.now();
 window.onload = function () {
   wolves.forEach(wolf => { allCritters.push(initCritter(wolf, "wolf")); });
   deer.forEach(aDeer => { allCritters.push(initCritter(aDeer, "deer")); });
+  forbidOverlapsOnStart(); // must run after critters exist
 
   animat?.setCameraToPCWolf();
   if (!consoleOnlyMode) addCursorTracker();
