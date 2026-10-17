@@ -5,8 +5,8 @@ let consoleOnlyMode = false;
 let animat = null;
 let tempo = 1/60;
 // TODO: change speed convert so it responds when tempo is changed at runtime
-let g_tick = 0; // updates ONE PLACE ONLY in gameLoop
-let g_now = 0; // also updates ONLY ONE PLACE in gameLoop
+let g_tick = 0; // updates ONE PLACE ONLY in tick()
+let g_now = 0; // also updates ONLY ONE PLACE in tick()
 // g_now is elapsed seconds; IFF tempo stays constant, g_now = g_tick * tempo
 let g_next_uid = 0;
 let isPaused = false;
@@ -745,12 +745,27 @@ function forbidOverlapsOnStart() {
   }
 }
 
-function gameLoop(isStepThrough = false) {
-  if (isPaused && !isStepThrough) return;
+// GAME LOOP
+// The simulation advances in fixed ticks of `tempo` seconds of game time. The browser
+// loop (runFrame) runs as many ticks as real time has elapsed, so game speed is the same
+// at any display refresh rate (30, 60, 120, 144 Hz...) instead of one tick per frame.
+//
+// Exactly one loop may be scheduled at a time: loopHandle is non-null while a frame is
+// pending, and startLoop() refuses to schedule a second one.
 
+// Longest real-time gap one frame will catch up on. Longer gaps (tab hidden, debugger
+// stop, slow frame) are dropped rather than simulated in one burst.
+const maxCatchUpS = 0.25;
+
+let loopHandle = null;    // pending requestAnimationFrame / setTimeout id, or null
+let lastFrameMs = null;   // timestamp of the previous frame; null = (re)starting
+let tickDebtS = 0;        // real time elapsed but not yet simulated
+
+// Advance the simulation by exactly one tick. The only place g_tick and g_now change.
+function tick() {
   if (consoleOnlyMode) {
     const tps = g_tick / ((Date.now() - startRealtime) / 1000)
-    console.log("Begin gameLoop tick=" + g_tick + " + tps=" + tps);
+    console.log("Begin tick=" + g_tick + " + tps=" + tps);
   } else {
     const hasInput = arrowKeyNames.some(ak => keysPressed[ak]);
     if (arrowsMoveWolf) {
@@ -783,18 +798,58 @@ function gameLoop(isStepThrough = false) {
 
   g_tick++; // nowhere else may update g_tick
   g_now += tempo; //nowhere else may update g_now
-  if (!isPaused) {
-    if (consoleOnlyMode) {
-      // using setTimeout will trigger gameLoop in the next execution frame,
-      // avoiding any issue of stack overflow from unbounded recursion
-      return setTimeout(gameLoop, 0);
-      // TODO: recursion achieves a speed on same hardware of 1045 tk/s
-      // vs only 165 tk/s with setTimeout. See about implementing limited
-      // iterative or recursive gameLoops() in batches to improve
-      // runspeed.
-    }
-    requestAnimationFrame(gameLoop);
+}
+
+// One browser frame: run the ticks owed for the real time since the last frame.
+function runFrame(nowMs) {
+  loopHandle = null;
+  if (isPaused) return;
+
+  if (lastFrameMs !== null) {
+    tickDebtS += Math.min((nowMs - lastFrameMs) / 1000, maxCatchUpS);
   }
+  lastFrameMs = nowMs;
+
+  // small epsilon so float drift in the debt can't skip a whole tick
+  while (tickDebtS >= tempo - 1e-9) {
+    tick();
+    tickDebtS -= tempo;
+  }
+
+  scheduleFrame();
+}
+
+// Console-only mode runs as fast as possible rather than in real time.
+function runConsoleBatch() {
+  loopHandle = null;
+  if (isPaused) return;
+  tick();
+  scheduleFrame();
+  // TODO: recursion achieves a speed on same hardware of 1045 tk/s
+  // vs only 165 tk/s with setTimeout. See about running ticks in
+  // batches per setTimeout to improve runspeed.
+}
+
+function scheduleFrame() {
+  if (isPaused || loopHandle !== null) return; // never more than one pending frame
+  // setTimeout yields between ticks, avoiding unbounded recursion
+  loopHandle = consoleOnlyMode
+    ? setTimeout(runConsoleBatch, 0)
+    : requestAnimationFrame(runFrame);
+}
+
+function startLoop() {
+  // restarting: don't count the time spent stopped/paused as owed ticks
+  lastFrameMs = null;
+  tickDebtS = 0;
+  scheduleFrame();
+}
+
+function stopLoop() {
+  if (loopHandle === null) return;
+  if (consoleOnlyMode) clearTimeout(loopHandle);
+  else cancelAnimationFrame(loopHandle);
+  loopHandle = null;
 }
 
 function addCursorTracker() {
@@ -1181,20 +1236,26 @@ function getDir(x, y, defaultRV = 0) {
 
 function pause() {
   isPaused = true;
+  stopLoop(); // takes effect immediately; no stray tick from an already-pending frame
 }
 
 function unpause() {
   if (!isPaused) return;
   isPaused = false;
-  gameLoop();
+  startLoop();
 }
 
-document.addEventListener("keydown", (e) => { 
+// While paused, advance exactly one tick.
+function stepOnce() {
+  if (isPaused) tick();
+}
+
+document.addEventListener("keydown", (e) => {
   if (e.key === "p") {
     isPaused ? unpause() : pause();
     return;
   } else if (e.key === "s") {
-    if (isPaused) gameLoop(true);
+    stepOnce();
     return;
   }
   keysPressed[e.key] = true; 
@@ -1216,5 +1277,5 @@ window.onload = function () {
 
   animat?.setCameraToPCWolf();
   if (!consoleOnlyMode) addCursorTracker();
-  gameLoop();
+  startLoop();
 };
