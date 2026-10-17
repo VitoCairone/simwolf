@@ -594,6 +594,7 @@ function updateAllCritters() {
     // e.g. a realistic reaction time of 120 ms (7 ticks)
     a.redecideCd--;
     if (a.redecideCd <= 0) updateCritterAction(a);
+    if (a.returnToLand) steerToLand(a);
 
     a.animTimer++;
     let holdTks = frameDataBySpeciesAndPose[a.species][a.pose].holdTks;
@@ -695,6 +696,7 @@ function moveAllTogether(movers, statics = []) {
       // this is the ONLY PLACE ANYWHERE that thing gx and gy should change!
       thing.gx = thing.nextGX;
       thing.gy = thing.nextGY;
+      if (thing.returnToLand) thing.returnToLand.blockedTicks = 0;
       updateTerrainPose(thing); // swim <-> land pose when crossing a shoreline
       if (thing === pcWolf && cameraFollowsWolf) {
         animat?.setCameraToPCWolf();
@@ -921,6 +923,7 @@ function updateTerrainPose(a) {
     a.speed = a.speed > 0 ? travelSpeedBySpeciesAndPose[a.species].swim : 0;
     updateCritterFrame(a, true);
   } else if (!inWater && a.pose === "swim") {
+    endReturnToLand(a); // arrived, if it was heading for land
     const resume = a.landPose || "walk";
     if (a.speed > 0 && resume !== "idle") {
       a.pose = null; // no current pose, so setCritterMoving applies the change and its checks
@@ -929,6 +932,68 @@ function updateTerrainPose(a) {
       setCritterIdle(a);
     }
   }
+}
+
+// RETURNING TO LAND
+// At each decision, a swimming critter may decide to head back to land, with a chance
+// that grows with its distance from the nearest land: distance / returnToLandSureDist,
+// so certain at returnToLandSureDist tiles or more. Once decided it swims straight for
+// the closest land tile and makes no other decisions until it is ashore. (If it stays
+// blocked for returnToLandGiveUpTicks, e.g. by rock in the way, it gives up and
+// decides normally again, so it can't be stuck forever.)
+const returnToLandSureDist = 4;
+const returnToLandGiveUpTicks = 60;
+
+// Land = a tile a critter can stand on: not water, not impassable.
+function isLandTile(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return false;
+  const t = getTerrainAt(i, j);
+  return t !== "water" && !isImpassable(t);
+}
+
+// Nearest land tile to a critter: { tile: [i, j], dist } where dist is the distance from
+// the critter to the closest point of that tile; null if there is no land on the map.
+function findNearestLand(a) {
+  const ci = Math.floor(a.gx), cj = Math.floor(a.gy);
+  const distToTile = (i, j) => Math.hypot(
+    Math.max(i - a.gx, 0, a.gx - (i + 1)), Math.max(j - a.gy, 0, a.gy - (j + 1)));
+  let best = null;
+  const maxR = Math.max(gridWidthN, gridHeightN);
+  // search square rings outward; a ring at radius r can't beat a find closer than r - 1
+  for (let r = 0; r <= maxR; r++) {
+    if (best && best.dist <= r - 1) break;
+    for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
+      if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue; // ring only
+      if (!isLandTile(i, j)) continue;
+      const d = distToTile(i, j);
+      if (!best || d < best.dist) best = { tile: [i, j], dist: d };
+    }
+  }
+  return best;
+}
+
+// Called at a swimming critter's decision time. Returns true if it decided to go ashore.
+function maybeDecideReturnToLand(a) {
+  const land = findNearestLand(a);
+  if (!land || Math.random() >= Math.min(1, land.dist / returnToLandSureDist)) return false;
+  a.returnToLand = { gx: land.tile[0] + 0.5, gy: land.tile[1] + 0.5, blockedTicks: 0 };
+  a.redecideCd = Infinity; // no other decisions until ashore (see endReturnToLand)
+  steerToLand(a);
+  return true;
+}
+
+// Each tick while returning: head straight for the target land tile's center.
+function steerToLand(a) {
+  const t = a.returnToLand;
+  if (!t) return;
+  if (a === pcWolf && handMovesWolf()) return endReturnToLand(a); // the player took over
+  setCritterMoving(a, getDir(t.gx - a.gx, t.gy - a.gy), "walk"); // swims while in water
+}
+
+function endReturnToLand(a) {
+  if (!a.returnToLand) return;
+  delete a.returnToLand;
+  a.redecideCd = 0; // free to decide again on the next tick
 }
 
 const wolfAudibleToDeerL2ByTerrainAndSpeed = {
@@ -1056,7 +1121,8 @@ function setCritterMoving(a, dir, newPose = "walk") {
   // TODO: improve blocking for on-edge or to-corner motion
   const moveVec = moveVecByDir[dir];
   const [nextX, nextY] = [a.gx + moveVec[0], a.gy + moveVec[1]];
-  if (isImpassable(getTerrainAt(nextX, nextY))) {
+  // (not while heading for land: that makes no new decisions until ashore)
+  if (isImpassable(getTerrainAt(nextX, nextY)) && !a.returnToLand) {
     a.redecideCd = Math.min(a.redecideCd, 5);
   }
 }
@@ -1156,8 +1222,15 @@ function updateCritterAction(a) {
     if (a.isHaltedUntil <= g_tick) delete a.isHaltedUntil;
     return;
   }
+  if (a.returnToLand) {
+    // Heading for land makes no new decisions; the only way here is a collision.
+    if (++a.returnToLand.blockedTicks < returnToLandGiveUpTicks) return;
+    endReturnToLand(a); // blocked too long: give up and decide normally below
+  }
   a.redecideCd = 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
   // note this is only the default time, decisions may override
+
+  if (isInWater(a) && maybeDecideReturnToLand(a)) return;
 
   const decision = null; // makeDecision(a); // Not Yet Implemented
   if (decision) { 
