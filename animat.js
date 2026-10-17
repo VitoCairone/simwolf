@@ -84,7 +84,7 @@ if (!consoleOnlyMode) {
   // sprite frames and placements for those which are visible.
   animat.addCritter = function(a) {
     const el = document.createElement("div");
-    el.classList.add(a.species);
+    el.className = "critter"; // the sheet class is added by updateCritterFrame
     spriteLayer.appendChild(el);
     a.element = el;
   }
@@ -105,6 +105,14 @@ if (!consoleOnlyMode) {
   };
 
   animat.updateCritterFrame = function(a, frameData) {
+    // Each pose names its sprite sheet's CSS class (see .critter in index.html), which
+    // sets the sheet image and frame size. Swap the class when the sheet changes.
+    const sheetClass = "critter " + frameData.sheet;
+    if (a.element.className !== sheetClass) {
+      a.element.className = sheetClass;
+      // frame size may have changed, which moves the sprite's anchor point
+      if (a.gx !== undefined) this.placeCritterSprite(a);
+    }
     const frameCol = frameData.colZero + a.frame;
     a.element.style.backgroundPosition =
       `-${frameCol * frameData.frameW}px -${this.spriteRow(a) * frameData.frameH}px`;

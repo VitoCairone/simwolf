@@ -99,32 +99,47 @@ function sample(list) {
 // TODO: consider if frame holds should be in time or in ticks,
 // for now assumone animat only runs when tempo == 1/60 and adjust
 // for main logic only
+// `sheet` names the sprite sheet's CSS class in index.html (.wolf, .wolf-swim, ...),
+// which sets the sheet image and frame size; frameW/frameH must match that class.
 const frameDataBySpeciesAndPose = {
-  wolf: { 
-    walk: {nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
+  wolf: {
+    walk: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 },
-    idle: {nFrames: 4, colZero: 8, frameW: 64, frameH: 64,
+    idle: {sheet: "wolf", nFrames: 4, colZero: 8, frameW: 64, frameH: 64,
       holdTks: 12, topToShadow: 39 },
-    run: {nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
+    run: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 }, // placeholder
-    sprint: {nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
+    sprint: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 }, // placeholder
+    // swim sheet is made from the run frames, same 7 facing rows.
+    // topToShadow is raised so swimmers never appear to sit on land in front of them.
+    // Sprites draw over all tiles, and land is drawn 8px higher than water, so a land
+    // tile screen-below the swimmer has its top corner 8px below the ground point, and
+    // that shoreline rises 1px per 2px to either side (8 - |dx|/2, never above 0).
+    // 52 is the smallest value that keeps every swim pixel above that worst case
+    // (land directly in front and to both front sides).
+    swim: {sheet: "wolf-swim", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
+      holdTks: 8, topToShadow: 52 },
     // death: {nFrames: 2, colZero: 0, frameW: 64, frameH: 64,
     //   holdTks: 3, repeatLimit: 3, exitToPose: 'dead' }
   },
   deer: { 
-    walk: {nFrames: 11, colZero: 0, frameW: 32, frameH: 41,
+    walk: {sheet: "deer", nFrames: 11, colZero: 0, frameW: 32, frameH: 41,
       holdTks: 5, topToShadow: 33},
-    idle: {nFrames: 24, colZero: 11, frameW: 32, frameH: 41,
+    idle: {sheet: "deer", nFrames: 24, colZero: 11, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33},
-    run: {nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
+    run: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33},
-    sprint: {nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
+    sprint: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33}, // placeholder
+    // swim frames are 40x48 (wider/taller than land frames to fit the ripple ring).
+    // topToShadow raised for the same reason as the wolf's swim (see there).
+    swim: {sheet: "deer-swim", nFrames: 10, colZero: 0, frameW: 40, frameH: 48,
+      holdTks: 10, topToShadow: 45 },
     // death: col 45 is a pale hit-flash, col 46 the same pose in full color
-    death: {nFrames: 2, colZero: 45, frameW: 32, frameH: 41,
+    death: {sheet: "deer", nFrames: 2, colZero: 45, frameW: 32, frameH: 41,
       holdTks: 15, topToShadow: 33},
-    dead: {nFrames: 1, colZero: 45, frameW: 32, frameH: 41,
+    dead: {sheet: "deer", nFrames: 1, colZero: 45, frameW: 32, frameH: 41,
       holdTks: Infinity, topToShadow: 33},
   }
 }
@@ -347,10 +362,7 @@ function onMovePadPointer(e) {
 
   if (ring.pose === "idle") return setCritterIdle(pcWolf);
 
-  // rotate -1 converts screen (pixel) direction to grid direction
-  let dir = getDir(vx, vy) - 1;
-  if (dir < 0) dir = 7;
-  setCritterMoving(pcWolf, dir, ring.pose);
+  setCritterMoving(pcWolf, screenDirToGridDir(getDir(vx, vy)), ring.pose);
 }
 
 function releaseMovePad() {
@@ -683,6 +695,7 @@ function moveAllTogether(movers, statics = []) {
       // this is the ONLY PLACE ANYWHERE that thing gx and gy should change!
       thing.gx = thing.nextGX;
       thing.gy = thing.nextGY;
+      updateTerrainPose(thing); // swim <-> land pose when crossing a shoreline
       if (thing === pcWolf && cameraFollowsWolf) {
         animat?.setCameraToPCWolf();
       }
@@ -771,14 +784,14 @@ function tick() {
     if (arrowsMoveWolf) {
       // the movement pad has priority: arrows are ignored entirely while it is in use
       if (!mouseInMovePad) {
-        if (hasInput) {
-          // for simplicity, the arrow keys currently move along grid axis and don't combine
-          if (keysPressed["ArrowUp"]) { setCritterMoving(pcWolf, DIR_N); }
-          if (keysPressed["ArrowDown"]) { setCritterMoving(pcWolf, DIR_S); }
-          if (keysPressed["ArrowLeft"]) { setCritterMoving(pcWolf, DIR_W); }
-          if (keysPressed["ArrowRight"]) { setCritterMoving(pcWolf, DIR_E); }
+        // Arrow keys move the wolf in SCREEN directions (Up = straight up on screen).
+        // Two keys combine into a screen diagonal; opposite keys cancel out.
+        const screenX = (keysPressed["ArrowRight"] ? 1 : 0) - (keysPressed["ArrowLeft"] ? 1 : 0);
+        const screenY = (keysPressed["ArrowDown"] ? 1 : 0) - (keysPressed["ArrowUp"] ? 1 : 0);
+        if (screenX !== 0 || screenY !== 0) {
+          setCritterMoving(pcWolf, screenDirToGridDir(getDir(screenX, screenY)));
         } else {
-          setCritterIdle(pcWolf); // stop when the keys are released
+          setCritterIdle(pcWolf); // stop when the keys are released (or all cancel out)
         }
       }
     } else if (hasInput) {
@@ -874,13 +887,48 @@ function addCursorTracker() {
 }
 
 function setCritterIdle(a) {
-  if (a.pose === "idle") return;
   if (a.pose === "death" || a.pose === "dead") return;
+  // A critter can't stand still in water: it treads water (swim pose, no speed).
+  const stillPose = isInWater(a) ? "swim" : "idle";
+  if (a.pose === stillPose && a.speed === 0) return;
   a.speed = 0;
   a.nextGX = a.gx;
   a.nextGY = a.gy;
-  a.pose = "idle";
+  a.pose = stillPose;
+  a.landPose = "idle";
   updateCritterFrame(a, true);
+}
+
+// SWIMMING
+// Water is passable. A critter whose tile is water is always in the "swim" pose, at
+// its species' single swim speed (or 0 when treading water). Swimming is
+// fatigue-neutral: "swim" has no fatigueBySpeciesAndPose entry, so applyFatigue skips it.
+// landPose remembers the land pose that was asked for (walk/run/sprint/idle), so a
+// critter climbing out of the water resumes it.
+
+function isInWater(a) {
+  return getTerrainAt(a.gx, a.gy) === "water";
+}
+
+// Called whenever a critter's position changes: switch between swimming and land poses
+// when it crosses a shoreline.
+function updateTerrainPose(a) {
+  if (!isLiveCritter(a)) return;
+  const inWater = isInWater(a);
+  if (inWater && a.pose !== "swim") {
+    a.landPose = a.pose;
+    a.pose = "swim";
+    a.speed = a.speed > 0 ? travelSpeedBySpeciesAndPose[a.species].swim : 0;
+    updateCritterFrame(a, true);
+  } else if (!inWater && a.pose === "swim") {
+    const resume = a.landPose || "walk";
+    if (a.speed > 0 && resume !== "idle") {
+      a.pose = null; // no current pose, so setCritterMoving applies the change and its checks
+      setCritterMoving(a, a.currentDirection, resume);
+    } else {
+      setCritterIdle(a);
+    }
+  }
 }
 
 const wolfAudibleToDeerL2ByTerrainAndSpeed = {
@@ -889,7 +937,7 @@ const wolfAudibleToDeerL2ByTerrainAndSpeed = {
   leaves:  { walk: sqr(6),  run: sqr(22), sprint: sqr(60) },
   rock:    { walk: sqr(8),  run: sqr(30), sprint: sqr(80) },
   gravel:  { walk: sqr(9),  run: sqr(37), sprint: sqr(95) },
-  water:   { walk: sqr(9),  run: sqr(37), sprint: sqr(95) }, // placeholder
+  water:   { walk: sqr(9),  run: sqr(37), sprint: sqr(95), swim: sqr(12) }, // placeholder
   bush:    { walk: sqr(3),  run: sqr(11), sprint: sqr(30) }, // placeholder
 };
 
@@ -933,6 +981,7 @@ const travelSpeedBySpeciesAndPose = {
     "walk": 6 * kphToTpTk, // all day
     "run": 10 * kphToTpTk, // 8 hours
     "sprint": 55 * kphToTpTk, // a few seconds only
+    "swim": 5 * kphToTpTk, // grey wolf, ~3 mph; reported figures are sparse
     "idle": 0,
     "death": 0
   },
@@ -940,7 +989,8 @@ const travelSpeedBySpeciesAndPose = {
     "walk": 6 * kphToTpTk, // all day 
     "run": 45 * kphToTpTk, // 2 minutes
     "sprint": 65 * kphToTpTk, // a few seconds only; 0.3 tiles/tick
-    "idle": 0, 
+    "swim": 8 * kphToTpTk, // red deer, ~5 mph; deer outswim wolves
+    "idle": 0,
     "death": 0
   }
 }
@@ -983,11 +1033,19 @@ function setCritterMoving(a, dir, newPose = "walk") {
 
   if (newPose === a.pose && a.currentDirection === dir) return;
 
-  if (newPose === "sprint" && !canSprint(a, a.pose === "sprint"))
-    newPose = "run";
-  if (newPose === "run" && !canRun(a, a.pose === "run"))
-    newPose = "walk";
-  if (newPose === a.pose && a.currentDirection === dir) return;
+  if (isInWater(a)) {
+    // in water every movement is swimming; remember what was asked for on land
+    a.landPose = newPose;
+    newPose = "swim";
+  } else {
+    if (newPose === "sprint" && !canSprint(a, a.pose === "sprint"))
+      newPose = "run";
+    if (newPose === "run" && !canRun(a, a.pose === "run"))
+      newPose = "walk";
+    a.landPose = newPose;
+  }
+  // (a swimmer treading water has speed 0, so it still needs to start moving)
+  if (newPose === a.pose && a.currentDirection === dir && a.speed > 0) return;
 
   a.pose = newPose;
   a.currentDirection = dir;
@@ -1142,7 +1200,8 @@ function doNextBoundingBoxesOverlap(a, b) {
 }
 
 function isImpassable(terrain) {
-  return terrain === "rock" || terrain === "bush" || terrain === "water";
+  // water is passable: critters swim (see updateTerrainPose)
+  return terrain === "rock" || terrain === "bush";
 }
 
 function isOpaque(terrain) {
@@ -1232,6 +1291,14 @@ function getDir(x, y, defaultRV = 0) {
   if (absX >= absY * 2.414) return x > 0 ? DIR_E : DIR_W;
   if (absY >= absX * 2.414) return y > 0 ? DIR_S : DIR_N;
   return x > 0 ? (y > 0 ? DIR_SE : DIR_NE) : (y > 0 ? DIR_SW : DIR_NW);
+}
+
+// Converts a direction measured on SCREEN (from getDir of a pixel vector, e.g.
+// DIR_N = straight up on screen) to the grid direction that is drawn that way.
+// The isometric view turns the grid 45 degrees, so this is a rotation by one step:
+// screen up -> grid NW, screen right -> grid NE, screen down -> grid SE, etc.
+function screenDirToGridDir(screenDir) {
+  return (screenDir + 7) % 8;
 }
 
 function pause() {

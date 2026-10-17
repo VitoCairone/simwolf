@@ -30,6 +30,34 @@ async function openGame(browser, { viewport, initScript, initArg } = {}) {
   return page;
 }
 
+// Moves a critter (default: the player's wolf) to the middle of open dry land, at least
+// `radius` tiles from any water, rock or bush, stops it, and centers the camera on it.
+// Use this before tests that expect land poses (walk/run/sprint/idle): critters can
+// otherwise wander into water and swim. With clearOthers, every other critter is moved
+// off the map so nothing gets in the way.
+async function moveToOpenLand(page, { who = "pcWolf", radius = 6, clearOthers = false } = {}) {
+  return page.evaluate(({ who, radius, clearOthers }) => {
+    const a = who === "pcWolf" ? pcWolf : eval(who);
+    const dry = (i, j) => { const t = getTerrainAt(i, j); return t !== "water" && !isImpassable(t); };
+    const tile = allLandTiles.find(([i, j]) => {
+      if (i < radius || j < radius || i >= gridWidthN - radius || j >= gridHeightN - radius) return false;
+      for (let di = -radius; di <= radius; di++)
+        for (let dj = -radius; dj <= radius; dj++) if (!dry(i + di, j + dj)) return false;
+      return true;
+    });
+    if (!tile) return null;
+    if (clearOthers) allCritters.filter(c => c !== a).forEach(c => {
+      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
+      animat.placeCritterSprite(c);
+    });
+    a.gx = a.nextGX = tile[0] + 0.5; a.gy = a.nextGY = tile[1] + 0.5;
+    setCritterIdle(a);
+    animat.placeCritterSprite(a);
+    if (a === pcWolf) animat.setCameraToPCWolf();
+    return tile;
+  }, { who, radius, clearOthers });
+}
+
 function makeReporter(suiteName) {
   const r = { suiteName, passed: 0, failed: 0 };
   r.check = (cond, msg) => {
@@ -64,4 +92,4 @@ function ensureOutputDir(sub = "") {
   return dir;
 }
 
-module.exports = { ROOT, PAGE_URL, launchBrowser, openGame, makeReporter, runStandalone, ensureOutputDir };
+module.exports = { ROOT, PAGE_URL, launchBrowser, openGame, moveToOpenLand, makeReporter, runStandalone, ensureOutputDir };

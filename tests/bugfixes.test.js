@@ -7,7 +7,7 @@
 //  6 fatigue recovers while idle and never goes below 0
 //  7 sprite z-index is a valid integer that tracks position
 
-const { openGame, runStandalone } = require("./helpers");
+const { openGame, moveToOpenLand, runStandalone } = require("./helpers");
 
 async function main(browser, r) {
   // 1 + 2: spawn positions over many page loads
@@ -51,7 +51,8 @@ async function main(browser, r) {
     const w = wolves[1], d = deer[0];
     // find open ground with room for both
     const t = allLandTiles.find(([i, j]) =>
-      [-1, 0, 1, 2, 3].every(di => [-1, 0, 1].every(dj => !isImpassable(getTerrainAt(i + di, j + dj)))));
+      [-1, 0, 1, 2, 3].every(di => [-1, 0, 1].every(dj => {
+        const t = getTerrainAt(i + di, j + dj); return !isImpassable(t) && t !== "water"; })));
     // move everyone else far away
     allCritters.filter(c => c !== w && c !== d).forEach(c => {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
@@ -85,7 +86,8 @@ async function main(browser, r) {
   r.check(k.corpseX === k.expectedCorpseX,
     `bug 5: corpse shows the frame set by deer.dead.colZero (x ${k.corpseX}px, expected ${k.expectedCorpseX}px)`);
 
-  // 6: fatigue
+  // 6: fatigue (on dry land: swimming is fatigue-neutral)
+  await moveToOpenLand(page);
   const f = await page.evaluate(() => {
     const w = pcWolf;
     w.fatigue = 15000; w.pose = "walk"; setCritterIdle(w);

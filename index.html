@@ -83,27 +83,40 @@
       background-size: auto;
       image-rendering: pixelated;
     }
-    .wolf {
+    /* Critter sprites: every critter element has .critter plus ONE sprite-sheet class.
+       Each sheet class sets that sheet's image and frame size. A pose's `sheet` in
+       frameDataBySpeciesAndPose (main.js) names its class; frameW/frameH there must
+       match the width/height here. */
+    .critter {
       position: absolute;
+      background-repeat: no-repeat;
+      image-rendering: pixelated;
+    }
+    .wolf {
       width: 64px;
       height: 64px;
       background-image: url('./images/wolf-run-stand.png');
-      background-repeat: no-repeat;
-      image-rendering: pixelated;
+    }
+    .wolf-swim {
+      width: 64px;
+      height: 64px;
+      background-image: url('./images/wolf-swim.png');
+    }
+    .deer {
+      width: 32px;
+      height: 41px;
+      background-image: url('./images/stag-walk-idle-run.png');
+    }
+    .deer-swim {
+      width: 40px;
+      height: 48px;
+      background-image: url('./images/stag-swim.png');
     }
     #dbel-pc-wolf {
       position: absolute;
       width: 32px;
       height: 16px;
       background-image: url('./images/debug-tile.png');
-      background-repeat: no-repeat;
-      image-rendering: pixelated;
-    }
-    .deer {
-      position: absolute;
-      width: 32px;
-      height: 41px;
-      background-image: url('./images/stag-walk-idle-run.png');
       background-repeat: no-repeat;
       image-rendering: pixelated;
     }

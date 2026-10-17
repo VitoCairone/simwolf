@@ -1,6 +1,6 @@
 // Movement pad and arrow-key controls (see #move-pad in index.html).
 
-const { openGame, runStandalone } = require("./helpers");
+const { openGame, moveToOpenLand, runStandalone } = require("./helpers");
 
 async function main(browser, r) {
   const p = await openGame(browser, { viewport: { width: 1400, height: 900 } });
@@ -10,6 +10,8 @@ async function main(browser, r) {
              right: innerWidth - b.right, bottom: innerHeight - b.bottom };
   });
   r.check(pad.right === 24 && pad.bottom === 24 && pad.R === 80, `pad sits in the lower-right ${JSON.stringify(pad)}`);
+  // these checks are about land poses, so keep the wolf on open dry ground
+  r.check(!!(await moveToOpenLand(p, { radius: 6, clearOthers: true })), "wolf placed on open dry land");
 
   // mouse over the map does nothing to the wolf
   await p.mouse.move(700, 450); await p.mouse.move(300, 200, { steps: 5 });
@@ -53,11 +55,14 @@ async function main(browser, r) {
   r.check(!s.inPad && s.pose === "idle" && !s.knob && s.active.length === 0, "leaving the pad stops the wolf and hides the knob");
 
   // camera mode: arrows pan even while the pad steers, and the camera stays put
+  await p.mouse.move(400, 300, { steps: 2 }); await moveToOpenLand(p, { radius: 6 });
   await p.mouse.move(pad.x + 0.3 * pad.R, pad.y, { steps: 2 });
   const cam0 = await p.evaluate(() => worldShiftPX);
   await p.keyboard.down("ArrowLeft"); await p.waitForTimeout(400);
-  const cam1 = await p.evaluate(() => [worldShiftPX, pcWolf.pose]);
-  await p.keyboard.up("ArrowLeft"); await p.waitForTimeout(500);
+  const posePanning = await p.evaluate(() => pcWolf.pose);
+  await p.keyboard.up("ArrowLeft"); await p.waitForTimeout(50);
+  const cam1 = [await p.evaluate(() => worldShiftPX), posePanning];
+  await p.waitForTimeout(500);
   const cam2 = await p.evaluate(() => worldShiftPX);
   r.check(cam1[0] < cam0 - 100 && cam1[1] === "walk",
     `camera mode: arrows pan while the pad steers the wolf (${cam0.toFixed(0)} -> ${cam1[0].toFixed(0)})`);
@@ -73,12 +78,13 @@ async function main(browser, r) {
   r.check(recentered, "re-entering the pad re-centers the camera on the wolf");
 
   // wolf mode
+  await p.mouse.move(400, 300, { steps: 2 }); await moveToOpenLand(p, { radius: 6 });
   await p.mouse.move(400, 300, { steps: 3 });
   await p.click("#arrow-mode-toggle"); await p.mouse.move(400, 300);
   r.check(await p.evaluate(() => arrowsMoveWolf), "toggle switches arrows to moving the wolf");
   await p.keyboard.down("ArrowUp"); await p.waitForTimeout(150);
-  let w = await p.evaluate(() => [pcWolf.pose, pcWolf.currentDirection === DIR_N]);
-  r.check(w[0] === "walk" && w[1], "wolf mode, outside the pad: ArrowUp walks the wolf grid-north");
+  let w = await p.evaluate(() => [pcWolf.pose, pcWolf.currentDirection === DIR_NW]);
+  r.check(w[0] === "walk" && w[1], "wolf mode, outside the pad: ArrowUp walks the wolf straight up on screen (grid NW)");
   await p.mouse.move(pad.x, pad.y + 0.9 * pad.R, { steps: 4 }); await p.waitForTimeout(300);
   w = await p.evaluate(() => [pcWolf.pose, pcWolf.currentDirection === DIR_SE]);
   r.check(w[0] === "sprint" && w[1], "wolf mode, inside the pad with ArrowUp held: the pad wins");
