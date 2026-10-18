@@ -55,7 +55,7 @@ function screenDirToGridDir(screenDir) {
 }
 
 // SPRITE SHEETS
-// `sheet` names the sprite sheet's CSS class in index.html (.wolf, .wolf-swim, ...),
+// `sheet` names the sprite sheet's CSS class in style.css (.wolf, .wolf-swim, ...),
 // which sets the sheet image and frame size; frameW/frameH must match that class.
 // holdTks: how many simulation ticks each frame is shown.
 const frameDataBySpeciesAndPose = {
@@ -122,7 +122,7 @@ function frameIndex(a, frameData) {
 }
 
 // DRAWING ORDER (z-index) of tiles and critter sprites, which share one stacking order
-// (the layers in index.html don't set their own). Depth = gx + gy: larger is nearer the
+// (the layers in style.css don't set their own). Depth = gx + gy: larger is nearer the
 // camera. z-index must be an integer, so depths are scaled by 100.
 //   water tiles      0 .. 254         always lowest: the water surface is below land
 //   land tiles       1000 + 100*depth by depth, interleaved with swimmers
@@ -282,7 +282,7 @@ function drawCritter(a) {
   const fd = frameDataBySpeciesAndPose[a.species][a.pose];
   if (!fd) return alert(`animat: no sprite frames for ${a.species} pose "${a.pose}"`);
 
-  // Each pose names its sprite sheet's CSS class (see .critter in index.html), which
+  // Each pose names its sprite sheet's CSS class (see .critter in style.css), which
   // sets the sheet image and frame size.
   const className = "critter " + fd.sheet;
   if (s.node.className !== className) s.node.className = className;
