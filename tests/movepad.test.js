@@ -24,7 +24,7 @@ async function main(browser, r) {
   }));
 
   // each ring gives its pose
-  for (const [f, pose] of [[0.05, "idle"], [0.3, "walk"], [0.6, "run"], [0.9, "sprint"]]) {
+  for (const [f, pose] of [[0.05, "idle"], [0.3, "walk"], [0.6, "trot"], [0.9, "sprint"]]) {
     await p.evaluate(() => { pcWolf.fatigue = 0; });
     await p.mouse.move(pad.x + f * pad.R, pad.y, { steps: 2 });
     const s = await state();

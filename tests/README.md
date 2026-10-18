@@ -48,6 +48,6 @@ Each suite exports `{ name, main(browser, r) }`. Use `openGame(browser)` from
 and `r.check(condition, message)` to record a result. Call `pause()` first and
 then `tick()` to step the simulation deterministically.
 
-Critters can swim, so a test that expects land poses (walk, run, sprint, idle)
+Critters can swim, so a test that expects land poses (walk, trot, sprint, idle)
 should first call `moveToOpenLand(page)` from `helpers.js`, which puts the wolf
 (or another critter) in the middle of open dry ground.

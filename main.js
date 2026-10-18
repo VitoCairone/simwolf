@@ -107,7 +107,7 @@ const frameDataBySpeciesAndPose = {
       holdTks: 5, topToShadow: 39 },
     idle: {sheet: "wolf", nFrames: 4, colZero: 8, frameW: 64, frameH: 64,
       holdTks: 12, topToShadow: 39 },
-    run: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
+    trot: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 }, // placeholder
     sprint: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 }, // placeholder
@@ -130,7 +130,7 @@ const frameDataBySpeciesAndPose = {
       holdTks: 5, topToShadow: 33},
     idle: {sheet: "deer", nFrames: 24, colZero: 11, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33},
-    run: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
+    trot: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33},
     sprint: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33}, // placeholder
@@ -1011,13 +1011,13 @@ function endReturnToLand(a) {
 }
 
 const wolfAudibleToDeerL2ByTerrainAndSpeed = {
-  grass:   { walk: sqr(3),  run: sqr(11), sprint: sqr(30) },
-  dirt:    { walk: sqr(4),  run: sqr(15), sprint: sqr(40) },
-  leaves:  { walk: sqr(6),  run: sqr(22), sprint: sqr(60) },
-  rock:    { walk: sqr(8),  run: sqr(30), sprint: sqr(80) },
-  gravel:  { walk: sqr(9),  run: sqr(37), sprint: sqr(95) },
-  water:   { walk: sqr(9),  run: sqr(37), sprint: sqr(95), swim: sqr(12) }, // placeholder
-  bush:    { walk: sqr(3),  run: sqr(11), sprint: sqr(30) }, // placeholder
+  grass:   { walk: sqr(3),  trot: sqr(11), sprint: sqr(30) },
+  dirt:    { walk: sqr(4),  trot: sqr(15), sprint: sqr(40) },
+  leaves:  { walk: sqr(6),  trot: sqr(22), sprint: sqr(60) },
+  rock:    { walk: sqr(8),  trot: sqr(30), sprint: sqr(80) },
+  gravel:  { walk: sqr(9),  trot: sqr(37), sprint: sqr(95) },
+  water:   { walk: sqr(9),  trot: sqr(37), sprint: sqr(95), swim: sqr(12) }, // placeholder
+  bush:    { walk: sqr(3),  trot: sqr(11), sprint: sqr(30) }, // placeholder
 };
 
 function vecTo(a, b) { return [b[0] - a[0], b[1] - a[1]]; }
@@ -1058,7 +1058,7 @@ const kphToTpTk = 0.277777 * tempo; // kilometers-per-hour to tiles-per-tick
 const travelSpeedBySpeciesAndPose = {
   "wolf": {
     "walk": 6 * kphToTpTk, // all day
-    "run": 10 * kphToTpTk, // 8 hours
+    "trot": 10 * kphToTpTk, // 8 hours
     "sprint": 55 * kphToTpTk, // a few seconds only
     "swim": 5 * kphToTpTk, // grey wolf, ~3 mph; reported figures are sparse
     "idle": 0,
@@ -1066,7 +1066,7 @@ const travelSpeedBySpeciesAndPose = {
   },
   "deer": { 
     "walk": 6 * kphToTpTk, // all day 
-    "run": 45 * kphToTpTk, // 2 minutes
+    "trot": 45 * kphToTpTk, // 2 minutes (originally deerGallopSpeed)
     "sprint": 65 * kphToTpTk, // a few seconds only; 0.3 tiles/tick
     "swim": 8 * kphToTpTk, // red deer, ~5 mph; deer outswim wolves
     "idle": 0,
@@ -1079,31 +1079,33 @@ const fatigueBySpeciesAndPose = {
   "wolf": {
     "idle": { forceEnd: Infinity, dps: -1, downTo: "idle" },
     "walk": { forceEnd: 60000, dps: -0.25, downTo: "idle" },
-    "run": { forceEnd: 30000, dps: 1, downTo: "walk" }, // ~8 hours
-    "sprint": { forceEnd: 15000, dps: 1500, downTo: "run" } // 10 seconds
+    "trot": { forceEnd: 30000, dps: 1, downTo: "walk" }, // ~8 hours
+    "sprint": { forceEnd: 15000, dps: 1500, downTo: "trot" } // 10 seconds
   },
   "deer": {
     "idle": { forceEnd: Infinity, dps: -1, downTo: "idle" },
     "walk": { forceEnd: 60000, dps: -0.25, downTo: "idle" },
-    "run": { forceEnd: 30000, dps: 250, downTo: "walk" }, // 2 minutes
-    "sprint": { forceEnd: 15000, dps: 1500, downTo: "run" } // 10 seconds
+    "trot": { forceEnd: 30000, dps: 250, downTo: "walk" }, // 2 minutes
+    "sprint": { forceEnd: 15000, dps: 1500, downTo: "trot" } // 10 seconds
   }
 }
 
 
-// TODO: consider rolling canSprint and canRun into _can()
-function canSprint(a, isAlready = false) {
-  if (!_can(a, 'run')) return false; // age check
-  const limit = fatigueBySpeciesAndPose[a.species].sprint.forceEnd
-    * (isAlready ? 1 : 0.7);
-  return a.fatigue <= limit;
+// FAST GAITS (trot, sprint)
+// A gait can only be STARTED while fatigue is at most gaitStartFatigueFrac of that
+// gait's forceEnd; once in it, the critter keeps going until fatigue reaches forceEnd,
+// when applyFatigue drops it to the gait's downTo. The fatigue meter marks the start
+// limits (animat.updateFatigueMeter), so it uses gaitFatigueLimit too.
+const gaitStartFatigueFrac = 0.7;
+
+function gaitFatigueLimit(species, gait, isAlready = false) {
+  return fatigueBySpeciesAndPose[species][gait].forceEnd * (isAlready ? 1 : gaitStartFatigueFrac);
 }
 
-function canRun(a, isAlready = false) {
-  if (!_can(a, 'run')) return false; // age check
-  const limit = fatigueBySpeciesAndPose[a.species].run.forceEnd
-    * (isAlready ? 1 : 0.7);
-  return a.fatigue <= limit;
+// TODO: consider rolling canUseGait into _can()
+function canUseGait(a, gait, isAlready = false) {
+  if (!_can(a, 'run')) return false; // age check: old enough to run at all
+  return a.fatigue <= gaitFatigueLimit(a.species, gait, isAlready);
 }
 
 function setCritterMoving(a, dir, newPose = "walk") {
@@ -1117,9 +1119,9 @@ function setCritterMoving(a, dir, newPose = "walk") {
     a.landPose = newPose;
     newPose = "swim";
   } else {
-    if (newPose === "sprint" && !canSprint(a, a.pose === "sprint"))
-      newPose = "run";
-    if (newPose === "run" && !canRun(a, a.pose === "run"))
+    if (newPose === "sprint" && !canUseGait(a, "sprint", a.pose === "sprint"))
+      newPose = "trot";
+    if (newPose === "trot" && !canUseGait(a, "trot", a.pose === "trot"))
       newPose = "walk";
     a.landPose = newPose;
   }
