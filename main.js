@@ -116,10 +116,12 @@ const frameDataBySpeciesAndPose = {
     // Sprites draw over all tiles, and land is drawn 8px higher than water, so a land
     // tile screen-below the swimmer has its top corner 8px below the ground point, and
     // that shoreline rises 1px per 2px to either side (8 - |dx|/2, never above 0).
-    // 52 is the smallest value that keeps every swim pixel above that worst case
-    // (land directly in front and to both front sides).
+    // 57 is the smallest value that keeps every swim pixel above that worst case
+    // (land directly in front and to both front sides). The down-facing diagonal rows'
+    // tilted water rings reach lowest and set it; one value keeps every facing's
+    // waterline at the same height, so a turning swimmer doesn't hop.
     swim: {sheet: "wolf-swim", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
-      holdTks: 8, topToShadow: 52 },
+      holdTks: 8, topToShadow: 57 },
     // death: {nFrames: 2, colZero: 0, frameW: 64, frameH: 64,
     //   holdTks: 3, repeatLimit: 3, exitToPose: 'dead' }
   },
@@ -696,6 +698,8 @@ function moveAllTogether(movers, statics = []) {
       // this is the ONLY PLACE ANYWHERE that thing gx and gy should change!
       thing.gx = thing.nextGX;
       thing.gy = thing.nextGY;
+      // all-water check for this position, worked out by findCollidingPairs above
+      thing.waterState = { gx: thing.gx, gy: thing.gy, allWater: thing.nextAllWater };
       if (thing.returnToLand) thing.returnToLand.blockedTicks = 0;
       updateTerrainPose(thing); // swim <-> land pose when crossing a shoreline
       if (thing === pcWolf && cameraFollowsWolf) {
@@ -902,14 +906,24 @@ function setCritterIdle(a) {
 }
 
 // SWIMMING
-// Water is passable. A critter whose tile is water is always in the "swim" pose, at
-// its species' single swim speed (or 0 when treading water). Swimming is
-// fatigue-neutral: "swim" has no fatigueBySpeciesAndPose entry, so applyFatigue skips it.
+// Water is passable. A critter is in water only when ALL the tiles it occupies are water
+// (any land under it means it's on land); then it is always in the "swim" pose, at its
+// species' single swim speed (or 0 when treading water). Swimming is fatigue-neutral:
+// "swim" has no fatigueBySpeciesAndPose entry, so applyFatigue skips it.
 // landPose remembers the land pose that was asked for (walk/run/sprint/idle), so a
 // critter climbing out of the water resumes it.
 
+// a.waterState caches the answer for the position it was computed at. In normal play it
+// is set by moveAllTogether from findCollidingPairs, which already checks every tile a
+// critter will occupy, so this costs nothing extra per tick. The lookup below only runs
+// when a critter was placed directly (spawning, or a test or debug teleport).
 function isInWater(a) {
-  return getTerrainAt(a.gx, a.gy) === "water";
+  const s = a.waterState;
+  if (s && s.gx === a.gx && s.gy === a.gy) return s.allWater;
+  const allWater = getOccupiedTiles(a.gx, a.gy).every(tile =>
+    getTerrainAt(...tile.split("_").map(Number)) === "water");
+  a.waterState = { gx: a.gx, gy: a.gy, allWater };
+  return allWater;
 }
 
 // Called whenever a critter's position changes: switch between swimming and land poses
@@ -1293,18 +1307,31 @@ function findCollidingPairs(creatures) {
 
   const tileMap = new Map();  // key: tile "x_y", value: critter indexes
   const potentialPairs = new Set();  // store "i|j" where i < j
+  // terrain of each tile looked at this call, so each is computed once
+  const terrainByTile = new Map();
 
   for (let i = 0; i < creatures.length; i++) {
     const creature = creatures[i];
     // TODO: individual-specific bounding boxes, ideally rectangular rather than square
-    
+
     // tiles is array of strings in x_y format
     const tiles = getOccupiedTiles(creature.nextGX, creature.nextGY);
+    // Whether every tile under the creature's next position is water. Recorded here,
+    // where occupancy and terrain are already worked out, for the swim check
+    // (isInWater) once the creature actually moves there.
+    let allWater = true;
 
     for (const tile of tiles) {
-      if (!tileMap.has(tile)) {
+      let terrain = terrainByTile.get(tile);
+      if (terrain === undefined) {
         const [tileX, tileY] = tile.split("_").map(Number);
-        if (isImpassable(getTerrainAt(tileX, tileY))) {
+        terrain = getTerrainAt(tileX, tileY);
+        terrainByTile.set(tile, terrain);
+      }
+      if (terrain !== "water") allWater = false;
+
+      if (!tileMap.has(tile)) {
+        if (isImpassable(terrain)) {
           potentialPairs.add(`-1|${i}`);
         } else {
           tileMap.set(tile, [i]);
@@ -1317,6 +1344,7 @@ function findCollidingPairs(creatures) {
         tileMap.get(tile).push(i);
       }
     }
+    creature.nextAllWater = allWater;
   }
 
   // Now check actual bounding box overlap
