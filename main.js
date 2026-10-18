@@ -1274,7 +1274,8 @@ function updateCritterAction(a) {
   if (Math.random() < 0.1) { setCritterIdle(a); return; }
 
   const dir = Math.floor(Math.random() * 4) * 2;
-  setCritterMoving(a, dir);
+  // any gait; setCritterMoving downgrades it if wind/stamina (or water) don't allow it
+  setCritterMoving(a, dir, sample(["walk", "trot", "gallop"]));
 }
 
 const critterBoxRad = 0.4;
