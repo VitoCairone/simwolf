@@ -24,8 +24,8 @@ async function main(browser, r) {
   }));
 
   // each ring gives its pose
-  for (const [f, pose] of [[0.05, "idle"], [0.3, "walk"], [0.6, "trot"], [0.9, "sprint"]]) {
-    await p.evaluate(() => { pcWolf.fatigue = 0; });
+  for (const [f, pose] of [[0.05, "idle"], [0.3, "walk"], [0.6, "trot"], [0.9, "gallop"]]) {
+    await p.evaluate(() => { pcWolf.wind = 1; pcWolf.stamina = 1; });
     await p.mouse.move(pad.x + f * pad.R, pad.y, { steps: 2 });
     const s = await state();
     r.check(s.pose === pose && s.inPad && s.knob && s.active.join() === pose,
@@ -87,7 +87,7 @@ async function main(browser, r) {
   r.check(w[0] === "walk" && w[1], "wolf mode, outside the pad: ArrowUp walks the wolf straight up on screen (grid NW)");
   await p.mouse.move(pad.x, pad.y + 0.9 * pad.R, { steps: 4 }); await p.waitForTimeout(300);
   w = await p.evaluate(() => [pcWolf.pose, pcWolf.currentDirection === DIR_SE]);
-  r.check(w[0] === "sprint" && w[1], "wolf mode, inside the pad with ArrowUp held: the pad wins");
+  r.check(w[0] === "gallop" && w[1], "wolf mode, inside the pad with ArrowUp held: the pad wins");
   await p.mouse.move(pad.x, pad.y, { steps: 3 }); await p.waitForTimeout(200);
   r.check(await p.evaluate(() => pcWolf.pose === "idle"), "pad center with ArrowUp held: the wolf stops");
   await p.keyboard.up("ArrowUp");

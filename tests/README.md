@@ -31,12 +31,12 @@ Set `CHROMIUM_PATH` to use a specific Chromium build instead of Playwright's.
 
 | File | Checks |
 | --- | --- |
-| `bugfixes.test.js` | First-round fixes: spawning at tile centers, no overlapping spawns, idle deer can be killed, dying deer stay dead, death animation timing and corpse frame, fatigue recovery and floor, sprite z-index. Ends with a 10 s soak run. |
+| `bugfixes.test.js` | First-round fixes: spawning at tile centers, no overlapping spawns, idle deer can be killed, dying deer stay dead, death animation timing and corpse frame, wind/stamina refill at rest and capped at full, sprite z-index. Ends with a 10 s soak run. |
 | `arrowkeys.test.js` | Wolf mode: each arrow key and two-key diagonal moves the wolf in that screen direction; opposite keys cancel; releasing stops; camera mode still pans. |
 | `movepad.test.js` | Movement pad rings, direction, leaving the pad, camera mode vs wolf mode for the arrow keys, pad fixed under zoom. |
 | `gameloop.test.js` | Same game speed at 30/60/120/144 Hz, pause is immediate, step = one tick, rapid pause/unpause never starts a second loop, long stalls are capped. |
 | `movement.test.js` | No critter stays frozen for 50 game-seconds across 10 loads (spawn/collision deadlocks). Prints details for any frozen critter. |
-| `swim.test.js` | Water is passable: wolf and deer enter water and swim (own sheets, 5 / 8 km/h, fatigue-neutral), tread water when stopped, resume their land pose on shore. Saves screenshots to `output/swim/`. |
+| `swim.test.js` | Water is passable: wolf and deer enter water and swim (own sheets, 5 / 8 km/h, no effect on wind or stamina), tread water when stopped, resume their land pose on shore. Saves screenshots to `output/swim/`. |
 | `facings.test.js` | Wolf sprite row and mirroring for all 8 directions, walking and idle. Saves screenshots to `output/facings/`. |
 
 `output/` holds generated screenshots and is git-ignored.
@@ -48,6 +48,6 @@ Each suite exports `{ name, main(browser, r) }`. Use `openGame(browser)` from
 and `r.check(condition, message)` to record a result. Call `pause()` first and
 then `tick()` to step the simulation deterministically.
 
-Critters can swim, so a test that expects land poses (walk, trot, sprint, idle)
+Critters can swim, so a test that expects land poses (walk, trot, gallop, idle)
 should first call `moveToOpenLand(page)` from `helpers.js`, which puts the wolf
 (or another critter) in the middle of open dry ground.

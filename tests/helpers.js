@@ -32,7 +32,7 @@ async function openGame(browser, { viewport, initScript, initArg } = {}) {
 
 // Moves a critter (default: the player's wolf) to the middle of open dry land, at least
 // `radius` tiles from any water, rock or bush, stops it, and centers the camera on it.
-// Use this before tests that expect land poses (walk/trot/sprint/idle): critters can
+// Use this before tests that expect land poses (walk/trot/gallop/idle): critters can
 // otherwise wander into water and swim. With clearOthers, every other critter is moved
 // off the map so nothing gets in the way.
 async function moveToOpenLand(page, { who = "pcWolf", radius = 6, clearOthers = false } = {}) {

@@ -89,28 +89,12 @@ if (!consoleOnlyMode) {
     a.element = el;
   }
 
-  // The fatigue meter spans 0 to the wolf's trot forceEnd: a full bar means even
-  // trotting is exhausted (walking is always possible).
-  const fatigueMeterMax = () => fatigueBySpeciesAndPose.wolf.trot.forceEnd;
-
-  animat.updateFatigueMeter = function() {
-    document.getElementById("fatigue-meter-fill").style.width =
-      `${Math.min(100 * pcWolf.fatigue / fatigueMeterMax(), 100)}%`;
+  // Wind (top) and stamina (bottom) bars for the player's wolf; full bar = full reserve.
+  animat.updateExertionMeter = function() {
+    document.getElementById("wind-meter-fill").style.width = `${100 * pcWolf.wind}%`;
+    document.getElementById("stamina-meter-fill").style.width = `${100 * pcWolf.stamina}%`;
   }
 
-  // Marks where each fast gait stops being available: past a mark, the wolf can't start
-  // that gait (it can keep one it is already in until fatigue reaches its forceEnd).
-  animat.addFatigueMarks = function() {
-    const meter = document.getElementById("fatigue-meter");
-    for (const gait of ["sprint", "trot"]) {
-      const pct = 100 * gaitFatigueLimit("wolf", gait) / fatigueMeterMax();
-      const mark = document.createElement("div");
-      mark.className = "fatigue-mark";
-      mark.style.left = `${pct}%`;
-      mark.dataset.gait = gait; // for debugging/tests only; nothing is displayed
-      meter.appendChild(mark);
-    }
-  }
 
   // Sprite row (and horizontal mirroring) for each grid direction, indexed by DIR_*:
   //            E(↘) SE(↓) S(↙) SW(←) W(↖) NW(↑) N(↗) NE(→)
@@ -201,7 +185,6 @@ if (!consoleOnlyMode) {
 
   // on-load
   animat.updateZoomButtons();
-  animat.addFatigueMarks();
 }
 
 

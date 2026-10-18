@@ -4,7 +4,7 @@
 //  3 an idle (standing) deer can be killed
 //  4 a dying deer can't come back to life
 //  5 death animation timing and corpse frame
-//  6 fatigue recovers while idle and never goes below 0
+//  6 resting recovers: wind and stamina refill while idle and stay within 0..1
 //  7 sprite z-index is a valid integer that tracks position
 
 const { openGame, moveToOpenLand, runStandalone } = require("./helpers");
@@ -58,7 +58,7 @@ async function main(browser, r) {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
     });
     w.gx = t[0] + 0.5; w.gy = t[1] + 0.5; d.gx = t[0] + 1.6; d.gy = t[1] + 0.5;
-    setCritterIdle(d); d.redecideCd = 1e9; w.redecideCd = 1e9; w.fatigue = 0;
+    setCritterIdle(d); d.redecideCd = 1e9; w.redecideCd = 1e9; w.wind = 1; w.stamina = 1;
     setCritterMoving(w, DIR_E, "walk");
     let diedAt = null; const poses = [], bgs = [];
     for (let n = 0; n < 120; n++) {
@@ -86,20 +86,22 @@ async function main(browser, r) {
   r.check(k.corpseX === k.expectedCorpseX,
     `bug 5: corpse shows the frame set by deer.dead.colZero (x ${k.corpseX}px, expected ${k.expectedCorpseX}px)`);
 
-  // 6: fatigue (on dry land: swimming is fatigue-neutral)
+  // 6: resting recovers (on dry land: swimming changes neither reserve)
   await moveToOpenLand(page);
   const f = await page.evaluate(() => {
     const w = pcWolf;
-    w.fatigue = 15000; w.pose = "walk"; setCritterIdle(w);
+    w.wind = 0; w.stamina = 0.5; w.pose = "walk"; setCritterIdle(w);
     for (let n = 0; n < 600; n++) tick(); // 10 s idle
-    const afterIdle = w.fatigue;
-    w.fatigue = 0.1;
+    const after = { wind: w.wind, stamina: w.stamina };
+    w.wind = 1; w.stamina = 1;
     for (let n = 0; n < 600; n++) tick();
-    return { afterIdle, floor: w.fatigue };
+    return { after, capped: [w.wind, w.stamina],
+      expectWind: 1 - Math.pow(0.5, 10 / windRefillHalfLifeSByPose.idle),
+      expectStamina: 0.5 + 10 / staminaFullRefillSByPose.idle };
   });
-  r.check(Math.abs(f.afterIdle - 14990) < 0.5,
-    `bug 6: 10 s idle recovers 10 fatigue (15000 -> ${f.afterIdle.toFixed(2)})`);
-  r.check(f.floor === 0, `bug 6: fatigue floors at 0 (got ${f.floor})`);
+  r.check(Math.abs(f.after.wind - f.expectWind) < 1e-6 && Math.abs(f.after.stamina - f.expectStamina) < 1e-6,
+    `bug 6: 10 s idle refills wind 0 -> ${f.after.wind.toFixed(3)} and stamina 0.5 -> ${f.after.stamina.toFixed(5)}`);
+  r.check(f.capped[0] === 1 && f.capped[1] === 1, `bug 6: reserves never exceed full (got ${f.capped})`);
 
   r.noProblems(page);
   await page.close();

@@ -109,7 +109,7 @@ const frameDataBySpeciesAndPose = {
       holdTks: 12, topToShadow: 39 },
     trot: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 }, // placeholder
-    sprint: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
+    gallop: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 }, // placeholder
     // swim sheet is made from the run frames, same 7 facing rows.
     // topToShadow is raised so swimmers never appear to sit on land in front of them.
@@ -132,7 +132,7 @@ const frameDataBySpeciesAndPose = {
       holdTks: 12, topToShadow: 33},
     trot: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33},
-    sprint: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
+    gallop: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33}, // placeholder
     // swim frames are 40x48 (wider/taller than land frames to fit the ripple ring).
     // topToShadow raised for the same reason as the wolf's swim (see there).
@@ -273,7 +273,8 @@ function initCritter(a, species, isNewborn = false) {
   a.isMale = Math.random() < 0.5;
 
   a.speed = 0;
-  a.fatigue = 0;
+  a.wind = 1;    // burst reserve, 0..1 (see EXERTION)
+  a.stamina = 1; // endurance reserve, 0..1
 
   animat?.addCritter(a);
   randomlyPlaceCritter(a);
@@ -586,10 +587,9 @@ function updateAllCritters() {
   setPresentOthersIneffMethod();
 
   allCritters.forEach(a => {
-    // Fatigue applies every tick for every critter's current pose, including idle
-    // (recovery) and blocked movers. It used to be applied only after a successful
-    // move, so idle recovery never happened.
-    applyFatigue(a);
+    // Wind and stamina change every tick for every critter's current pose, including
+    // idle (recovery) and blocked movers.
+    applyExertion(a);
 
     // todo: combine this better with setPresentOthers() so that a wolf
     // which spots a deer or vice versa will respond on a predictable delay
@@ -626,20 +626,28 @@ function updateAllCritters() {
   moveAllTogether(allCritters, allCorpses);
 }
 
-function applyFatigue(a) {
-  const fatigueBySpecies = fatigueBySpeciesAndPose[a.species];
-  if (!fatigueBySpecies.hasOwnProperty(a.pose)) return;
-  const fatigueData = fatigueBySpecies[a.pose];
-  // never bank "negative fatigue" while resting
-  a.fatigue = Math.max(0, a.fatigue + fatigueData.dps * tempo);
-  if (a.fatigue >= fatigueData.forceEnd) {
-    if (fatigueData.downTo === "idle") {
-      setCritterIdle(a);
-    } else {
-      setCritterMoving(a, a.currentDirection, fatigueData.downTo);
-    }
+function applyExertion(a) {
+  const ex = exertionBySpecies[a.species];
+  const dt = tempo; // game seconds per tick
+  if (a.pose === "gallop") {
+    a.wind = Math.max(0, a.wind - dt / ex.gallopFullWindS);
+    a.stamina = Math.max(0, a.stamina - gallopStaminaCostFactor * dt / ex.trotFullStaminaS);
+  } else if (a.pose === "trot") {
+    a.stamina = Math.max(0, a.stamina - dt / ex.trotFullStaminaS);
   }
-  if (a === pcWolf && g_tick % 6 === 0) animat?.updateFatigueMeter();
+  const windHalfLifeS = windRefillHalfLifeSByPose[a.pose];
+  if (windHalfLifeS) a.wind += (1 - a.wind) * (1 - Math.pow(0.5, dt / windHalfLifeS));
+  const staminaRefillS = staminaFullRefillSByPose[a.pose];
+  if (staminaRefillS) a.stamina = Math.min(1, a.stamina + dt / staminaRefillS);
+
+  // out of a reserve: drop to the next gait down (trot falls through to walk if
+  // stamina is too low to start it)
+  if (a.pose === "gallop" && (a.wind <= 0 || a.stamina <= 0)) {
+    setCritterMoving(a, a.currentDirection, "trot");
+  } else if (a.pose === "trot" && a.stamina <= 0) {
+    setCritterMoving(a, a.currentDirection, "walk");
+  }
+  if (a === pcWolf && g_tick % 6 === 0) animat?.updateExertionMeter();
 }
 
 function moveAllTogether(movers, statics = []) {
@@ -908,9 +916,9 @@ function setCritterIdle(a) {
 // SWIMMING
 // Water is passable. A critter is in water only when ALL the tiles it occupies are water
 // (any land under it means it's on land); then it is always in the "swim" pose, at its
-// species' single swim speed (or 0 when treading water). Swimming is fatigue-neutral:
-// "swim" has no fatigueBySpeciesAndPose entry, so applyFatigue skips it.
-// landPose remembers the land pose that was asked for (walk/run/sprint/idle), so a
+// species' single swim speed (or 0 when treading water). Swimming changes neither wind
+// nor stamina (see EXERTION).
+// landPose remembers the land pose that was asked for (walk/trot/gallop/idle), so a
 // critter climbing out of the water resumes it.
 
 // a.waterState caches the answer for the position it was computed at. In normal play it
@@ -1011,13 +1019,13 @@ function endReturnToLand(a) {
 }
 
 const wolfAudibleToDeerL2ByTerrainAndSpeed = {
-  grass:   { walk: sqr(3),  trot: sqr(11), sprint: sqr(30) },
-  dirt:    { walk: sqr(4),  trot: sqr(15), sprint: sqr(40) },
-  leaves:  { walk: sqr(6),  trot: sqr(22), sprint: sqr(60) },
-  rock:    { walk: sqr(8),  trot: sqr(30), sprint: sqr(80) },
-  gravel:  { walk: sqr(9),  trot: sqr(37), sprint: sqr(95) },
-  water:   { walk: sqr(9),  trot: sqr(37), sprint: sqr(95), swim: sqr(12) }, // placeholder
-  bush:    { walk: sqr(3),  trot: sqr(11), sprint: sqr(30) }, // placeholder
+  grass:   { walk: sqr(3),  trot: sqr(11), gallop: sqr(30) },
+  dirt:    { walk: sqr(4),  trot: sqr(15), gallop: sqr(40) },
+  leaves:  { walk: sqr(6),  trot: sqr(22), gallop: sqr(60) },
+  rock:    { walk: sqr(8),  trot: sqr(30), gallop: sqr(80) },
+  gravel:  { walk: sqr(9),  trot: sqr(37), gallop: sqr(95) },
+  water:   { walk: sqr(9),  trot: sqr(37), gallop: sqr(95), swim: sqr(12) }, // placeholder
+  bush:    { walk: sqr(3),  trot: sqr(11), gallop: sqr(30) }, // placeholder
 };
 
 function vecTo(a, b) { return [b[0] - a[0], b[1] - a[1]]; }
@@ -1057,55 +1065,63 @@ function canHear(a, b) {
 const kphToTpTk = 0.277777 * tempo; // kilometers-per-hour to tiles-per-tick
 const travelSpeedBySpeciesAndPose = {
   "wolf": {
-    "walk": 6 * kphToTpTk, // all day
-    "trot": 10 * kphToTpTk, // 8 hours
-    "sprint": 55 * kphToTpTk, // a few seconds only
+    "walk": 5 * kphToTpTk,    // all day (estimate; no direct figure found)
+    "trot": 9 * kphToTpTk,    // the travel gait, kept up for hours (8-9 km/h, Mech & Boitani)
+    "gallop": 55 * kphToTpTk, // chasing prey: 50-64 km/h for 1-8 km, a few minutes
     "swim": 5 * kphToTpTk, // grey wolf, ~3 mph; reported figures are sparse
     "idle": 0,
     "death": 0
   },
   "deer": { 
-    "walk": 6 * kphToTpTk, // all day 
-    "trot": 45 * kphToTpTk, // 2 minutes (originally deerGallopSpeed)
-    "sprint": 65 * kphToTpTk, // a few seconds only; 0.3 tiles/tick
+    "walk": 5 * kphToTpTk,    // all day
+    "trot": 15 * kphToTpTk,   // sustained escape for hours (estimate from elk "dogtrot")
+    "gallop": 65 * kphToTpTk, // escape burst of about 1 km (top reported 72 km/h)
     "swim": 8 * kphToTpTk, // red deer, ~5 mph; deer outswim wolves
     "idle": 0,
     "death": 0
   }
 }
 
-// FUTURE: consider tracking hiPowFatigue and loPowFatigue distinctly
-const fatigueBySpeciesAndPose = {
-  "wolf": {
-    "idle": { forceEnd: Infinity, dps: -1, downTo: "idle" },
-    "walk": { forceEnd: 60000, dps: -0.25, downTo: "idle" },
-    "trot": { forceEnd: 30000, dps: 1, downTo: "walk" }, // ~8 hours
-    "sprint": { forceEnd: 15000, dps: 1500, downTo: "trot" } // 10 seconds
+// EXERTION
+// Each critter has two reserves, each from 0 (empty) to 1 (full):
+//   wind    - the burst reserve, which limits galloping. It drains while galloping and
+//             refills whenever the critter isn't galloping: quickly at first, then more
+//             slowly (exponentially), faster the more restful the gait.
+//   stamina - the endurance reserve, which limits trotting. It drains slowly while
+//             trotting (and faster while galloping) and refills slowly while idle or
+//             walking. In a realtime session it hardly moves; it matters at longer
+//             timescales (consoleOnlyMode, or a larger tempo).
+// Swimming changes neither reserve (no drowning yet). A gait can only be STARTED with
+// some reserve in hand (windStartFrac / staminaStartFrac), so critters don't flicker in
+// and out of it near empty; once in it, they keep going until the reserve runs out.
+const exertionBySpecies = {
+  wolf: {
+    gallopFullWindS: 240,     // gallop from full wind: 4 minutes (chases of several km)
+    trotFullStaminaS: 30000,  // trot from full stamina: ~8.3 hours (the travel gait)
   },
-  "deer": {
-    "idle": { forceEnd: Infinity, dps: -1, downTo: "idle" },
-    "walk": { forceEnd: 60000, dps: -0.25, downTo: "idle" },
-    "trot": { forceEnd: 30000, dps: 250, downTo: "walk" }, // 2 minutes
-    "sprint": { forceEnd: 15000, dps: 1500, downTo: "trot" } // 10 seconds
-  }
-}
-
-
-// FAST GAITS (trot, sprint)
-// A gait can only be STARTED while fatigue is at most gaitStartFatigueFrac of that
-// gait's forceEnd; once in it, the critter keeps going until fatigue reaches forceEnd,
-// when applyFatigue drops it to the gait's downTo. The fatigue meter marks the start
-// limits (animat.updateFatigueMeter), so it uses gaitFatigueLimit too.
-const gaitStartFatigueFrac = 0.7;
-
-function gaitFatigueLimit(species, gait, isAlready = false) {
-  return fatigueBySpeciesAndPose[species][gait].forceEnd * (isAlready ? 1 : gaitStartFatigueFrac);
-}
+  deer: {
+    gallopFullWindS: 60,      // gallop from full wind: 1 minute (a burst of about 1 km)
+    trotFullStaminaS: 10800,  // trot from full stamina: 3 hours (elk "dogtrot")
+  },
+};
+// Wind refill: half of the missing wind comes back every this many seconds, by pose.
+// Poses not listed (gallop, swim, death, dead) don't refill wind.
+const windRefillHalfLifeSByPose = { idle: 45, walk: 60, trot: 180 };
+// Stamina refill: seconds to go from empty to full, by pose (others don't refill it).
+const staminaFullRefillSByPose = { idle: 30000, walk: 120000 }; // ~8.3 h idle, ~33 h walking
+const gallopStaminaCostFactor = 2; // galloping uses stamina twice as fast as trotting
+const windStartFrac = 0.25;        // wind needed to START a gallop
+const staminaStartFrac = 0.1;      // stamina needed to START a trot or gallop
 
 // TODO: consider rolling canUseGait into _can()
 function canUseGait(a, gait, isAlready = false) {
   if (!_can(a, 'run')) return false; // age check: old enough to run at all
-  return a.fatigue <= gaitFatigueLimit(a.species, gait, isAlready);
+  if (gait === "gallop") {
+    return isAlready ? (a.wind > 0 && a.stamina > 0)
+                     : (a.wind >= windStartFrac && a.stamina >= staminaStartFrac);
+  }
+  if (gait === "trot") return isAlready ? a.stamina > 0 : a.stamina >= staminaStartFrac;
+  return true;
 }
 
 function setCritterMoving(a, dir, newPose = "walk") {
@@ -1119,7 +1135,7 @@ function setCritterMoving(a, dir, newPose = "walk") {
     a.landPose = newPose;
     newPose = "swim";
   } else {
-    if (newPose === "sprint" && !canUseGait(a, "sprint", a.pose === "sprint"))
+    if (newPose === "gallop" && !canUseGait(a, "gallop", a.pose === "gallop"))
       newPose = "trot";
     if (newPose === "trot" && !canUseGait(a, "trot", a.pose === "trot"))
       newPose = "walk";

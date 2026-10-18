@@ -1,5 +1,5 @@
 // Swimming: water is passable, critters switch to the swim pose (own sprite sheet,
-// one speed per species, fatigue-neutral) in water and back to land poses on shore.
+// one speed per species, no effect on wind or stamina) in water and back to land poses on shore.
 
 const path = require("path");
 const { openGame, runStandalone, ensureOutputDir } = require("./helpers");
@@ -31,26 +31,26 @@ async function main(browser, r) {
   // 1. a wolf walks east off the shore into the water and swims
   const w1 = await p.evaluate(([i, j]) => {
     const w = pcWolf;
-    w.gx = w.nextGX = i - 1 + 0.5; w.gy = w.nextGY = j + 0.5; w.fatigue = 5000;
+    w.gx = w.nextGX = i - 1 + 0.5; w.gy = w.nextGY = j + 0.5; w.wind = 0.4; w.stamina = 0.7;
     setCritterIdle(w); w.redecideCd = 1e9;
     setCritterMoving(w, DIR_E, "walk");
     let enteredAt = null;
     for (let n = 0; n < 600 && enteredAt === null; n++) { tick(); if (w.pose === "swim") enteredAt = n; }
-    const startGX = w.gx, fatigueAtEntry = w.fatigue;
+    const startGX = w.gx, reservesAtEntry = [w.wind, w.stamina];
     for (let n = 0; n < 120; n++) tick(); // 2 s of swimming
     const tilesPerS = (w.gx - startGX) / (120 * tempo);
     const el = w.element;
     return {
       enteredAt, inWater: isInWater(w), pose: w.pose, kmh: tilesPerS * 3.6,
-      fatigueAtEntry, fatigue: w.fatigue, cls: el.className,
+      reservesAtEntry, reserves: [w.wind, w.stamina], cls: el.className,
       sheet: getComputedStyle(el).backgroundImage, size: [getComputedStyle(el).width, getComputedStyle(el).height],
     };
   }, setup.shore);
   r.check(w1.enteredAt !== null && w1.inWater && w1.pose === "swim",
     `wolf walks into water and swims (pose ${w1.pose}, entered after ${w1.enteredAt} ticks)`);
   r.check(Math.abs(w1.kmh - 5) < 0.1, `wolf swims at ${w1.kmh.toFixed(2)} km/h (expected 5)`);
-  r.check(w1.fatigue === w1.fatigueAtEntry,
-    `swimming is fatigue-neutral (fatigue ${w1.fatigueAtEntry.toFixed(2)} on entering, ${w1.fatigue.toFixed(2)} after 2 s)`);
+  r.check(w1.reserves.join() === w1.reservesAtEntry.join(),
+    `swimming changes neither wind nor stamina (${w1.reservesAtEntry.map(v => v.toFixed(4))} on entering, ${w1.reserves.map(v => v.toFixed(4))} after 2 s)`);
   r.check(w1.cls === "critter wolf-swim" && w1.sheet.includes("wolf-swim.png") && w1.size.join() === "64px,64px",
     `wolf uses its swim sheet (class "${w1.cls}", ${w1.size.join(" x ")})`);
 
@@ -67,23 +67,23 @@ async function main(browser, r) {
   const tread = await p.evaluate(() => { setCritterIdle(pcWolf); tick(); return [pcWolf.pose, pcWolf.speed]; });
   r.check(tread[0] === "swim" && tread[1] === 0, `stopping in water treads water (pose ${tread[0]}, speed ${tread[1]})`);
 
-  // 3. asking to sprint in water still swims at swim speed
+  // 3. asking to gallop in water still swims at swim speed
   const spr = await p.evaluate(() => {
-    setCritterMoving(pcWolf, DIR_W, "sprint");
+    setCritterMoving(pcWolf, DIR_W, "gallop");
     return [pcWolf.pose, pcWolf.speed === travelSpeedBySpeciesAndPose.wolf.swim, pcWolf.landPose];
   });
-  r.check(spr[0] === "swim" && spr[1], `sprint request in water = swim at swim speed (pose ${spr[0]})`);
+  r.check(spr[0] === "swim" && spr[1], `gallop request in water = swim at swim speed (pose ${spr[0]})`);
 
   // 4. swimming back west onto land resumes the requested land pose and the land sheet
   const back = await p.evaluate(() => {
-    pcWolf.fatigue = 0;
+    pcWolf.wind = 1; pcWolf.stamina = 1;
     for (let n = 0; n < 1200 && isInWater(pcWolf); n++) tick();
     tick();
     const el = pcWolf.element;
     return { inWater: isInWater(pcWolf), pose: pcWolf.pose, cls: el.className,
       sheet: getComputedStyle(el).backgroundImage };
   });
-  r.check(!back.inWater && back.pose === "sprint" && back.cls === "critter wolf" && back.sheet.includes("wolf-run-stand.png"),
+  r.check(!back.inWater && back.pose === "gallop" && back.cls === "critter wolf" && back.sheet.includes("wolf-run-stand.png"),
     `climbing out resumes the requested land pose (${back.pose}) and the land sheet (class "${back.cls}")`);
 
   // 5. a deer swims too, with its own sheet and 40x48 frames, at its own speed

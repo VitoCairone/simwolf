@@ -47,30 +47,20 @@
       justify-content: center;
       padding: 10px;
     }
-    #fatigue-meter {
-      position: relative;
-      height: 10px;
+    /* Exertion meters for the player's wolf: the wind bar (burst reserve, limits
+       galloping) sits directly on top of the stamina bar (endurance reserve, limits
+       trotting). Full bar = full reserve. No labels: no words or numbers in gameplay UI. */
+    .exertion-meter {
+      height: 6px;
       width: 100%;
       background-color: darkslategrey;
     }
-    /* Marks on the fatigue meter: past a mark, that gait can no longer be started.
-       Placed by animat.addFatigueMarks from the same limits the movement code uses.
-       Same height as the meter; dark edges left and right only, so they show on both
-       the empty and the filled part. No labels: no words or numbers in gameplay UI. */
-    .fatigue-mark {
-      position: absolute;
-      top: 0;
-      bottom: 0;
-      width: 2px;
-      margin-left: -1px;
-      background-color: #fff;
-      box-shadow: -1px 0 0 #000, 1px 0 0 #000;
+    .exertion-meter-fill {
+      height: 100%;
+      width: 100%;
     }
-    #fatigue-meter-fill {
-      height: 90%;
-      width: 0%;
-      background-color: yellow;
-    }
+    #wind-meter-fill { background-color: #7fe6ff; }
+    #stamina-meter-fill { background-color: yellow; }
     #field-wrapper {
       flex: 1;
       position: relative;
@@ -220,8 +210,9 @@
 
       </div>
 
-      <div id="fatigue-meter">
-        <div id="fatigue-meter-fill"></div>
+      <div id="exertion-meters">
+        <div class="exertion-meter"><div id="wind-meter-fill" class="exertion-meter-fill"></div></div>
+        <div class="exertion-meter"><div id="stamina-meter-fill" class="exertion-meter-fill"></div></div>
       </div>
 
       <div id="cursor-coords" style="margin-top: auto; font-size: 12px; color: #aaa;">
@@ -236,12 +227,12 @@
           <div id="dbel-pc-wolf"></div>
         </div>
       </div>
-      <!-- Movement pad. Rings (outer to inner): sprint, run, walk, deadzone (stop).
+      <!-- Movement pad. Rings (outer to inner): gallop, trot, walk, deadzone (stop).
            Radii are in a 100-unit viewBox and are read by main.js, so the drawing is the
            single source of truth for the ring sizes. -->
       <div id="move-pad" aria-label="Movement pad">
         <svg viewBox="-100 -100 200 200" xmlns="http://www.w3.org/2000/svg">
-          <circle class="ring" data-pose="sprint" r="100" />
+          <circle class="ring" data-pose="gallop" r="100" />
           <circle class="ring" data-pose="trot" r="72" />
           <circle class="ring" data-pose="walk" r="44" />
           <circle class="ring deadzone" data-pose="idle" r="15" />
