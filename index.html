@@ -89,7 +89,7 @@
     }
     /* Critter sprites: every critter element has .critter plus ONE sprite-sheet class.
        Each sheet class sets that sheet's image and frame size. A pose's `sheet` in
-       frameDataBySpeciesAndPose (main.js) names its class; frameW/frameH there must
+       frameDataBySpeciesAndPose (animat.js) names its class; frameW/frameH there must
        match the width/height here. */
     .critter {
       position: absolute;
@@ -230,7 +230,7 @@
         </div>
       </div>
       <!-- Movement pad. Rings (outer to inner): gallop, trot, walk, deadzone (stop).
-           Radii are in a 100-unit viewBox and are read by main.js, so the drawing is the
+           Radii are in a 100-unit viewBox and are read by controls.js, so the drawing is the
            single source of truth for the ring sizes. -->
       <div id="move-pad" aria-label="Movement pad">
         <svg viewBox="-100 -100 200 200" xmlns="http://www.w3.org/2000/svg">
@@ -244,7 +244,22 @@
     </div>
   </div>
 
-  <script src="main.js"></script>
+  <!-- The game is three parts, each defining ONE global object with an explicit interface:
+         sim       the world and its rules (sim.js; never touches the page)
+         animat    draws the world (animat.js; only reads sim)
+         controls  the player's input, turned into intents for sim and animat (controls.js)
+       They are connected here and nowhere else. For a console-only run with nothing drawn,
+       load just sim.js and run: sim.init(); sim.start({ consoleOnly: true }); -->
+  <script src="sim.js"></script>
   <script src="animat.js"></script>
+  <script src="controls.js"></script>
+  <script>
+    window.addEventListener("load", () => {
+      sim.init();
+      animat.attach(sim);
+      controls.attach(sim, animat);
+      sim.start();
+    });
+  </script>
 </body>
 </html>

@@ -9,18 +9,18 @@ async function main(browser, r) {
   for (let k = 0; k < LOADS; k++) {
     const p = await openGame(browser);
     const [f, t, details] = await p.evaluate(() => {
-      pause();
-      const start = new Map(allCritters.map(a => [a, [a.gx, a.gy]]));
-      const idleTicks = new Map(allCritters.map(a => [a, 0]));
+      sim.pause();
+      const start = new Map(sim.allCritters.map(a => [a, [a.gx, a.gy]]));
+      const idleTicks = new Map(sim.allCritters.map(a => [a, 0]));
       for (let n = 0; n < 3000; n++) { // 50 s of game time
-        allCritters.forEach(a => { if (a.pose === "idle") idleTicks.set(a, idleTicks.get(a) + 1); });
-        tick();
+        sim.allCritters.forEach(a => { if (a.pose === "idle") idleTicks.set(a, idleTicks.get(a) + 1); });
+        sim.internals.tick();
       }
-      const stuck = [...start].filter(([a, [x, y]]) => allCritters.includes(a) && a.gx === x && a.gy === y);
+      const stuck = [...start].filter(([a, [x, y]]) => sim.allCritters.includes(a) && a.gx === x && a.gy === y);
       // Explain each frozen critter: how much of the time it chose to stand still, and
       // how big the patch of passable land it's on is (1 = an enclosed single tile).
-      const passable = (i, j) => i >= 0 && j >= 0 && i < gridWidthN && j < gridHeightN
-        && !isImpassable(getTerrainAt(i, j));
+      const passable = (i, j) => i >= 0 && j >= 0 && i < sim.gridWidthN && j < sim.gridHeightN
+        && !sim.internals.isImpassable(sim.getTerrainAt(i, j));
       const regionSize = (i0, j0, cap = 500) => {
         const seen = new Set([i0 + "_" + j0]); const q = [[i0, j0]];
         while (q.length && seen.size < cap) {
@@ -36,7 +36,7 @@ async function main(browser, r) {
         critter: `${a.species} #${a.uid}`, tile: [Math.floor(a.gx), Math.floor(a.gy)],
         idlePct: Math.round(100 * idleTicks.get(a) / 3000),
         landPatchTiles: regionSize(Math.floor(a.gx), Math.floor(a.gy)),
-        neighbours: allCritters.filter(b => b !== a && Math.hypot(b.gx - a.gx, b.gy - a.gy) < 1.5).length,
+        neighbours: sim.allCritters.filter(b => b !== a && Math.hypot(b.gx - a.gx, b.gy - a.gy) < 1.5).length,
       }));
       return [stuck.length, start.size, details];
     });

@@ -1,5 +1,7 @@
 // Shared helpers for the SimWolf browser tests.
 // Tests drive the real index.html in headless Chromium via Playwright.
+// In the page, the game is three objects: sim (the world; sim.internals has the rest of
+// its functions for tests), animat (the view) and controls (input).
 
 const path = require("path");
 const fs = require("fs");
@@ -26,7 +28,7 @@ async function openGame(browser, { viewport, initScript, initArg } = {}) {
   page.on("dialog", d => { page.problems.push("alert: " + d.message()); d.dismiss(); });
   if (initScript) await page.addInitScript(initScript, initArg);
   await page.goto(PAGE_URL);
-  await page.waitForTimeout(300); // let window.onload create critters and start the loop
+  await page.waitForTimeout(300); // let the page load create critters and start the loop
   return page;
 }
 
@@ -37,23 +39,22 @@ async function openGame(browser, { viewport, initScript, initArg } = {}) {
 // off the map so nothing gets in the way.
 async function moveToOpenLand(page, { who = "pcWolf", radius = 6, clearOthers = false } = {}) {
   return page.evaluate(({ who, radius, clearOthers }) => {
-    const a = who === "pcWolf" ? pcWolf : eval(who);
-    const dry = (i, j) => { const t = getTerrainAt(i, j); return t !== "water" && !isImpassable(t); };
-    const tile = allLandTiles.find(([i, j]) => {
-      if (i < radius || j < radius || i >= gridWidthN - radius || j >= gridHeightN - radius) return false;
+    const a = who === "pcWolf" ? sim.pcWolf : eval(who);
+    const dry = (i, j) => { const t = sim.getTerrainAt(i, j); return t !== "water" && !sim.internals.isImpassable(t); };
+    const tile = sim.internals.allLandTiles.find(([i, j]) => {
+      if (i < radius || j < radius || i >= sim.gridWidthN - radius || j >= sim.gridHeightN - radius) return false;
       for (let di = -radius; di <= radius; di++)
         for (let dj = -radius; dj <= radius; dj++) if (!dry(i + di, j + dj)) return false;
       return true;
     });
     if (!tile) return null;
-    if (clearOthers) allCritters.filter(c => c !== a).forEach(c => {
+    if (clearOthers) sim.allCritters.filter(c => c !== a).forEach(c => {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
-      animat.placeCritterSprite(c);
     });
     a.gx = a.nextGX = tile[0] + 0.5; a.gy = a.nextGY = tile[1] + 0.5;
-    setCritterIdle(a);
-    animat.placeCritterSprite(a);
-    if (a === pcWolf) animat.setCameraToPCWolf();
+    sim.internals.setCritterIdle(a);
+    if (a === sim.pcWolf) animat.followWolf();
+    animat.render();
     return tile;
   }, { who, radius, clearOthers });
 }

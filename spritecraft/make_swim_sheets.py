@@ -10,7 +10,7 @@ Usage (from anywhere; needs Python 3 with Pillow and numpy):
     python3 spritecraft/make_swim_sheets.py --wolf-cut 14   # try a different waterline height
     python3 spritecraft/make_swim_sheets.py --out-dir /tmp  # write somewhere else to compare
 
-After generating, it checks the swim pose's `topToShadow` in main.js
+After generating, it checks the swim pose's `topToShadow` in animat.js
 (frameDataBySpeciesAndPose.<species>.swim). The swim frames keep the land frames' ground
 point, so it must equal the land poses' value (39 wolf, 33 deer): the frames themselves
 draw the waterline WATER_SINK_PX lower, on the water surface. Land tiles in front of a
@@ -230,9 +230,9 @@ def build(spec, cut, src_dir, out_path):
 
 
 def current_top_to_shadow(sheet_class):
-    """Read the swim pose's topToShadow for this sheet class from main.js, if found."""
+    """Read the swim pose's topToShadow for this sheet class from animat.js, if found."""
     try:
-        src = (PROJECT / "main.js").read_text()
+        src = (PROJECT / "animat.js").read_text()
     except OSError:
         return None
     m = re.search(r'sheet:\s*"' + re.escape(sheet_class) + r'".*?topToShadow:\s*(\d+)', src, re.S)
@@ -259,9 +259,9 @@ def main():
         build(spec, cut, args.src_dir, out_path)
         need = spec["ground"][1]   # same as the land poses: frames keep the ground point
         have = current_top_to_shadow(spec["sheet_class"])
-        status = ("matches main.js" if have == need else
-                  f"main.js has {have}: update it to {need}" if have is not None else
-                  "(not found in main.js)")
+        status = ("matches animat.js" if have == need else
+                  f"animat.js has {have}: update it to {need}" if have is not None else
+                  "(not found in animat.js)")
         print(f"{species}: wrote {out_path}  (waterline {cut}px)  "
               f"swim topToShadow needed: {need}  {status}")
 

@@ -1,8 +1,17 @@
-const zoomInBtn = document.getElementById("zoom-in");
-const zoomOutBtn = document.getElementById("zoom-out");
+// THE SIMULATION: the world, its critters and its rules, advanced one tick at a time.
+//
+// This file has no idea how (or whether) the world is drawn or controlled: it never
+// touches the DOM, and it runs as is without a browser (see tests/headless.test.js).
+// Everything it offers is on the one global it defines, `sim` (the interface at the end
+// of this file). Drawing is animat.js, which reads sim's state; input is controls.js,
+// which turns the player's input into intents for sim. Neither is required: without them
+// (consoleOnly) the world simply runs on its own as fast as it can.
+//
+// Positions are grid coordinates: tile (i, j) covers [i, i+1) x [j, j+1).
 
-let consoleOnlyMode = false;
-let animat = null;
+const sim = (() => {
+
+let consoleOnlyMode = false; // set by start(): run as fast as possible, log each tick
 let tempo = 1/60;
 // TODO: change speed convert so it responds when tempo is changed at runtime
 let g_tick = 0; // updates ONE PLACE ONLY in tick()
@@ -10,38 +19,16 @@ let g_now = 0; // also updates ONLY ONE PLACE in tick()
 // g_now is elapsed seconds; IFF tempo stays constant, g_now = g_tick * tempo
 let g_next_uid = 0;
 let isPaused = false;
-// #zoom is mostly working except for two issues:
-// (1) temporary artifacting when zooming out and then panning
-// (1) pan limits based on zoom = 1, cannot pan to edges at higher zooms
-let zoom = 1;
-const zoomMin = 1;
-const zoomMax = 8;
 
 // parameters
-const tileSize = 32;
-const tileRiserPY = 8;
-// Water tiles in tiles.png draw their surface this many px lower than land surfaces, so
-// water looks sunken. Anything in water is drawn on that lower surface: a point on it
-// appears this far below the same grid point on land (half a tile, diagonally).
-const waterSurfaceDropPY = 8;
-
 const gridWidthN = 128; //3533088 = c * 1/60 sec / root2
 const gridHeightN = 128;
-const deerFrameW = 32;
-const deerFrameH = 41;
 
 // derived constants, set once on startup
 const gCX = gridWidthN / 2;
 const gCY = gridHeightN / 2;
 const gRadL2 = gCX * gCX + gCY * gCY;
 const gRad = Math.sqrt(gRadL2);
-
-// Note that a tile which is SQUARE in grid space appears as a SQUASHED DIAMOND
-// in isometric, with the surface height pixels being 1/2 of the surface width pixels
-const halfTile = tileSize / 2;
-const qtrTile = tileSize / 4;
-const worldRadPX = halfTile + (gridWidthN + gridHeightN - 2) * qtrTile;
-const worldDiamPY = worldRadPX;
 
 // when source becomes multiple files, read this sort of fixed data from its own file
 const tileMap = [
@@ -62,88 +49,16 @@ const terrainTypes = [
   "dirt", "grass", "bush", "tallgrass", "flower", "rock", "stone", "water", "ice"
 ];
 
-const wolfIconSVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-  <!-- Face outline: top, left, right, bottom point -->
-  <path d="M6 6 H18 V18 L12 22 L6 18 Z" />
-  <!-- Ears: verticals -->
-  <line x1="7" y1="6" x2="7" y2="3" />
-  <line x1="17" y1="6" x2="17" y2="3" />
-  <!-- Ears: angled tops -->
-  <line x1="7" y1="3" x2="10" y2="6" />
-  <line x1="17" y1="3" x2="14" y2="6" />
-</svg>`;
-
-const cameraIconSVG = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-  <!-- Main camera body: rounded rectangle -->
-  <rect x="3" y="6" width="10" height="12" rx="2" ry="2" />
-  <!-- Right-facing lens hood / extension -->
-  <path d="M13 10 L17 7 V17 L13 14 Z" />
-</svg>`
-
 function sqr(x) { return x * x; }
-
-function boundVal(val, min, max) { return Math.max(min, Math.min(val, max)); }
-
-function isoProject(gx, gy) {
-  const px = (gx - gy) * halfTile;
-  const py = (gx + gy) * qtrTile;
-  return [px, py];
-}
-
-function rectiProject(px, py) {
-  const gx = (px / tileSize + py / halfTile);
-  const gy = (py / halfTile - px / tileSize);
-  return [gx, gy];
-}
 
 function sample(list) {
   return list.length ? list[Math.floor(Math.random() * list.length)] : null;
 }
 
-// TODO: consider if frame holds should be in time or in ticks,
-// for now assumone animat only runs when tempo == 1/60 and adjust
-// for main logic only
-// `sheet` names the sprite sheet's CSS class in index.html (.wolf, .wolf-swim, ...),
-// which sets the sheet image and frame size; frameW/frameH must match that class.
-const frameDataBySpeciesAndPose = {
-  wolf: {
-    walk: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
-      holdTks: 5, topToShadow: 39 },
-    idle: {sheet: "wolf", nFrames: 4, colZero: 8, frameW: 64, frameH: 64,
-      holdTks: 12, topToShadow: 39 },
-    trot: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
-      holdTks: 5, topToShadow: 39 }, // placeholder
-    gallop: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
-      holdTks: 5, topToShadow: 39 }, // placeholder
-    // swim sheet is made from the run frames, same 7 facing rows. Its frames already
-    // draw the waterline waterSurfaceDropPY below the ground point, so the same
-    // topToShadow as on land puts the swimmer on the (lower) water surface. Land tiles
-    // in front of a swimmer are drawn over it (see animat.spriteZIndex).
-    swim: {sheet: "wolf-swim", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
-      holdTks: 8, topToShadow: 39 },
-    // death: {nFrames: 2, colZero: 0, frameW: 64, frameH: 64,
-    //   holdTks: 3, repeatLimit: 3, exitToPose: 'dead' }
-  },
-  deer: { 
-    walk: {sheet: "deer", nFrames: 11, colZero: 0, frameW: 32, frameH: 41,
-      holdTks: 5, topToShadow: 33},
-    idle: {sheet: "deer", nFrames: 24, colZero: 11, frameW: 32, frameH: 41,
-      holdTks: 12, topToShadow: 33},
-    trot: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
-      holdTks: 12, topToShadow: 33},
-    gallop: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
-      holdTks: 12, topToShadow: 33}, // placeholder
-    // swim frames are 40x48 (wider/taller than land frames to fit the ripple ring).
-    // same topToShadow as the deer's land poses, as for the wolf's swim (see there)
-    swim: {sheet: "deer-swim", nFrames: 10, colZero: 0, frameW: 40, frameH: 48,
-      holdTks: 10, topToShadow: 33 },
-    // death: col 45 is a pale hit-flash, col 46 the same pose in full color
-    death: {sheet: "deer", nFrames: 2, colZero: 45, frameW: 32, frameH: 41,
-      holdTks: 15, topToShadow: 33},
-    dead: {sheet: "deer", nFrames: 1, colZero: 45, frameW: 32, frameH: 41,
-      holdTks: Infinity, topToShadow: 33},
-  }
-}
+// How long a dying critter is in the "death" pose before it becomes a corpse ("dead").
+// (animat times the death animation to play through exactly once in this time, and
+// checks that it does.)
+const deathDurationSBySpecies = { deer: 0.5 };
 
 const hourS = 60 * 60;
 const dayS = 24 * hourS;
@@ -196,18 +111,13 @@ function _can(a, capability) {
 //  }
 
 
-// TODO: revise this name and calling method for use of tempo ?
-function updateCritterFrame(a, rezero = false) {
-  // TODO: move frame into only Animat, World should not require concept of frame
-  // any exitToPose behavior should be handled with enqDelayed
-  a.animTimer = 0;
-  const frameData = frameDataBySpeciesAndPose[a.species][a.pose];
-  a.frame = rezero ? 0 : ( (a.frame + 1) % frameData.nFrames );
-  if (!rezero && a.frame === 0 && frameData.onceThenPose) {
-    a.pose = frameData.exitToPose
-    return updateCritterFrame(a, true);
-  }
-  animat?.updateCritterFrame(a, frameData);
+// Every change of a critter's pose goes through here. a.poseTick records the tick it
+// started, which is all a viewer needs to animate the pose (the simulation itself has no
+// notion of animation frames).
+function setPose(a, pose) {
+  if (a.pose === pose) return;
+  a.pose = pose;
+  a.poseTick = g_tick;
 }
 
 // Wolf setup
@@ -217,9 +127,6 @@ const pcWolf = wolves[0];
 
 const nDeer = 10;
 const deer = Array.from({length: nDeer}, () => ({}));
-
-let worldShiftPX = 0;
-let worldShiftPY = 0;
 
 const allLandTiles = [];
 
@@ -243,14 +150,9 @@ function randomlyPlaceCritter(a) {
   // position tile centered (on half-integer vals) for simple initial overlap check
   a.gx = randLandX + 0.5;
   a.gy = randLandY + 0.5;
-  a.animTimer = 0;
   a.redecideCd = 0; // Cd = Cooldown (ticks)
   a.currentDirection = Math.floor(Math.random() * 4) * 2;
-  a.frame = 0;
   setCritterIdle(a);
-
-  updateCritterFrame(a, true);
-  animat?.placeCritterSprite(a);
 }
 
 function randBetween(a, b) {
@@ -275,26 +177,13 @@ function initCritter(a, species, isNewborn = false) {
   a.wind = 1;    // burst reserve, 0..1 (see EXERTION)
   a.stamina = 1; // endurance reserve, 0..1
 
-  animat?.addCritter(a);
   randomlyPlaceCritter(a);
 
   return a;
 }
 
-// DOUBLECHECK if these are needed in main
-let viewportWidth = document.getElementById('field-wrapper').clientWidth;
-let viewportHeight = document.getElementById('field-wrapper').clientHeight;
-
-// rendering errors occur abruptly at x == 1677740
-// unknown why at this time
-// also observed at: [369092, 1404710] and other values which are 
-// close to 1500k in Y and 300k+ in X
-
 const allCritters = [];
 const allCorpses = [];
-
-const cameraSpeed = 50;
-const keysPressed = {};
 
 const ROOT2 = Math.sqrt(2);
 const INVROOT2 = 1 / ROOT2;
@@ -310,95 +199,41 @@ const moveVecByDir = [
   [ INVROOT2, -INVROOT2 ],
 ];
 
-const arrowKeyNames = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
-const arrowsToggle = document.getElementById('arrow-mode-toggle');
-const arrowsIcon = document.getElementById('arrow-mode-icon');
-arrowsIcon.innerHTML = cameraIconSVG;
+// THE PLAYER
+// The player's wolf (pcWolf) is driven by the player's intent when there is one, and by
+// its own decisions (like every other critter) when there isn't. How the intent is
+// produced (keys, the movement pad, a script) is not the simulation's business: it is
+// set with setPlayerIntent and applied at the start of every tick, so the world never
+// changes while paused.
+//   null                  no intent: the wolf decides for itself
+//   { gait: "idle" }      stand still (tread water, in water)
+//   { dir, gait }         move in grid direction dir (DIR_*) at gait walk/trot/gallop,
+//                         or the best gait wind and stamina allow
+let playerIntent = null;
+let playerIntentApplied = false; // whether the player was in control at the last tick
 
-let arrowsMoveWolf = false;
-let mouseInMovePad = false;
-// Camera tracks pcWolf unless the player has panned away with the arrow keys.
-// Re-attached by entering the movement pad or switching arrows to wolf mode.
-let cameraFollowsWolf = true;
-
-function handMovesWolf() {
-  return !consoleOnlyMode && (arrowsMoveWolf || mouseInMovePad);
+function setPlayerIntent(intent) {
+  playerIntent = intent || null;
 }
 
-arrowsToggle.addEventListener('click', () => {
-  arrowsMoveWolf = !arrowsMoveWolf;
-  arrowsIcon.innerHTML = arrowsMoveWolf ? wolfIconSVG : cameraIconSVG;
-  if (arrowsMoveWolf) {
-    cameraFollowsWolf = true;
-    animat?.setCameraToPCWolf();
-  }
-});
-
-// MOVEMENT PAD
-// Fixed on-screen joystick (see #move-pad in index.html). The pointer's offset from the
-// pad center gives the direction; which concentric ring it is in gives the pose/speed.
-// Ring radii are read from the SVG (viewBox radius 100) so drawing and logic can't drift.
-const movePadEl = document.getElementById("move-pad");
-const movePadRings = [...movePadEl.querySelectorAll(".ring")]
-  .map(c => ({ pose: c.dataset.pose, frac: Number(c.getAttribute("r")) / 100 }))
-  .sort((a, b) => a.frac - b.frac); // inner to outer
-
-function onMovePadPointer(e) {
-  if (consoleOnlyMode) return;
-  const rect = movePadEl.getBoundingClientRect();
-  const radPX = rect.width / 2;
-  // normalized vector from pad center; |v| = 1 at the outer ring
-  const vx = (e.clientX - (rect.left + radPX)) / radPX;
-  const vy = (e.clientY - (rect.top + rect.height / 2)) / radPX;
-  const ring = movePadRings.find(r => Math.hypot(vx, vy) <= r.frac);
-
-  // the pad element is square; its corners are outside the circles
-  if (!ring) return releaseMovePad();
-
-  if (!mouseInMovePad) {
-    mouseInMovePad = true;
-    cameraFollowsWolf = true;
-    animat?.setCameraToPCWolf();
-  }
-  animat?.updateMovePad(vx, vy, ring.pose);
-
-  if (ring.pose === "idle") return setCritterIdle(pcWolf);
-
-  setCritterMoving(pcWolf, screenDirToGridDir(getDir(vx, vy)), ring.pose);
+function playerHasControl() {
+  return playerIntent !== null;
 }
 
-function releaseMovePad() {
-  if (!mouseInMovePad) return;
-  mouseInMovePad = false;
-  animat?.updateMovePad(0, 0, null);
-  setCritterIdle(pcWolf);
-  // if the AI resumes control, let it wait a normal interval instead of instantly
-  // overriding the stop (redecideCd keeps counting down while hand-controlled)
-  pcWolf.redecideCd = Math.max(pcWolf.redecideCd, 120);
+function applyPlayerIntent() {
+  if (playerIntent) {
+    playerIntentApplied = true;
+    if (playerIntent.gait === "idle") setCritterIdle(pcWolf);
+    else setCritterMoving(pcWolf, playerIntent.dir, playerIntent.gait);
+  } else if (playerIntentApplied) {
+    // the player let go: stop, and let the wolf's own decisions resume after a normal
+    // interval instead of instantly overriding the stop (redecideCd keeps counting down
+    // while the player is in control)
+    playerIntentApplied = false;
+    setCritterIdle(pcWolf);
+    pcWolf.redecideCd = Math.max(pcWolf.redecideCd, 120);
+  }
 }
-
-movePadEl.addEventListener("pointerdown", onMovePadPointer);
-movePadEl.addEventListener("pointermove", onMovePadPointer);
-movePadEl.addEventListener("pointerleave", releaseMovePad);
-movePadEl.addEventListener("pointercancel", releaseMovePad);
-
-zoomInBtn.addEventListener("click", () => {
-  if (!animat) return;
-  if (zoom < zoomMax) {
-    zoom *= 2;
-    animat?.updateCamera();
-    animat?.updateZoomButtons();
-  }
-});
-
-zoomOutBtn.addEventListener("click", () => {
-  if (zoom > zoomMin) {
-    zoom /= 2;
-    animat?.clearAllRenderedTiles();
-    animat?.updateCamera();
-    animat?.updateZoomButtons();
-  }
-});
 
 function jag(x) {
   return 2 * Math.abs(x - Math.floor(x + 0.5));
@@ -440,10 +275,6 @@ function getTerrainAt(gx, gy) {
 
   if (unitVariant < 0.6) return "grass";
   if (unitVariant < 0.75) return "dirt";
-}
-
-function getTileClassAt(x, y) {
-  return getTerrainAt(x, y)
 }
 
 function getOnTileXY(a) {
@@ -597,11 +428,6 @@ function updateAllCritters() {
     if (a.redecideCd <= 0) updateCritterAction(a);
     if (a.returnToLand) steerToLand(a);
 
-    a.animTimer++;
-    let holdTks = frameDataBySpeciesAndPose[a.species][a.pose].holdTks;
-      
-    if (a.animTimer >= holdTks) updateCritterFrame(a);
-
     if (a.speed === 0) {
       a.nextGX = a.gx;
       a.nextGY = a.gy;
@@ -646,7 +472,6 @@ function applyExertion(a) {
   } else if (a.pose === "trot" && a.stamina <= 0) {
     setCritterMoving(a, a.currentDirection, "walk");
   }
-  if (a === pcWolf && g_tick % 6 === 0) animat?.updateExertionMeter();
 }
 
 function moveAllTogether(movers, statics = []) {
@@ -709,10 +534,6 @@ function moveAllTogether(movers, statics = []) {
       thing.waterState = { gx: thing.gx, gy: thing.gy, allWater: thing.nextAllWater };
       if (thing.returnToLand) thing.returnToLand.blockedTicks = 0;
       updateTerrainPose(thing); // swim <-> land pose when crossing a shoreline
-      if (thing === pcWolf && cameraFollowsWolf) {
-        animat?.setCameraToPCWolf();
-      }
-      animat?.placeCritterSprite(thing);
     }
   });
 }
@@ -728,14 +549,10 @@ function deleteCritter(critter, toCorpse = false) {
   if (idx === -1) return alert("arg object to deleteCritter not in list");
   if (idx === 0) return alert("cannot delete critter 0 in this version");
 
-  const el = critter.element;
   if (toCorpse) {
     critter.kind = "corpse";
-    critter.pose = "dead";
+    setPose(critter, "dead");
     allCorpses.push(critter);
-    updateCritterFrame(critter, true);
-  } else {
-    el?.remove();
   }
   allCritters.splice(idx, 1);
 
@@ -787,36 +604,27 @@ let loopHandle = null;    // pending requestAnimationFrame / setTimeout id, or n
 let lastFrameMs = null;   // timestamp of the previous frame; null = (re)starting
 let tickDebtS = 0;        // real time elapsed but not yet simulated
 
+// LISTENERS: how the outside world keeps up with the simulation without the simulation
+// knowing who is listening. Each is a plain function with no arguments.
+//   tick listeners  run at the start of every tick, before the world changes (e.g.
+//                   controls.js turning held keys into this tick's input)
+//   frame listeners run after each real-time frame's ticks, and after a single step
+//                   (e.g. animat.js drawing the world as it now is)
+const tickListeners = [];
+const frameListeners = [];
+function onTick(fn) { tickListeners.push(fn); }
+function onFrame(fn) { frameListeners.push(fn); }
+function notifyFrame() { frameListeners.forEach(fn => fn()); }
+
 // Advance the simulation by exactly one tick. The only place g_tick and g_now change.
 function tick() {
   if (consoleOnlyMode) {
     const tps = g_tick / ((Date.now() - startRealtime) / 1000)
     console.log("Begin tick=" + g_tick + " + tps=" + tps);
-  } else {
-    const hasInput = arrowKeyNames.some(ak => keysPressed[ak]);
-    if (arrowsMoveWolf) {
-      // the movement pad has priority: arrows are ignored entirely while it is in use
-      if (!mouseInMovePad) {
-        // Arrow keys move the wolf in SCREEN directions (Up = straight up on screen).
-        // Two keys combine into a screen diagonal; opposite keys cancel out.
-        const screenX = (keysPressed["ArrowRight"] ? 1 : 0) - (keysPressed["ArrowLeft"] ? 1 : 0);
-        const screenY = (keysPressed["ArrowDown"] ? 1 : 0) - (keysPressed["ArrowUp"] ? 1 : 0);
-        if (screenX !== 0 || screenY !== 0) {
-          setCritterMoving(pcWolf, screenDirToGridDir(getDir(screenX, screenY)));
-        } else {
-          setCritterIdle(pcWolf); // stop when the keys are released (or all cancel out)
-        }
-      }
-    } else if (hasInput) {
-      // camera mode: arrows always pan, even while the pad is in use
-      cameraFollowsWolf = false;
-      if (keysPressed["ArrowUp"]) { worldShiftPY -= cameraSpeed; }
-      if (keysPressed["ArrowDown"]) { worldShiftPY += cameraSpeed; }
-      if (keysPressed["ArrowLeft"]) { worldShiftPX -= cameraSpeed; }
-      if (keysPressed["ArrowRight"]) { worldShiftPX += cameraSpeed; }
-      animat?.updateCamera();
-    }
   }
+  tickListeners.forEach(fn => fn());
+
+  applyPlayerIntent();
 
   deqCurrentDelayed();
 
@@ -841,6 +649,7 @@ function runFrame(nowMs) {
     tick();
     tickDebtS -= tempo;
   }
+  notifyFrame();
 
   scheduleFrame();
 }
@@ -878,27 +687,6 @@ function stopLoop() {
   loopHandle = null;
 }
 
-function addCursorTracker() {
-  const fieldWrapper = document.getElementById("field-wrapper");
-  const cursorCoords = document.getElementById("cursor-coords");
-
-  fieldWrapper.addEventListener("mousemove", (e) => {
-    const rect = fieldWrapper.getBoundingClientRect();
-
-    const mousePX = e.clientX - rect.left + worldShiftPX;
-    const mousePY = e.clientY - rect.top + worldShiftPY;
-
-    const [mouseGX, mouseGY] = rectiProject(mousePX, mousePY);
-
-    const [dispGX, dispGY] = [mouseGX.toFixed(3), mouseGY.toFixed(3)];
-    cursorCoords.textContent = `x: ${dispGX}, y: ${dispGY}`;
-  });
-
-  fieldWrapper.addEventListener("mouseleave", () => {
-    cursorCoords.textContent = `x: –, y: –`;
-  });
-}
-
 function setCritterIdle(a) {
   if (a.pose === "death" || a.pose === "dead") return;
   // A critter can't stand still in water: it treads water (swim pose, no speed).
@@ -907,9 +695,8 @@ function setCritterIdle(a) {
   a.speed = 0;
   a.nextGX = a.gx;
   a.nextGY = a.gy;
-  a.pose = stillPose;
+  setPose(a, stillPose);
   a.landPose = "idle";
-  updateCritterFrame(a, true);
 }
 
 // SWIMMING
@@ -940,14 +727,13 @@ function updateTerrainPose(a) {
   const inWater = isInWater(a);
   if (inWater && a.pose !== "swim") {
     a.landPose = a.pose;
-    a.pose = "swim";
+    setPose(a, "swim");
     a.speed = a.speed > 0 ? travelSpeedBySpeciesAndPose[a.species].swim : 0;
-    updateCritterFrame(a, true);
   } else if (!inWater && a.pose === "swim") {
     endReturnToLand(a); // arrived, if it was heading for land
     const resume = a.landPose || "walk";
     if (a.speed > 0 && resume !== "idle") {
-      a.pose = null; // no current pose, so setCritterMoving applies the change and its checks
+      setPose(a, null); // no current pose, so setCritterMoving applies the change and its checks
       setCritterMoving(a, a.currentDirection, resume);
     } else {
       setCritterIdle(a);
@@ -1007,7 +793,7 @@ function maybeDecideReturnToLand(a) {
 function steerToLand(a) {
   const t = a.returnToLand;
   if (!t) return;
-  if (a === pcWolf && handMovesWolf()) return endReturnToLand(a); // the player took over
+  if (a === pcWolf && playerHasControl()) return endReturnToLand(a); // the player took over
   setCritterMoving(a, getDir(t.gx - a.gx, t.gy - a.gy), "walk"); // swims while in water
 }
 
@@ -1143,10 +929,9 @@ function setCritterMoving(a, dir, newPose = "walk") {
   // (a swimmer treading water has speed 0, so it still needs to start moving)
   if (newPose === a.pose && a.currentDirection === dir && a.speed > 0) return;
 
-  a.pose = newPose;
+  setPose(a, newPose);
   a.currentDirection = dir;
   a.speed = travelSpeedBySpeciesAndPose[a.species][a.pose];
-  updateCritterFrame(a);
 
   // prevent critters from bumping directly into walls
   // TODO: improve blocking for on-edge or to-corner motion
@@ -1237,18 +1022,14 @@ function startCritterDeath(a, killer) {
   a.speed = 0;
   a.nextGX = a.gx;
   a.nextGY = a.gy;
-  a.pose = "death";
-  // become a corpse exactly when the death animation has played through once
-  const deathAnim = frameDataBySpeciesAndPose[a.species].death;
-  const deathTransitionS = deathAnim.nFrames * deathAnim.holdTks * tempo;
-  enqDelayed("decontrol", deathTransitionS, { a: a, killer: killer });
-  updateCritterFrame(a, true);
+  setPose(a, "death");
+  enqDelayed("decontrol", deathDurationSBySpecies[a.species], { a: a, killer: killer });
 }
 
 function updateCritterAction(a) {
   // a dying critter must not pick a new action, or it would come back to life
   if (!isLiveCritter(a)) return;
-  if (a === wolves[0] && handMovesWolf()) return;
+  if (a === pcWolf && playerHasControl()) return;
   if (a.isHaltedUntil) {
     if (a.isHaltedUntil <= g_tick) delete a.isHaltedUntil;
     return;
@@ -1412,14 +1193,6 @@ function getDir(x, y, defaultRV = 0) {
   return x > 0 ? (y > 0 ? DIR_SE : DIR_NE) : (y > 0 ? DIR_SW : DIR_NW);
 }
 
-// Converts a direction measured on SCREEN (from getDir of a pixel vector, e.g.
-// DIR_N = straight up on screen) to the grid direction that is drawn that way.
-// The isometric view turns the grid 45 degrees, so this is a rotation by one step:
-// screen up -> grid NW, screen right -> grid NE, screen down -> grid SE, etc.
-function screenDirToGridDir(screenDir) {
-  return (screenDir + 7) % 8;
-}
-
 function pause() {
   isPaused = true;
   stopLoop(); // takes effect immediately; no stray tick from an already-pending frame
@@ -1431,37 +1204,71 @@ function unpause() {
   startLoop();
 }
 
-// While paused, advance exactly one tick.
-function stepOnce() {
-  if (isPaused) tick();
+function togglePause() {
+  isPaused ? unpause() : pause();
 }
 
-document.addEventListener("keydown", (e) => {
-  if (e.key === "p") {
-    isPaused ? unpause() : pause();
-    return;
-  } else if (e.key === "s") {
-    stepOnce();
-    return;
-  }
-  keysPressed[e.key] = true; 
-});
-document.addEventListener("keyup", (e) => { keysPressed[e.key] = false; });
-
-window.addEventListener('resize', () => {
-  viewportWidth = document.getElementById('field-wrapper').clientWidth;
-  viewportHeight = document.getElementById('field-wrapper').clientHeight;
-  animat?.updateCamera();
-});
+// While paused, advance exactly one tick.
+function stepOnce() {
+  if (!isPaused) return;
+  tick();
+  notifyFrame();
+}
 
 let startRealtime = Date.now();
+let isInitialized = false;
 
-window.onload = function () {
+// Creates the world's critters. Call once, before attaching a view or starting.
+function init() {
+  if (isInitialized) return alert("sim.init called twice");
+  isInitialized = true;
   wolves.forEach(wolf => { allCritters.push(initCritter(wolf, "wolf")); });
   deer.forEach(aDeer => { allCritters.push(initCritter(aDeer, "deer")); });
   forbidOverlapsOnStart(); // must run after critters exist
+}
 
-  animat?.setCameraToPCWolf();
-  if (!consoleOnlyMode) addCursorTracker();
+// Starts the game loop: in real time (one requestAnimationFrame loop), or with
+// consoleOnly, as fast as possible with no browser needed.
+function start({ consoleOnly = false } = {}) {
+  if (!isInitialized) return alert("sim.start called before sim.init");
+  consoleOnlyMode = consoleOnly;
+  startRealtime = Date.now();
   startLoop();
+}
+
+// THE INTERFACE
+// What viewers and controllers use. They read critters' fields directly (gx, gy, pose,
+// poseTick, currentDirection, species, wind, stamina, uid) but change the world only
+// through the functions here.
+return {
+  // lifecycle and time
+  init, start, pause, unpause, togglePause, stepOnce,
+  get isPaused() { return isPaused; },
+  get tickCount() { return g_tick; }, // ticks run so far
+  get now() { return g_now; },        // game seconds so far
+  get tempo() { return tempo; },      // game seconds per tick
+  onTick, onFrame,
+
+  // the world
+  gridWidthN, gridHeightN, getTerrainAt,
+  allCritters, allCorpses, pcWolf, deathDurationSBySpecies,
+
+  // the player
+  setPlayerIntent, playerHasControl,
+  getDir, DIR_E, DIR_SE, DIR_S, DIR_SW, DIR_W, DIR_NW, DIR_N, DIR_NE,
+
+  // Everything else, for tests and debugging from the console only: views and
+  // controllers must not use these.
+  internals: {
+    tick, wolves, deer, allLandTiles,
+    setCritterIdle, setCritterMoving, isInWater, isImpassable, getOccupiedTiles,
+    forbidOverlapsOnStart, critterBoxRad, travelSpeedBySpeciesAndPose,
+    windRefillHalfLifeSByPose, staminaFullRefillSByPose,
+    get loopHandle() { return loopHandle; },
+  },
 };
+
+})();
+
+// In Node (tests/headless.test.js), sim.js is a module; in the browser this adds nothing.
+if (typeof module !== "undefined" && module.exports) module.exports = sim;

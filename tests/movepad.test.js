@@ -15,17 +15,17 @@ async function main(browser, r) {
 
   // mouse over the map does nothing to the wolf
   await p.mouse.move(700, 450); await p.mouse.move(300, 200, { steps: 5 });
-  r.check(await p.evaluate(() => !mouseInMovePad && !handMovesWolf()), "mouse over the map does not take control of the wolf");
+  r.check(await p.evaluate(() => !controls.padInUse && !sim.playerHasControl()), "mouse over the map does not take control of the wolf");
 
   const state = () => p.evaluate(() => ({
-    pose: pcWolf.pose, dir: pcWolf.currentDirection, inPad: mouseInMovePad,
+    pose: sim.pcWolf.pose, dir: sim.pcWolf.currentDirection, inPad: controls.padInUse,
     knob: document.getElementById("move-pad-knob").classList.contains("visible"),
     active: [...document.querySelectorAll("#move-pad .ring.active")].map(e => e.dataset.pose),
   }));
 
   // each ring gives its pose
   for (const [f, pose] of [[0.05, "idle"], [0.3, "walk"], [0.6, "trot"], [0.9, "gallop"]]) {
-    await p.evaluate(() => { pcWolf.wind = 1; pcWolf.stamina = 1; });
+    await p.evaluate(() => { sim.pcWolf.wind = 1; sim.pcWolf.stamina = 1; });
     await p.mouse.move(pad.x + f * pad.R, pad.y, { steps: 2 });
     const s = await state();
     r.check(s.pose === pose && s.inPad && s.knob && s.active.join() === pose,
@@ -34,14 +34,14 @@ async function main(browser, r) {
 
   // direction: pointer right of center moves the wolf right on screen
   await p.mouse.move(pad.x + 0.6 * pad.R, pad.y);
-  const before = await p.evaluate(() => isoProject(pcWolf.gx, pcWolf.gy));
+  const before = await p.evaluate(() => animat.isoProject(sim.pcWolf.gx, sim.pcWolf.gy));
   await p.waitForTimeout(700);
-  const after = await p.evaluate(() => ({ iso: isoProject(pcWolf.gx, pcWolf.gy), pose: pcWolf.pose }));
+  const after = await p.evaluate(() => ({ iso: animat.isoProject(sim.pcWolf.gx, sim.pcWolf.gy), pose: sim.pcWolf.pose }));
   const dx = after.iso[0] - before[0], dy = after.iso[1] - before[1];
   r.check((dx > 0 && Math.abs(dy) < Math.abs(dx) * 0.2) || after.pose === "idle",
     `pointer right -> wolf moves right on screen (dx ${dx.toFixed(1)}, dy ${dy.toFixed(1)})`);
   await p.mouse.move(pad.x, pad.y - 0.3 * pad.R, { steps: 3 });
-  const up = await p.evaluate(() => pcWolf.currentDirection === DIR_NW);
+  const up = await p.evaluate(() => sim.pcWolf.currentDirection === sim.DIR_NW);
   r.check(up, "pointer up -> grid NW (straight up on screen)");
 
   // the square pad's corners are outside the circles
@@ -57,13 +57,13 @@ async function main(browser, r) {
   // camera mode: arrows pan even while the pad steers, and the camera stays put
   await p.mouse.move(400, 300, { steps: 2 }); await moveToOpenLand(p, { radius: 6 });
   await p.mouse.move(pad.x + 0.3 * pad.R, pad.y, { steps: 2 });
-  const cam0 = await p.evaluate(() => worldShiftPX);
+  const cam0 = await p.evaluate(() => animat.camera.shiftPX);
   await p.keyboard.down("ArrowLeft"); await p.waitForTimeout(400);
-  const posePanning = await p.evaluate(() => pcWolf.pose);
+  const posePanning = await p.evaluate(() => sim.pcWolf.pose);
   await p.keyboard.up("ArrowLeft"); await p.waitForTimeout(50);
-  const cam1 = [await p.evaluate(() => worldShiftPX), posePanning];
+  const cam1 = [await p.evaluate(() => animat.camera.shiftPX), posePanning];
   await p.waitForTimeout(500);
-  const cam2 = await p.evaluate(() => worldShiftPX);
+  const cam2 = await p.evaluate(() => animat.camera.shiftPX);
   r.check(cam1[0] < cam0 - 100 && cam1[1] === "walk",
     `camera mode: arrows pan while the pad steers the wolf (${cam0.toFixed(0)} -> ${cam1[0].toFixed(0)})`);
   r.check(Math.abs(cam2 - cam1[0]) < 1, "camera stays where it was panned to");
@@ -71,9 +71,9 @@ async function main(browser, r) {
   await p.mouse.move(400, 300, { steps: 3 }); await p.mouse.move(pad.x + 0.3 * pad.R, pad.y, { steps: 3 });
   await p.waitForTimeout(200);
   const recentered = await p.evaluate(() => {
-    const [px] = isoProject(pcWolf.gx, pcWolf.gy);
-    return Math.abs(worldShiftPX + viewportWidth / 2 - px) < 40
-      || worldShiftPX <= -worldRadPX + 1 || worldShiftPX >= worldRadPX - viewportWidth - 1;
+    const [px] = animat.isoProject(sim.pcWolf.gx, sim.pcWolf.gy);
+    return Math.abs(animat.camera.shiftPX + animat.camera.viewportWidth / 2 - px) < 40
+      || animat.camera.shiftPX <= -animat.camera.worldRadPX + 1 || animat.camera.shiftPX >= animat.camera.worldRadPX - animat.camera.viewportWidth - 1;
   });
   r.check(recentered, "re-entering the pad re-centers the camera on the wolf");
 
@@ -81,20 +81,20 @@ async function main(browser, r) {
   await p.mouse.move(400, 300, { steps: 2 }); await moveToOpenLand(p, { radius: 6 });
   await p.mouse.move(400, 300, { steps: 3 });
   await p.click("#arrow-mode-toggle"); await p.mouse.move(400, 300);
-  r.check(await p.evaluate(() => arrowsMoveWolf), "toggle switches arrows to moving the wolf");
+  r.check(await p.evaluate(() => controls.arrowsMoveWolf), "toggle switches arrows to moving the wolf");
   await p.keyboard.down("ArrowUp"); await p.waitForTimeout(150);
-  let w = await p.evaluate(() => [pcWolf.pose, pcWolf.currentDirection === DIR_NW]);
+  let w = await p.evaluate(() => [sim.pcWolf.pose, sim.pcWolf.currentDirection === sim.DIR_NW]);
   r.check(w[0] === "walk" && w[1], "wolf mode, outside the pad: ArrowUp walks the wolf straight up on screen (grid NW)");
   await p.mouse.move(pad.x, pad.y + 0.9 * pad.R, { steps: 4 }); await p.waitForTimeout(300);
-  w = await p.evaluate(() => [pcWolf.pose, pcWolf.currentDirection === DIR_SE]);
+  w = await p.evaluate(() => [sim.pcWolf.pose, sim.pcWolf.currentDirection === sim.DIR_SE]);
   r.check(w[0] === "gallop" && w[1], "wolf mode, inside the pad with ArrowUp held: the pad wins");
   await p.mouse.move(pad.x, pad.y, { steps: 3 }); await p.waitForTimeout(200);
-  r.check(await p.evaluate(() => pcWolf.pose === "idle"), "pad center with ArrowUp held: the wolf stops");
+  r.check(await p.evaluate(() => sim.pcWolf.pose === "idle"), "pad center with ArrowUp held: the wolf stops");
   await p.keyboard.up("ArrowUp");
   await p.mouse.move(400, 300, { steps: 4 });
   await p.keyboard.down("ArrowRight"); await p.waitForTimeout(150); await p.keyboard.up("ArrowRight");
   await p.waitForTimeout(150);
-  r.check(await p.evaluate(() => pcWolf.pose === "idle"), "wolf mode: releasing the arrows stops the wolf");
+  r.check(await p.evaluate(() => sim.pcWolf.pose === "idle"), "wolf mode: releasing the arrows stops the wolf");
 
   // the pad does not move with zoom
   await p.click("#zoom-in"); await p.waitForTimeout(100);

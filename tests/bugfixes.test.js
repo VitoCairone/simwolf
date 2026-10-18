@@ -17,11 +17,11 @@ async function main(browser, r) {
     const page = await openGame(browser);
     const [s, o] = await page.evaluate(() => {
       let s = 0, o = 0;
-      allCritters.forEach((a, i) => {
-        if (getOccupiedTiles(a.gx, a.gy).some(t =>
-          isImpassable(getTerrainAt(...t.split("_").map(Number))))) s++;
-        allCritters.slice(i + 1).forEach(b => {
-          const span = 2 * critterBoxRad;
+      sim.allCritters.forEach((a, i) => {
+        if (sim.internals.getOccupiedTiles(a.gx, a.gy).some(t =>
+          sim.internals.isImpassable(sim.getTerrainAt(...t.split("_").map(Number))))) s++;
+        sim.allCritters.slice(i + 1).forEach(b => {
+          const span = 2 * sim.internals.critterBoxRad;
           if (Math.abs(a.gx - b.gx) < span && Math.abs(a.gy - b.gy) < span) o++;
         });
       });
@@ -37,44 +37,44 @@ async function main(browser, r) {
   const page = await openGame(browser);
 
   const separated = await page.evaluate(() => {
-    pause();
-    const [a, b] = [allCritters[3], allCritters[4]];
+    sim.pause();
+    const [a, b] = [sim.allCritters[3], sim.allCritters[4]];
     b.gx = a.gx; b.gy = a.gy;
-    forbidOverlapsOnStart();
-    const span = 2 * critterBoxRad;
+    sim.internals.forbidOverlapsOnStart();
+    const span = 2 * sim.internals.critterBoxRad;
     return Math.abs(a.gx - b.gx) >= span || Math.abs(a.gy - b.gy) >= span;
   });
   r.check(separated, "bug 2: forbidOverlapsOnStart separates a forced overlap");
 
   // 3 + 4 + 5: a wolf walks into an idle deer
   const k = await page.evaluate(() => {
-    const w = wolves[1], d = deer[0];
+    const w = sim.internals.wolves[1], d = sim.internals.deer[0];
     // find open ground with room for both
-    const t = allLandTiles.find(([i, j]) =>
+    const t = sim.internals.allLandTiles.find(([i, j]) =>
       [-1, 0, 1, 2, 3].every(di => [-1, 0, 1].every(dj => {
-        const t = getTerrainAt(i + di, j + dj); return !isImpassable(t) && t !== "water"; })));
+        const t = sim.getTerrainAt(i + di, j + dj); return !sim.internals.isImpassable(t) && t !== "water"; })));
     // move everyone else far away
-    allCritters.filter(c => c !== w && c !== d).forEach(c => {
+    sim.allCritters.filter(c => c !== w && c !== d).forEach(c => {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
     });
     w.gx = t[0] + 0.5; w.gy = t[1] + 0.5; d.gx = t[0] + 1.6; d.gy = t[1] + 0.5;
-    setCritterIdle(d); d.redecideCd = 1e9; w.redecideCd = 1e9; w.wind = 1; w.stamina = 1;
-    setCritterMoving(w, DIR_E, "walk");
+    sim.internals.setCritterIdle(d); d.redecideCd = 1e9; w.redecideCd = 1e9; w.wind = 1; w.stamina = 1;
+    sim.internals.setCritterMoving(w, sim.DIR_E, "walk");
     let diedAt = null; const poses = [], bgs = [];
     for (let n = 0; n < 120; n++) {
-      tick();
-      if (d.pose === "death" && diedAt === null) { diedAt = g_tick; d.redecideCd = 1; } // force a redecision while dying
+      sim.internals.tick(); animat.render();
+      if (d.pose === "death" && diedAt === null) { diedAt = sim.tickCount; d.redecideCd = 1; } // force a redecision while dying
       poses.push(d.pose);
-      if (d.pose === "death" || d.pose === "dead") bgs.push(d.element.style.backgroundPosition);
+      if (d.pose === "death" || d.pose === "dead") bgs.push(animat.spriteEl(d).style.backgroundPosition);
     }
-    const deadData = frameDataBySpeciesAndPose.deer.dead;
-    const deathData = frameDataBySpeciesAndPose.deer.death;
+    const deadData = animat.frameDataBySpeciesAndPose.deer.dead;
+    const deathData = animat.frameDataBySpeciesAndPose.deer.death;
     return {
-      diedAt, final: d.pose, kind: d.kind, inCorpses: allCorpses.includes(d),
+      diedAt, final: d.pose, kind: d.kind, inCorpses: sim.allCorpses.includes(d),
       deathTicks: poses.filter(x => x === "death").length,
       expectedDeathTicks: deathData.nFrames * deathData.holdTks,
       walkedAfterDeath: poses.slice(poses.indexOf("death")).includes("walk"),
-      corpseX: parseInt(d.element.style.backgroundPosition),
+      corpseX: parseInt(animat.spriteEl(d).style.backgroundPosition),
       expectedCorpseX: -deadData.colZero * deadData.frameW,
     };
   });
@@ -89,15 +89,15 @@ async function main(browser, r) {
   // 6: resting recovers (on dry land: swimming changes neither reserve)
   await moveToOpenLand(page);
   const f = await page.evaluate(() => {
-    const w = pcWolf;
-    w.wind = 0; w.stamina = 0.5; w.pose = "walk"; setCritterIdle(w);
-    for (let n = 0; n < 600; n++) tick(); // 10 s idle
+    const w = sim.pcWolf;
+    w.wind = 0; w.stamina = 0.5; w.pose = "walk"; sim.internals.setCritterIdle(w);
+    for (let n = 0; n < 600; n++) sim.internals.tick(); // 10 s idle
     const after = { wind: w.wind, stamina: w.stamina };
     w.wind = 1; w.stamina = 1;
-    for (let n = 0; n < 600; n++) tick();
+    for (let n = 0; n < 600; n++) sim.internals.tick();
     return { after, capped: [w.wind, w.stamina],
-      expectWind: 1 - Math.pow(0.5, 10 / windRefillHalfLifeSByPose.idle),
-      expectStamina: 0.5 + 10 / staminaFullRefillSByPose.idle };
+      expectWind: 1 - Math.pow(0.5, 10 / sim.internals.windRefillHalfLifeSByPose.idle),
+      expectStamina: 0.5 + 10 / sim.internals.staminaFullRefillSByPose.idle };
   });
   r.check(Math.abs(f.after.wind - f.expectWind) < 1e-6 && Math.abs(f.after.stamina - f.expectStamina) < 1e-6,
     `bug 6: 10 s idle refills wind 0 -> ${f.after.wind.toFixed(3)} and stamina 0.5 -> ${f.after.stamina.toFixed(5)}`);
@@ -109,12 +109,12 @@ async function main(browser, r) {
   // soak: run normally for a while, then check sprite depth ordering
   const soak = await openGame(browser);
   await soak.waitForTimeout(10000);
-  const s = await soak.evaluate(() => ({ tick: g_tick, live: allCritters.length, corpses: allCorpses.length }));
+  const s = await soak.evaluate(() => ({ tick: sim.tickCount, live: sim.allCritters.length, corpses: sim.allCorpses.length }));
   r.check(s.tick > 500, `soak: 10 s of normal play ran ${s.tick} ticks (${s.live} live, ${s.corpses} corpses)`);
 
   // 7: after normal play, every sprite's z-index is a valid integer that follows the
   // drawing order (animat.spriteZIndex: depth-based, swimmers interleaved with land tiles)
-  const z = await soak.evaluate(() => allCritters.map(a => [a.element.style.zIndex, animat.spriteZIndex(a)]));
+  const z = await soak.evaluate(() => sim.allCritters.map(a => [animat.spriteEl(a).style.zIndex, animat.spriteZIndex(a)]));
   r.check(z.length > 1 && z.every(([zz, expected]) => zz === String(expected) && Number.isInteger(expected)),
     `bug 7: every live sprite's z-index tracks its position (${z.length} checked)`);
   r.noProblems(soak, "during soak");

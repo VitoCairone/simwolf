@@ -15,21 +15,22 @@ async function main(browser, r) {
   const outDir = ensureOutputDir("facings");
   const p = await openGame(browser, { viewport: { width: 900, height: 700 } });
   await p.evaluate(() => {
-    pause();
+    sim.pause();
     document.getElementById("move-pad").style.display = "none";
     document.getElementById("dbel-pc-wolf").style.display = "none";
-    allCritters.filter(c => c !== pcWolf).forEach(c => { c.element.style.display = "none"; });
-    zoom = 4; animat.updateZoomButtons();
+    sim.allCritters.filter(c => c !== sim.pcWolf).forEach(c => { animat.spriteEl(c).style.display = "none"; });
+    animat.setZoom(4);
   });
   for (const pose of ["walk", "idle"]) {
     for (let dir = 0; dir < 8; dir++) {
       const got = await p.evaluate(([dir, pose]) => {
-        pcWolf.currentDirection = dir; pcWolf.pose = pose; pcWolf.speed = 0;
-        pcWolf.frame = pose === "walk" ? 2 : 0;
-        updateCritterFrame(pcWolf); animat.placeCritterSprite(pcWolf); animat.setCameraToPCWolf();
-        const fd = frameDataBySpeciesAndPose.wolf[pose];
-        const [, y] = pcWolf.element.style.backgroundPosition.split(" ").map(v => parseInt(v));
-        return { row: Math.round(-y / fd.frameH), mirror: pcWolf.element.style.transform === "scaleX(-1)" };
+        sim.pcWolf.currentDirection = dir; sim.pcWolf.pose = pose; sim.pcWolf.speed = 0;
+        const fd = animat.frameDataBySpeciesAndPose.wolf[pose];
+        // show animation frame 2 of the walk, 0 of idle
+        sim.pcWolf.poseTick = sim.tickCount - 1 - (pose === "walk" ? 2 * fd.holdTks : 0);
+        animat.followWolf();
+        const [, y] = animat.spriteEl(sim.pcWolf).style.backgroundPosition.split(" ").map(v => parseInt(v));
+        return { row: Math.round(-y / fd.frameH), mirror: animat.spriteEl(sim.pcWolf).style.transform === "scaleX(-1)" };
       }, [dir, pose]);
       r.check(got.row === EXPECTED_ROW[dir] && got.mirror === EXPECTED_MIRROR[dir],
         `${pose} ${DIR_LABEL[dir]}: row ${got.row}${got.mirror ? " mirrored" : ""}`);

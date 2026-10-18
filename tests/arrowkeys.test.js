@@ -24,12 +24,12 @@ async function main(browser, r) {
   await p.click("#arrow-mode-toggle");
   await p.mouse.move(300, 300);
   await p.evaluate(() => {
-    allCritters.filter(c => c !== pcWolf).forEach(c => {
+    sim.allCritters.filter(c => c !== sim.pcWolf).forEach(c => {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
     });
-    window.__openTile = allLandTiles.find(([i, j]) => {
+    window.__openTile = sim.internals.allLandTiles.find(([i, j]) => {
       for (let di = -6; di <= 6; di++) for (let dj = -6; dj <= 6; dj++)
-        if (isImpassable(getTerrainAt(i + di, j + dj)) || getTerrainAt(i + di, j + dj) === "water") return false;
+        if (sim.internals.isImpassable(sim.getTerrainAt(i + di, j + dj)) || sim.getTerrainAt(i + di, j + dj) === "water") return false;
       return true;
     });
   });
@@ -38,15 +38,15 @@ async function main(browser, r) {
   for (const [keys, [ex, ey]] of CASES) {
     await p.evaluate(() => {
       const [i, j] = window.__openTile;
-      pcWolf.gx = pcWolf.nextGX = i + 0.5; pcWolf.gy = pcWolf.nextGY = j + 0.5;
-      setCritterIdle(pcWolf); animat.placeCritterSprite(pcWolf);
+      sim.pcWolf.gx = sim.pcWolf.nextGX = i + 0.5; sim.pcWolf.gy = sim.pcWolf.nextGY = j + 0.5;
+      sim.internals.setCritterIdle(sim.pcWolf); animat.render();
     });
-    const before = await p.evaluate(() => isoProject(pcWolf.gx, pcWolf.gy));
+    const before = await p.evaluate(() => animat.isoProject(sim.pcWolf.gx, sim.pcWolf.gy));
     for (const k of keys) await p.keyboard.down(k);
     await p.waitForTimeout(500);
     const after = await p.evaluate(() => ({
-      iso: isoProject(pcWolf.gx, pcWolf.gy), pose: pcWolf.pose,
-      row: animat.spriteRow(pcWolf), mirror: pcWolf.element.style.transform === "scaleX(-1)",
+      iso: animat.isoProject(sim.pcWolf.gx, sim.pcWolf.gy), pose: sim.pcWolf.pose,
+      row: animat.spriteRow(sim.pcWolf), mirror: animat.spriteEl(sim.pcWolf).style.transform === "scaleX(-1)",
     }));
     for (const k of keys) await p.keyboard.up(k);
     const dx = after.iso[0] - before[0], dy = after.iso[1] - before[1];
@@ -59,19 +59,19 @@ async function main(browser, r) {
   // opposite keys cancel; releasing all keys stops the wolf
   await p.keyboard.down("ArrowLeft"); await p.keyboard.down("ArrowRight");
   await p.waitForTimeout(200);
-  r.check(await p.evaluate(() => pcWolf.pose === "idle"), "Left+Right together cancel: the wolf stands still");
+  r.check(await p.evaluate(() => sim.pcWolf.pose === "idle"), "Left+Right together cancel: the wolf stands still");
   await p.keyboard.down("ArrowUp"); await p.waitForTimeout(200);
-  r.check(await p.evaluate(() => pcWolf.pose === "walk" && pcWolf.currentDirection === DIR_NW),
+  r.check(await p.evaluate(() => sim.pcWolf.pose === "walk" && sim.pcWolf.currentDirection === sim.DIR_NW),
     "Left+Right+Up: the horizontal keys cancel, the wolf walks straight up");
   for (const k of ["ArrowLeft", "ArrowRight", "ArrowUp"]) await p.keyboard.up(k);
   await p.waitForTimeout(200);
-  r.check(await p.evaluate(() => pcWolf.pose === "idle"), "releasing all keys stops the wolf");
+  r.check(await p.evaluate(() => sim.pcWolf.pose === "idle"), "releasing all keys stops the wolf");
 
   // camera mode is unchanged: arrows pan the camera in screen directions
   await p.click("#arrow-mode-toggle"); await p.mouse.move(300, 300);
-  const c0 = await p.evaluate(() => [worldShiftPX, worldShiftPY]);
+  const c0 = await p.evaluate(() => [animat.camera.shiftPX, animat.camera.shiftPY]);
   await p.keyboard.down("ArrowDown"); await p.waitForTimeout(200); await p.keyboard.up("ArrowDown");
-  const c1 = await p.evaluate(() => [worldShiftPX, worldShiftPY, pcWolf.pose]);
+  const c1 = await p.evaluate(() => [animat.camera.shiftPX, animat.camera.shiftPY, sim.pcWolf.pose]);
   r.check(c1[1] > c0[1] && c1[0] === c0[0], "camera mode: ArrowDown still pans the camera straight down");
   r.noProblems(p);
   await p.close();

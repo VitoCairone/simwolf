@@ -2,7 +2,11 @@
 
 Browser tests that load the real `index.html` in headless Chromium (via
 [Playwright](https://playwright.dev)) and check the game's behaviour by reading
-its globals and sending real mouse and keyboard input.
+its state and sending real mouse and keyboard input.
+
+In the page the game is three objects: `sim` (the world; `sim.internals` has the
+rest of its functions, for tests and debugging only), `animat` (the view) and
+`controls` (input).
 
 ## Setup (once)
 
@@ -36,6 +40,7 @@ Set `CHROMIUM_PATH` to use a specific Chromium build instead of Playwright's.
 | `movepad.test.js` | Movement pad rings, direction, leaving the pad, camera mode vs wolf mode for the arrow keys, pad fixed under zoom. |
 | `gameloop.test.js` | Same game speed at 30/60/120/144 Hz, pause is immediate, step = one tick, rapid pause/unpause never starts a second loop, long stalls are capped. |
 | `movement.test.js` | No critter stays frozen for 50 game-seconds across 10 loads (spawn/collision deadlocks). Prints details for any frozen critter. |
+| `separation.test.js` | `sim.js` runs in Node with no browser (critters move, a player intent steers the wolf); the page defines only `sim`, `animat` and `controls`. |
 | `swim.test.js` | Water is passable: wolf and deer enter water and swim (own sheets, 5 / 8 km/h, no effect on wind or stamina), tread water when stopped, resume their land pose on shore. Saves screenshots to `output/swim/`. |
 | `facings.test.js` | Wolf sprite row and mirroring for all 8 directions, walking and idle. Saves screenshots to `output/facings/`. |
 
@@ -45,8 +50,10 @@ Set `CHROMIUM_PATH` to use a specific Chromium build instead of Playwright's.
 
 Each suite exports `{ name, main(browser, r) }`. Use `openGame(browser)` from
 `helpers.js` to load the page, `page.evaluate(...)` to read or drive the game,
-and `r.check(condition, message)` to record a result. Call `pause()` first and
-then `tick()` to step the simulation deterministically.
+and `r.check(condition, message)` to record a result. Call `sim.pause()` first and
+then `sim.internals.tick()` to step the simulation deterministically. Ticking by
+hand doesn't redraw: call `animat.render()` before reading anything on the page
+(sprite classes, positions, background frames).
 
 Critters can swim, so a test that expects land poses (walk, trot, gallop, idle)
 should first call `moveToOpenLand(page)` from `helpers.js`, which puts the wolf

@@ -9,16 +9,15 @@ async function main(browser, r) {
 
   // Find a straight shoreline: land tiles to the west, open water to the east (grid E).
   const setup = await p.evaluate(() => {
-    pause();
-    allCritters.filter(c => c !== pcWolf && c !== deer[0]).forEach(c => {
+    sim.pause();
+    sim.allCritters.filter(c => c !== sim.pcWolf && c !== sim.internals.deer[0]).forEach(c => {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
-      animat.placeCritterSprite(c);
     });
-    const T = (i, j) => getTerrainAt(i, j);
-    for (let i = 4; i < gridWidthN - 12; i++) for (let j = 4; j < gridHeightN - 4; j++) {
+    const T = (i, j) => sim.getTerrainAt(i, j);
+    for (let i = 4; i < sim.gridWidthN - 12; i++) for (let j = 4; j < sim.gridHeightN - 4; j++) {
       let ok = true;
       for (let k = 0; k < 3 && ok; k++) for (let dj = -1; dj <= 1 && ok; dj++)
-        if (isImpassable(T(i - k, j + dj)) || T(i - k, j + dj) === "water") ok = false;
+        if (sim.internals.isImpassable(T(i - k, j + dj)) || T(i - k, j + dj) === "water") ok = false;
       for (let k = 1; k <= 8 && ok; k++) for (let dj = -1; dj <= 1 && ok; dj++)
         if (T(i + k, j + dj) !== "water") ok = false;
       if (ok) return { shore: [i, j] };
@@ -30,18 +29,19 @@ async function main(browser, r) {
 
   // 1. a wolf walks east off the shore into the water and swims
   const w1 = await p.evaluate(([i, j]) => {
-    const w = pcWolf;
+    const w = sim.pcWolf;
     w.gx = w.nextGX = i - 1 + 0.5; w.gy = w.nextGY = j + 0.5; w.wind = 0.4; w.stamina = 0.7;
-    setCritterIdle(w); w.redecideCd = 1e9;
-    setCritterMoving(w, DIR_E, "walk");
+    sim.internals.setCritterIdle(w); w.redecideCd = 1e9;
+    sim.internals.setCritterMoving(w, sim.DIR_E, "walk");
     let enteredAt = null;
-    for (let n = 0; n < 600 && enteredAt === null; n++) { tick(); if (w.pose === "swim") enteredAt = n; }
+    for (let n = 0; n < 600 && enteredAt === null; n++) { sim.internals.tick(); if (w.pose === "swim") enteredAt = n; }
     const startGX = w.gx, reservesAtEntry = [w.wind, w.stamina];
-    for (let n = 0; n < 120; n++) tick(); // 2 s of swimming
-    const tilesPerS = (w.gx - startGX) / (120 * tempo);
-    const el = w.element;
+    for (let n = 0; n < 120; n++) sim.internals.tick(); // 2 s of swimming
+    const tilesPerS = (w.gx - startGX) / (120 * sim.tempo);
+    animat.render();
+    const el = animat.spriteEl(w);
     return {
-      enteredAt, inWater: isInWater(w), pose: w.pose, kmh: tilesPerS * 3.6,
+      enteredAt, inWater: sim.internals.isInWater(w), pose: w.pose, kmh: tilesPerS * 3.6,
       reservesAtEntry, reserves: [w.wind, w.stamina], cls: el.className,
       sheet: getComputedStyle(el).backgroundImage, size: [getComputedStyle(el).width, getComputedStyle(el).height],
     };
@@ -56,7 +56,7 @@ async function main(browser, r) {
 
   // screenshot of the swimming wolf
   const outDir = ensureOutputDir("swim");
-  await p.evaluate(() => { zoom = 4; animat.setCameraToPCWolf(); });
+  await p.evaluate(() => { animat.setZoom(4); animat.followWolf(); });
   const clip = await p.evaluate(() => {
     const b = document.getElementById("field-wrapper").getBoundingClientRect();
     return { x: b.left + b.width / 2 - 120, y: b.top + b.height / 2 - 140, width: 240, height: 240 };
@@ -64,23 +64,24 @@ async function main(browser, r) {
   await p.screenshot({ path: path.join(outDir, "wolf-swimming.png"), clip });
 
   // 2. stopping in water: treads water (swim pose, speed 0), not "idle"
-  const tread = await p.evaluate(() => { setCritterIdle(pcWolf); tick(); return [pcWolf.pose, pcWolf.speed]; });
+  const tread = await p.evaluate(() => { sim.internals.setCritterIdle(sim.pcWolf); sim.internals.tick(); return [sim.pcWolf.pose, sim.pcWolf.speed]; });
   r.check(tread[0] === "swim" && tread[1] === 0, `stopping in water treads water (pose ${tread[0]}, speed ${tread[1]})`);
 
   // 3. asking to gallop in water still swims at swim speed
   const spr = await p.evaluate(() => {
-    setCritterMoving(pcWolf, DIR_W, "gallop");
-    return [pcWolf.pose, pcWolf.speed === travelSpeedBySpeciesAndPose.wolf.swim, pcWolf.landPose];
+    sim.internals.setCritterMoving(sim.pcWolf, sim.DIR_W, "gallop");
+    return [sim.pcWolf.pose, sim.pcWolf.speed === sim.internals.travelSpeedBySpeciesAndPose.wolf.swim, sim.pcWolf.landPose];
   });
   r.check(spr[0] === "swim" && spr[1], `gallop request in water = swim at swim speed (pose ${spr[0]})`);
 
   // 4. swimming back west onto land resumes the requested land pose and the land sheet
   const back = await p.evaluate(() => {
-    pcWolf.wind = 1; pcWolf.stamina = 1;
-    for (let n = 0; n < 1200 && isInWater(pcWolf); n++) tick();
-    tick();
-    const el = pcWolf.element;
-    return { inWater: isInWater(pcWolf), pose: pcWolf.pose, cls: el.className,
+    sim.pcWolf.wind = 1; sim.pcWolf.stamina = 1;
+    for (let n = 0; n < 1200 && sim.internals.isInWater(sim.pcWolf); n++) sim.internals.tick();
+    sim.internals.tick();
+    animat.render();
+    const el = animat.spriteEl(sim.pcWolf);
+    return { inWater: sim.internals.isInWater(sim.pcWolf), pose: sim.pcWolf.pose, cls: el.className,
       sheet: getComputedStyle(el).backgroundImage };
   });
   r.check(!back.inWater && back.pose === "gallop" && back.cls === "critter wolf" && back.sheet.includes("wolf-run-stand.png"),
@@ -88,24 +89,24 @@ async function main(browser, r) {
 
   // 5. a deer swims too, with its own sheet and 40x48 frames, at its own speed
   const d = await p.evaluate(([i, j]) => {
-    pcWolf.gx = pcWolf.gy = pcWolf.nextGX = pcWolf.nextGY = -80; setCritterIdle(pcWolf);
-    const a = deer[0];
+    sim.pcWolf.gx = sim.pcWolf.gy = sim.pcWolf.nextGX = sim.pcWolf.nextGY = -80; sim.internals.setCritterIdle(sim.pcWolf);
+    const a = sim.internals.deer[0];
     a.gx = a.nextGX = i - 1 + 0.5; a.gy = a.nextGY = j + 0.5; a.redecideCd = 1e9;
-    setCritterIdle(a); setCritterMoving(a, DIR_E, "walk");
-    for (let n = 0; n < 600 && a.pose !== "swim"; n++) tick();
+    sim.internals.setCritterIdle(a); sim.internals.setCritterMoving(a, sim.DIR_E, "walk");
+    for (let n = 0; n < 600 && a.pose !== "swim"; n++) sim.internals.tick();
     const startGX = a.gx;
-    for (let n = 0; n < 120; n++) tick();
-    const el = a.element;
-    return { pose: a.pose, kmh: (a.gx - startGX) / (120 * tempo) * 3.6,
+    for (let n = 0; n < 120; n++) sim.internals.tick();
+    animat.render();
+    const el = animat.spriteEl(a);
+    return { pose: a.pose, kmh: (a.gx - startGX) / (120 * sim.tempo) * 3.6,
       cls: el.className, size: [getComputedStyle(el).width, getComputedStyle(el).height] };
   }, setup.shore);
   r.check(d.pose === "swim" && Math.abs(d.kmh - 8) < 0.1,
     `deer swims at ${d.kmh.toFixed(2)} km/h (expected 8)`);
   r.check(d.cls === "critter deer-swim" && d.size.join() === "40px,48px",
     `deer uses its swim sheet (class "${d.cls}", ${d.size.join(" x ")} frames)`);
-  await p.evaluate(() => { const a = deer[0]; zoom = 4;
-    const [px, py] = isoProject(a.gx, a.gy);
-    worldShiftPX = px - viewportWidth / 2; worldShiftPY = py - viewportHeight / 2; animat.updateCamera(); });
+  await p.evaluate(() => { const a = sim.internals.deer[0]; animat.setZoom(4);
+    animat.centerCameraOn(a.gx, a.gy); });
   await p.screenshot({ path: path.join(outDir, "deer-swimming.png"), clip });
   r.noProblems(p);
   await p.close();
@@ -113,7 +114,7 @@ async function main(browser, r) {
   // 6. normal play: critters wander into the water without errors or alerts
   const s = await openGame(browser);
   await s.waitForTimeout(8000);
-  const seen = await s.evaluate(() => allCritters.filter(a => a.pose === "swim").length);
+  const seen = await s.evaluate(() => sim.allCritters.filter(a => a.pose === "swim").length);
   r.check(true, `normal play for 8 s: ${seen} of 20 critters swimming at the end`);
   r.noProblems(s, "in normal play with swimming");
   await s.close();
