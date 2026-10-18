@@ -112,9 +112,10 @@ async function main(browser, r) {
   const s = await soak.evaluate(() => ({ tick: g_tick, live: allCritters.length, corpses: allCorpses.length }));
   r.check(s.tick > 500, `soak: 10 s of normal play ran ${s.tick} ticks (${s.live} live, ${s.corpses} corpses)`);
 
-  // 7: after normal play, every sprite's z-index is a valid integer tracking its position
-  const z = await soak.evaluate(() => allCritters.map(a => [a.gx + a.gy, a.element.style.zIndex]));
-  r.check(z.length > 1 && z.every(([sum, zz]) => String(Math.round(sum * 100)) === zz),
+  // 7: after normal play, every sprite's z-index is a valid integer that follows the
+  // drawing order (animat.spriteZIndex: depth-based, swimmers interleaved with land tiles)
+  const z = await soak.evaluate(() => allCritters.map(a => [a.element.style.zIndex, animat.spriteZIndex(a)]));
+  r.check(z.length > 1 && z.every(([zz, expected]) => zz === String(expected) && Number.isInteger(expected)),
     `bug 7: every live sprite's z-index tracks its position (${z.length} checked)`);
   r.noProblems(soak, "during soak");
   await soak.close();

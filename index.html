@@ -129,10 +129,12 @@
       top: 0;
       left: 0;
     }
-    /* this is already the implicit stacking -- better to be explicit anyway */
-    #tile-layer { z-index: 1; }
-    #sprite-layer { z-index: 2; }
-    #debug-layer { z-index: 3; }
+    /* Tiles and critter sprites share ONE stacking order so land tiles can be drawn over
+       swimmers in front of them: these two layers must NOT set a z-index of their own
+       (see "DRAWING ORDER" in animat.js). The debug layer stays above everything. */
+    #tile-layer { z-index: auto; }
+    #sprite-layer { z-index: auto; }
+    #debug-layer { z-index: 1000000; }
     /* On-screen movement pad: lives in #field-wrapper (NOT #field) so it never scrolls or zooms. */
     #move-pad {
       position: absolute;

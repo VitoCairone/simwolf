@@ -10,9 +10,12 @@ Usage (from anywhere; needs Python 3 with Pillow and numpy):
     python3 spritecraft/make_swim_sheets.py --wolf-cut 14   # try a different waterline height
     python3 spritecraft/make_swim_sheets.py --out-dir /tmp  # write somewhere else to compare
 
-After generating, it prints the smallest `topToShadow` each sheet needs for its swim pose
-in main.js (frameDataBySpeciesAndPose.<species>.swim) and compares it with the current
-value there. That value must be updated by hand if it changes.
+After generating, it checks the swim pose's `topToShadow` in main.js
+(frameDataBySpeciesAndPose.<species>.swim). The swim frames keep the land frames' ground
+point, so it must equal the land poses' value (39 wolf, 33 deer): the frames themselves
+draw the waterline WATER_SINK_PX lower, on the water surface. Land tiles in front of a
+swimmer are drawn over it by the game (animat.js, DRAWING ORDER), so no extra raise is
+needed to keep swimmers off the land in front of them.
 
 How each run frame becomes a swim frame:
   1. Drop the ground-shadow pixels (nothing casts a ground shadow in water).
@@ -226,20 +229,6 @@ def build(spec, cut, src_dir, out_path):
     return sheet
 
 
-def needed_top_to_shadow(sheet, out_frame):
-    """Smallest topToShadow keeping every pixel clear of land in front of the swimmer.
-    Land is drawn WATER_SINK_PX above water, so with land directly in front and to both
-    front sides the shoreline lies 8 - |dx|/2 px below the ground point (never above it)."""
-    out_w, out_h = out_frame
-    alpha = sheet[:, :, 3] > 0
-    worst = -math.inf
-    for y, x in zip(*np.nonzero(alpha)):
-        fx, fy = x % out_w, y % out_h
-        shoreline = max(0, WATER_SINK_PX - abs(fx + 0.5 - out_w / 2) / 2)
-        worst = max(worst, fy + 1 - shoreline)
-    return math.ceil(worst)
-
-
 def current_top_to_shadow(sheet_class):
     """Read the swim pose's topToShadow for this sheet class from main.js, if found."""
     try:
@@ -267,8 +256,8 @@ def main():
             continue
         cut = args.wolf_cut if species == "wolf" else args.deer_cut
         out_path = args.out_dir / spec["out"]
-        sheet = build(spec, cut, args.src_dir, out_path)
-        need = needed_top_to_shadow(sheet, spec["out_frame"])
+        build(spec, cut, args.src_dir, out_path)
+        need = spec["ground"][1]   # same as the land poses: frames keep the ground point
         have = current_top_to_shadow(spec["sheet_class"])
         status = ("matches main.js" if have == need else
                   f"main.js has {have}: update it to {need}" if have is not None else

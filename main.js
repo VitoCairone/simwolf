@@ -20,6 +20,10 @@ const zoomMax = 8;
 // parameters
 const tileSize = 32;
 const tileRiserPY = 8;
+// Water tiles in tiles.png draw their surface this many px lower than land surfaces, so
+// water looks sunken. Anything in water is drawn on that lower surface: a point on it
+// appears this far below the same grid point on land (half a tile, diagonally).
+const waterSurfaceDropPY = 8;
 
 const gridWidthN = 128; //3533088 = c * 1/60 sec / root2
 const gridHeightN = 128;
@@ -111,17 +115,12 @@ const frameDataBySpeciesAndPose = {
       holdTks: 5, topToShadow: 39 }, // placeholder
     gallop: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 }, // placeholder
-    // swim sheet is made from the run frames, same 7 facing rows.
-    // topToShadow is raised so swimmers never appear to sit on land in front of them.
-    // Sprites draw over all tiles, and land is drawn 8px higher than water, so a land
-    // tile screen-below the swimmer has its top corner 8px below the ground point, and
-    // that shoreline rises 1px per 2px to either side (8 - |dx|/2, never above 0).
-    // 57 is the smallest value that keeps every swim pixel above that worst case
-    // (land directly in front and to both front sides). The down-facing diagonal rows'
-    // tilted water rings reach lowest and set it; one value keeps every facing's
-    // waterline at the same height, so a turning swimmer doesn't hop.
+    // swim sheet is made from the run frames, same 7 facing rows. Its frames already
+    // draw the waterline waterSurfaceDropPY below the ground point, so the same
+    // topToShadow as on land puts the swimmer on the (lower) water surface. Land tiles
+    // in front of a swimmer are drawn over it (see animat.spriteZIndex).
     swim: {sheet: "wolf-swim", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
-      holdTks: 8, topToShadow: 57 },
+      holdTks: 8, topToShadow: 39 },
     // death: {nFrames: 2, colZero: 0, frameW: 64, frameH: 64,
     //   holdTks: 3, repeatLimit: 3, exitToPose: 'dead' }
   },
@@ -135,9 +134,9 @@ const frameDataBySpeciesAndPose = {
     gallop: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
       holdTks: 12, topToShadow: 33}, // placeholder
     // swim frames are 40x48 (wider/taller than land frames to fit the ripple ring).
-    // topToShadow raised for the same reason as the wolf's swim (see there).
+    // same topToShadow as the deer's land poses, as for the wolf's swim (see there)
     swim: {sheet: "deer-swim", nFrames: 10, colZero: 0, frameW: 40, frameH: 48,
-      holdTks: 10, topToShadow: 45 },
+      holdTks: 10, topToShadow: 33 },
     // death: col 45 is a pale hit-flash, col 46 the same pose in full color
     death: {sheet: "deer", nFrames: 2, colZero: 45, frameW: 32, frameH: 41,
       holdTks: 15, topToShadow: 33},

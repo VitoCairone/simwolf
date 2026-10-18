@@ -8,6 +8,23 @@ const debugWolfEl = document.getElementById("dbel-pc-wolf");
 
 const renderedTiles = new Map();
 
+// DRAWING ORDER (z-index) of tiles and critter sprites, which share one stacking order
+// (the layers in index.html don't set their own). Depth = gx + gy: larger is nearer the
+// camera. z-index must be an integer, so depths are scaled by 100.
+//   water tiles      0 .. 254         always lowest: the water surface is below land
+//   land tiles       1000 + 100*depth by depth, interleaved with swimmers
+//   swimmers         1000 + 100*depth so a land tile in front of a swimmer covers it
+//   land critters    100000 + depth   above all tiles (land is level, nothing hides them)
+// A land tile's depth is its center's (i + j + 1); a swimmer counts as half a tile
+// further back, so only land clearly in front of it (by more than half a tile) covers it.
+const zSwimLandBase = 1000;
+const zLandCritterBase = 100000;
+
+function tileZIndex(i, j, terrain) {
+  if (terrain === "water") return i + j;
+  return zSwimLandBase + (i + j + 1) * 100;
+}
+
 if (!consoleOnlyMode) {
   animat ||= {};
 
@@ -55,7 +72,7 @@ if (!consoleOnlyMode) {
 
         const tile = document.createElement("div");
         tile.className = `tile ${tileClass}`;
-        tile.style.zIndex = i + j;
+        tile.style.zIndex = tileZIndex(i, j, tileClass);
 
         const [px, py] = isoProject(i, j);
         tile.style.left = `${px - halfTile}px`;
@@ -134,9 +151,11 @@ if (!consoleOnlyMode) {
     // debug element, which has the dimensions of a tile (32 x 16),
     // should be placed so that its center is the same as the wolf's center;
     // to simplify the math it is its own image with no extra pixels.
+    // In water the wolf is on the water surface, which is drawn lower than land.
     const [isoX, isoY] = isoProject(pcWolf.gx, pcWolf.gy);
+    const surfaceDrop = pcWolf.pose === "swim" ? waterSurfaceDropPY : 0;
     debugWolfEl.style.left = (isoX - halfTile) + "px";
-    debugWolfEl.style.top = (isoY - qtrTile) + "px";
+    debugWolfEl.style.top = (isoY - qtrTile + surfaceDrop) + "px";
   }
 
   animat.centerCameraOnGXY = function(gx, gy) {
@@ -147,6 +166,12 @@ if (!consoleOnlyMode) {
   }
 
   animat.setCameraToPCWolf = function() { this.centerCameraOnGXY(pcWolf.gx, pcWolf.gy); }
+
+  animat.spriteZIndex = function(a) {
+    const depth = a.gx + a.gy;
+    if (a.pose === "swim") return zSwimLandBase + Math.round((depth + 0.5) * 100);
+    return zLandCritterBase + Math.round(depth * 100);
+  }
 
   animat.placeCritterSprite = function(a) {
     const [isoX, isoY] = isoProject(a.gx, a.gy);
@@ -161,7 +186,7 @@ if (!consoleOnlyMode) {
     a.element.style.top = (isoY - topOffset) + "px";
     // z-index must be an integer; a fractional value is silently ignored by the
     // browser, which froze each sprite's depth at its spawn value.
-    a.element.style.zIndex = Math.round((a.gx + a.gy) * 100);
+    a.element.style.zIndex = this.spriteZIndex(a);
 
     if (a === pcWolf) this.placeDebugWolfEl();
   }
