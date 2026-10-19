@@ -21,8 +21,8 @@ let g_next_uid = 0;
 let isPaused = false;
 
 // parameters
-const gridWidthN = 128; //3533088 = c * 1/60 sec / root2
-const gridHeightN = 128;
+const gridWidthN = 900; //3533088 = c * 1/60 sec / root2
+const gridHeightN = 900;
 
 // NOTE: tileMap and terrainTypes below are not used by anything (kept as reference).
 // when source becomes multiple files, read this sort of fixed data from its own file
@@ -294,19 +294,53 @@ function seaFieldAt(x, y) {
   ) * 0.25
 }
 
-// 2. RELIEF, 0..1: hills and hollows. Below lakeBelow is a lake; above it, the land's
-// elevation is how far above lakeBelow it is (landElevationAt), so the land rises from
-// the lakes' shores. lakeBelow is used for both: change it in one place only.
+// 2. RELIEF, about 0..1: the lie of the land. Below lakeBelow is a lake; above it, the
+// land's elevation is how far above lakeBelow it is (landElevationAt), so the land rises
+// from the lakes' shores. lakeBelow is used for both: change it in one place only.
+// It is made of three parts, on two scales:
+//   - REGIONS, hundreds of tiles across, give large areas their own character:
+//       hilliness  0 in plains .. 1 in hill country (with soft borders between)
+//       upland     -1 in lowlands .. 1 in uplands: how high the land lies overall, so
+//                  plains may be low (where shallow lakes gather) or raised plateaus
+//   - DETAIL, tens of tiles across: hills and hollows, scaled by the hilliness. Flat
+//     in plains (gentle undulation only), full height in hill country, where lakes lie in
+//     the valleys. It uses smooth waves for rounded tops and floors, and is sampled on
+//     warped coordinates so it doesn't repeat in a regular pattern.
+// (Region sizes are in tiles, not fractions of the map: a small map may lie within one
+// or two regions.)
 const lakeBelow = 0.44;
+const reliefBase = 0.52;           // relief of the average plain
+const reliefUplandRange = 0.08;    // how much higher uplands are, and lowlands lower
+const reliefHillsLift = 0.06;      // hill country also lies a little higher
+const reliefPlainsDetail = 0.1;    // share of the full detail left in plains
+const hillinessFrom = 0.35;        // the hilliness field's plains (below) ...
+const hillinessTo = 0.65;          // ... and hill country (above)
 
 function reliefAt(x, y) {
-  const sum = x + y;
-  const dif = x - y;
-  const fastNoise = jag(x / 19) + jag(y / 23) + jag(sum / 29) + jag(dif / 31); // => [0, 4]
-  const slowNoise = (jag(x / 37) + jag(y / 41) + jag(sum / 43) + jag(dif / 47)) * 0.3
-    + (jag(x / 53) + jag(y / 59) + jag(sum / 61) + jag(dif / 67)) * 0.2; // => [0, 2]
-  return (fastNoise + slowNoise) / 6;
+  // regions: how hilly...
+  const h = (wave(x / 311 + 0.6 * wave(y / 263)) + wave(y / 337 + 0.6 * wave(x / 229))) / 2;
+  const t = Math.min(1, Math.max(0, (h - hillinessFrom) / (hillinessTo - hillinessFrom)));
+  const hilliness = t * t * (3 - 2 * t);
+  // ...and how high the land lies
+  const upland = wave(x / 401 + 0.3) + wave(y / 367 + 0.7) - 1;
+
+  // detail, on warped coordinates
+  const wx = x + 22 * (wave(y / 97 + 0.5 * wave(x / 71)) - 0.5) + 12 * (wave((x + y) / 53) - 0.5);
+  const wy = y + 22 * (wave(x / 89 + 0.5 * wave(y / 83)) - 0.5) + 12 * (wave((x - y) / 59) - 0.5);
+  const sum = wx + wy;
+  const dif = wx - wy;
+  const fastNoise = wave(wx / 19) + wave(wy / 23) + wave(sum / 29) + wave(dif / 31); // => [0, 4]
+  const slowNoise = (jag(wx / 37) + jag(wy / 41) + jag(sum / 43) + jag(dif / 47)) * 0.3
+    + (jag(wx / 53) + jag(wy / 59) + jag(sum / 61) + jag(dif / 67)) * 0.2; // => [0, 2]
+  const detail = (fastNoise + slowNoise) / 6 - 0.5; // -0.5..0.5
+
+  return reliefBase + reliefUplandRange * upland + reliefHillsLift * hilliness
+    + detail * (reliefPlainsDetail + (1 - reliefPlainsDetail) * hilliness);
 }
+
+// The highest relief reliefAt can give: uplands (upland 1), full hill country (hilliness
+// 1) and the detail at its top (0.5). Keep in step with reliefAt.
+const reliefHighest = reliefBase + reliefUplandRange + reliefHillsLift + 0.5;
 
 // Elevation of land above the lakes' level, in relief units (negative = a lake).
 function landElevationAt(x, y) {
@@ -427,8 +461,8 @@ function isBlockedTile(gx, gy) {
 // tile's surface is the bilinear blend of its four corners. A tile's corners are all at
 // its base level m or m + 1, so a tile is flat or one of 14 slope shapes. (One level is
 // drawn as one block riser high; see animat.js.)
-//   - Land rises with its elevation (landElevationAt, from RELIEF): levelsPerReliefUnit
-//     levels per unit of relief above the lakes' level.
+//   - Land rises with its elevation (landElevationAt, from RELIEF), scaled so that the
+//     highest relief possible (reliefHighest) would be at maxElevation levels.
 //   - All water (whatever getTerrainAt calls water: sea or lake) is flat at level 0, and
 //     so is every vertex touching water: lakes and the sea share one water level, and
 //     shores meet it. Where the sea cuts across high land, that makes a sea cliff.
@@ -438,7 +472,13 @@ function isBlockedTile(gx, gy) {
 //     meet its neighbours' and a cliff face stands between them.
 // Moving, a critter can step up or down a ledge of up to maxStepLevels; anything higher
 // blocks it, like a boulder does.
-const levelsPerReliefUnit = 20;
+// maxElevation: the elevation, in levels, of the highest ground the terrain could
+// possibly have. Tiles are whole levels, so no tile can be higher than
+// floor(maxElevation) (14); a given map's highest is usually lower (maxLevel: 11 on the
+// 900 x 900 map). Raise it for taller hills and deeper valleys, lower it for gentler
+// land: every elevation scales with it.
+const maxElevation = 90;
+const levelsPerReliefUnit = maxElevation / (reliefHighest - lakeBelow); // 20
 const maxStepLevels = 1.5; // a one-level ledge can be stepped; two levels or more can't
 
 function isWaterTile(i, j) {
