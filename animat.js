@@ -25,6 +25,9 @@ const qtrTile = tileSize / 4;
 // water looks sunken. Anything in water is drawn on that lower surface: a point on it
 // appears this far below the same grid point on land (half a tile, diagonally).
 const waterSurfaceDropPY = 8;
+// Terrain height (see TERRAIN HEIGHT in sim.js): one level is drawn one block riser high,
+// so stacked blocks make cliffs and the water surface sits one level below level-0 land.
+const levelHeightPY = tileRiserPY;
 let worldRadPX = 0;  // set by attach(), from the grid size
 let worldDiamPY = 0;
 
@@ -38,6 +41,13 @@ function isoProject(gx, gy) {
   const px = (gx - gy) * halfTile;
   const py = (gx + gy) * qtrTile;
   return [px, py];
+}
+
+// Where a grid point on the ground is drawn: its isometric position raised by the
+// ground's height there.
+function groundProject(gx, gy) {
+  const [px, py] = isoProject(gx, gy);
+  return [px, py - sim.heightAt(gx, gy) * levelHeightPY];
 }
 
 function rectiProject(px, py) {
@@ -185,7 +195,7 @@ function measureViewport() {
 }
 
 function centerShiftOn(gx, gy) {
-  const [px, py] = isoProject(gx, gy);
+  const [px, py] = groundProject(gx, gy);
   camera.shiftPX = px - viewportWidth / 2;
   camera.shiftPY = py - viewportHeight / 2;
 }
@@ -237,33 +247,94 @@ function renderVisibleTiles() {
   const iMax = Math.min(sim.gridWidthN - 1, Math.floor(cornerGs[3][0]));
   const jMin = Math.max(0, Math.floor(cornerGs[1][1]));
   const jMax = Math.min(sim.gridHeightN - 1, Math.floor(cornerGs[2][1]));
+  // ...and further down-screen, where raised ground can still reach up into view
+  const raisedRows = Math.ceil(sim.maxLevel * levelHeightPY / qtrTile);
+  const iMaxRaised = Math.min(sim.gridWidthN - 1, iMax + raisedRows);
+  const jMaxRaised = Math.min(sim.gridHeightN - 1, jMax + raisedRows);
 
   for (const [key, tile] of renderedTiles) {
     const [i, j] = key.split('_').map(Number);
-    if (i < iMin || i > iMax || j < jMin || j > jMax) {
+    if (i < iMin || i > iMaxRaised || j < jMin || j > jMaxRaised) {
       tileLayer.removeChild(tile);
       renderedTiles.delete(key);
     }
   }
 
-  for (let j = jMin; j <= jMax; j++) {
-    for (let i = iMin; i <= iMax; i++) {
+  for (let j = jMin; j <= jMaxRaised; j++) {
+    for (let i = iMin; i <= iMaxRaised; i++) {
       const key = `${i}_${j}`;
       if (renderedTiles.has(key)) continue;
-
-      const tileClass = getTileClassAt(i, j);
-      const tile = document.createElement("div");
-      tile.className = `tile ${tileClass}`;
-      tile.style.zIndex = tileZIndex(i, j, tileClass);
-
-      const [px, py] = isoProject(i, j);
-      tile.style.left = `${px - halfTile}px`;
-      tile.style.top = `${py - tileRiserPY}px`;
-
+      const tile = makeTileElement(i, j);
       tileLayer.appendChild(tile);
       renderedTiles.set(key, tile);
     }
   }
+}
+
+// GROUND: each land tile is drawn as a column (see images/ground-slopes.png, made by
+// spritecraft/make_slope_tiles.py): the sprite of its shape at its base level, whose
+// sides reach one level below the base like a flat block, then as many riser strips as
+// needed to reach down to the ground in front of it (where a cliff drops). Columns are
+// painted back to front (tileZIndex), so anything further down is covered by the ground
+// in front of it.
+const groundRowByTerrain = { grass: 0, dirt: 1, rock: 2 }; // sheet rows; rock stands on stone
+const groundCellW = 32, groundCellH = 40;
+const groundBaseY = 16;    // y of the base plane's N corner within a shape cell
+const riserCol = 15;       // sheet column of the one-level riser strip
+
+// The level a tile's front sides must reach down to, for the tile at (i, j) in front of
+// it: that tile's lowest corner; water and the map's edge show sides down to level -1
+// (the water surface is drawn one level below level-0 land).
+function frontGroundLevel(i, j) {
+  if (i >= sim.gridWidthN || j >= sim.gridHeightN) return -1;
+  if (sim.getTerrainAt(i, j) === "water") return -1;
+  return Math.min(...sim.tileCorners(i, j));
+}
+
+function groundPiece(col, row, top) {
+  const piece = document.createElement("div");
+  piece.className = "ground";
+  piece.style.top = `${top}px`;
+  piece.style.backgroundPosition = `-${col * groundCellW}px -${row * groundCellH}px`;
+  return piece;
+}
+
+function makeTileElement(i, j) {
+  const terrain = getTileClassAt(i, j);
+  const [px, py] = isoProject(i, j);
+  const tile = document.createElement("div");
+  tile.style.zIndex = tileZIndex(i, j, terrain);
+  tile.style.left = `${px - halfTile}px`;
+
+  if (terrain === "water") { // water is flat at level 0, its own flat tile
+    tile.className = `tile ${terrain}`;
+    tile.style.top = `${py - tileRiserPY}px`;
+    return tile;
+  }
+
+  // the column's origin is its base plane's N corner (less half a tile in x)
+  const corners = sim.tileCorners(i, j);
+  const base = Math.min(...corners);
+  const shape = (corners[0] - base) | (corners[1] - base) << 1
+    | (corners[2] - base) << 2 | (corners[3] - base) << 3;
+  const row = groundRowByTerrain[terrain];
+  if (row === undefined) return alert(`animat: no ground sprites for terrain "${terrain}"`);
+  tile.className = "ground-column";
+  tile.style.top = `${py - base * levelHeightPY}px`;
+
+  tile.appendChild(groundPiece(shape, row, -groundBaseY));
+  const floor = Math.min(frontGroundLevel(i, j + 1), frontGroundLevel(i + 1, j));
+  for (let k = 1; k <= base - 1 - floor; k++) {
+    tile.appendChild(groundPiece(riserCol, row, k * levelHeightPY));
+  }
+  if (terrain === "rock") { // the boulder, standing on the middle of the tile
+    const boulder = document.createElement("div");
+    boulder.className = "tile rock";
+    const centerAboveBase = (corners[0] + corners[1] + corners[2] + corners[3]) / 4 - base;
+    boulder.style.top = `${-tileRiserPY - centerAboveBase * levelHeightPY}px`;
+    tile.appendChild(boulder);
+  }
+  return tile;
 }
 
 // CRITTER SPRITES
@@ -294,8 +365,9 @@ function drawCritter(a) {
   const mirror = mirrorByDir[a.species]?.[a.currentDirection] ?? false;
   setStyle(s.node, s.css, "transform", mirror ? "scaleX(-1)" : "");
 
-  // critter image is offset so its noon-shadow center is at its grid coordinate
-  const [isoX, isoY] = isoProject(a.gx, a.gy);
+  // critter image is offset so its noon-shadow center is at its grid coordinate, on the
+  // ground (flat sprites for now, also on slopes)
+  const [isoX, isoY] = groundProject(a.gx, a.gy);
   const topOffset = fd.topToShadow ?? (fd.frameH / 2);
   setStyle(s.node, s.css, "left", `${isoX - fd.frameW / 2}px`);
   setStyle(s.node, s.css, "top", `${isoY - topOffset}px`);
@@ -327,7 +399,7 @@ function drawDebugWolf() {
   // to simplify the math it is its own image with no extra pixels.
   // In water the wolf is on the water surface, which is drawn lower than land.
   const w = sim.pcWolf;
-  const [isoX, isoY] = isoProject(w.gx, w.gy);
+  const [isoX, isoY] = groundProject(w.gx, w.gy);
   const surfaceDrop = w.pose === "swim" ? waterSurfaceDropPY : 0;
   setStyle(debugWolfEl, debugWolfCss, "left", (isoX - halfTile) + "px");
   setStyle(debugWolfEl, debugWolfCss, "top", (isoY - qtrTile + surfaceDrop) + "px");

@@ -110,6 +110,19 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   height: 48px;
   background-image: url('./images/stag-swim.png');
 }
+/* Land tiles: a .ground-column per tile, holding its .ground pieces (the shape sprite and
+   any cliff risers below it) and, on rock, a boulder (.tile.rock). See "GROUND" in
+   animat.js; the sheet is made by spritecraft/make_slope_tiles.py. */
+.ground-column { position: absolute; }
+.ground {
+  position: absolute;
+  left: 0;
+  width: 32px;
+  height: 40px;
+  background-image: url('./images/ground-slopes.png');
+  background-repeat: no-repeat;
+  image-rendering: pixelated;
+}
 #dbel-pc-wolf {
   position: absolute;
   width: 32px;

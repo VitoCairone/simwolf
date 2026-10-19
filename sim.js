@@ -239,28 +239,38 @@ function jag(x) {
   return 2 * Math.abs(x - Math.floor(x + 0.5));
 }
 
-function getTerrainAt(gx, gy) {
-  // ensure the same result for any point in the tile
-  const [x, y] = [gx, gy].map(v => Math.floor(v));
-
+// The sea: below 0.2 is open water. The map is a sea in the middle, a ring of land, a
+// ring of sea and land again in the corners.
+function baseAltAt(x, y) {
   // For desmos.com/3d:
   // 2*abs((x*x+y*y)-floor(x*x+y*y+0.5)) - 0.5
   // for x,y in range [-1.25, 1.25]
   const [rx, ry] = [x - gCX, y - gCY].map(v => v * 1.25 / gRad);
-  const baseAlt = jag(rx * rx + ry * ry) - 0.5 + (
+  return jag(rx * rx + ry * ry) - 0.5 + (
     jag(x / 103) + jag(y / 109) + jag ((x + y) / 127) + jag((x - y) / 199)
   ) * 0.04;
+}
 
-  if (baseAlt < 0.2) return "water"; // sea
-  if (baseAlt > 0.875) return "rock"; // mountain
-
+// Local relief, 0..1: lakes below 0.44, then grass, dirt, and rocky peaks above 0.7. It
+// is also the land's elevation (see TERRAIN HEIGHT).
+function unitVariantAt(x, y) {
   const sum = x + y;
   const dif = x - y;
   const fastNoise = jag(x / 19) + jag(y / 23) + jag(sum / 29) + jag(dif / 31); // => [0, 4]
   const slowNoise = (jag(x / 37) + jag(y / 41) + jag(sum / 43) + jag(dif / 47)) * 0.3
     + (jag(x / 53) + jag(y / 59) + jag(sum / 61) + jag(dif / 67)) * 0.2; // => [0, 2]
+  return (fastNoise + slowNoise) / 6;
+}
 
-  const unitVariant = (fastNoise + slowNoise) / 6;
+function getTerrainAt(gx, gy) {
+  // ensure the same result for any point in the tile
+  const [x, y] = [gx, gy].map(v => Math.floor(v));
+
+  const baseAlt = baseAltAt(x, y);
+  if (baseAlt < 0.2) return "water"; // sea
+  if (baseAlt > 0.875) return "rock"; // mountain
+
+  const unitVariant = unitVariantAt(x, y);
 
   if (unitVariant < 0.44) return "water";
   if (unitVariant > 0.7) return "rock";
@@ -275,6 +285,70 @@ function getTerrainAt(gx, gy) {
 
   if (unitVariant < 0.6) return "grass";
   if (unitVariant < 0.75) return "dirt";
+}
+
+// TERRAIN HEIGHT
+// Heights are in whole LEVELS, set at the grid's vertices (tile corners); between them a
+// tile's surface is the bilinear blend of its four corners. A tile's corners are all at
+// its base level m or m + 1, so a tile is flat or one of 14 slope shapes. (One level is
+// drawn as one block riser high; see animat.js.)
+//   - Land rises with unitVariant: levelsPerUnitVariant levels per unit above the
+//     water threshold (0.44).
+//   - All water is flat at level 0, and so is every vertex touching water: lakes and the
+//     sea share one water level, and shores meet it.
+//   - Where a tile's corners would differ by 2 or more levels the ground is too steep
+//     for a slope: the tile becomes a CLIFF tile. It keeps its tilt with its corners
+//     squeezed into [m, m + 1] (m = the floor of their average), so its edges no longer
+//     meet its neighbours' and a cliff face stands between them.
+// Moving, a critter can step up or down a ledge of up to maxStepLevels; anything higher
+// blocks it, like rock does.
+const levelsPerUnitVariant = 20;
+const maxStepLevels = 1.5; // a one-level ledge can be stepped; two levels or more can't
+
+function isWaterTile(i, j) {
+  return i >= 0 && j >= 0 && i < gridWidthN && j < gridHeightN && getTerrainAt(i, j) === "water";
+}
+
+// Corner levels of every tile, 4 per tile in the order NW, NE, SW, SE (NW = (i, j), the
+// tile's top corner on screen). Computed once: the terrain never changes.
+const tileCornerLevels = new Int16Array(gridWidthN * gridHeightN * 4);
+let maxLevel = 0;
+(function computeTerrainHeights() {
+  const W = gridWidthN, H = gridHeightN;
+  const vertex = new Int16Array((W + 1) * (H + 1)); // level of vertex (i, j) at i * (H + 1) + j
+  for (let i = 0; i <= W; i++) for (let j = 0; j <= H; j++) {
+    const touchesWater = isWaterTile(i, j) || isWaterTile(i - 1, j)
+      || isWaterTile(i, j - 1) || isWaterTile(i - 1, j - 1);
+    vertex[i * (H + 1) + j] = touchesWater ? 0
+      : Math.max(0, Math.floor((unitVariantAt(i, j) - 0.44) * levelsPerUnitVariant));
+  }
+  for (let i = 0; i < W; i++) for (let j = 0; j < H; j++) {
+    let c = [vertex[i * (H + 1) + j], vertex[(i + 1) * (H + 1) + j],
+             vertex[i * (H + 1) + j + 1], vertex[(i + 1) * (H + 1) + j + 1]];
+    if (isWaterTile(i, j)) c = [0, 0, 0, 0];
+    if (Math.max(...c) - Math.min(...c) >= 2) { // too steep: a cliff tile
+      const m = Math.floor((c[0] + c[1] + c[2] + c[3]) / 4);
+      c = c.map(l => Math.min(m + 1, Math.max(m, l)));
+    }
+    tileCornerLevels.set(c, (i * H + j) * 4);
+    maxLevel = Math.max(maxLevel, ...c);
+  }
+})();
+
+// The corner levels [NW, NE, SW, SE] of tile (i, j) (read only); all 0 off the map.
+const offMapCorners = new Int16Array(4);
+function tileCorners(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return offMapCorners;
+  const k = (i * gridHeightN + j) * 4;
+  return tileCornerLevels.subarray(k, k + 4);
+}
+
+// Height of the ground (in levels, fractional) at any grid point.
+function heightAt(gx, gy) {
+  const i = Math.floor(gx), j = Math.floor(gy);
+  const [nw, ne, sw, se] = tileCorners(i, j);
+  const u = gx - i, v = gy - j;
+  return nw * (1 - u) * (1 - v) + ne * u * (1 - v) + sw * (1 - u) * v + se * u * v;
 }
 
 function getOnTileXY(a) {
@@ -441,6 +515,13 @@ function updateAllCritters() {
     // keep the collision box (radius critterBoxRad) inside the grid
     if (nextGX >= critterBoxRad && nextGX < (gridWidthN - critterBoxRad)
       && nextGY >= critterBoxRad && nextGY < (gridHeightN - critterBoxRad)) {
+      if (Math.abs(heightAt(nextGX, nextGY) - heightAt(a.gx, a.gy)) > maxStepLevels) {
+        // a cliff in the way: stay put and decide what to do instead, as against rock
+        a.nextGX = a.gx;
+        a.nextGY = a.gy;
+        updateCritterAction(a);
+        return;
+      }
       a.nextGX = nextGX;
       a.nextGY = nextGY;
     } else {
@@ -751,11 +832,12 @@ function updateTerrainPose(a) {
 const returnToLandSureDist = 4;
 const returnToLandGiveUpTicks = 60;
 
-// Land = a tile a critter can stand on: not water, not impassable.
+// Land = a tile a critter can stand on and climb onto from the water: not water, not
+// impassable, and low enough somewhere to step up onto from the water (level 0).
 function isLandTile(i, j) {
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return false;
   const t = getTerrainAt(i, j);
-  return t !== "water" && !isImpassable(t);
+  return t !== "water" && !isImpassable(t) && Math.min(...tileCorners(i, j)) <= maxStepLevels;
 }
 
 // Nearest land tile to a critter: { tile: [i, j], dist } where dist is the distance from
@@ -1251,6 +1333,7 @@ return {
 
   // the world
   gridWidthN, gridHeightN, getTerrainAt,
+  tileCorners, heightAt, get maxLevel() { return maxLevel; },
   allCritters, allCorpses, pcWolf, deathDurationSBySpecies,
 
   // the player
@@ -1263,7 +1346,7 @@ return {
     tick, wolves, deer, allLandTiles,
     setCritterIdle, setCritterMoving, isInWater, isImpassable, getOccupiedTiles,
     forbidOverlapsOnStart, critterBoxRad, travelSpeedBySpeciesAndPose,
-    windRefillHalfLifeSByPose, staminaFullRefillSByPose,
+    windRefillHalfLifeSByPose, staminaFullRefillSByPose, maxStepLevels,
     get loopHandle() { return loopHandle; },
   },
 };
