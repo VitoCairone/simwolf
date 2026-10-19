@@ -24,12 +24,7 @@ let isPaused = false;
 const gridWidthN = 128; //3533088 = c * 1/60 sec / root2
 const gridHeightN = 128;
 
-// derived constants, set once on startup
-const gCX = gridWidthN / 2;
-const gCY = gridHeightN / 2;
-const gRadL2 = gCX * gCX + gCY * gCY;
-const gRad = Math.sqrt(gRadL2);
-
+// NOTE: tileMap and terrainTypes below are not used by anything (kept as reference).
 // when source becomes multiple files, read this sort of fixed data from its own file
 const tileMap = [
   ["dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt"],
@@ -234,6 +229,22 @@ function applyPlayerIntent() {
   }
 }
 
+// TERRAIN
+// Everything about the ground is a pure function of the tile: no memory, no random
+// numbers, cheap to evaluate anywhere, built from the two waves below. Each question has
+// its own field, and the fields are independent of each other:
+//   1. SEA           seaFieldAt     where the sea is: draws the coastline
+//   2. RELIEF        reliefAt       where the lakes are, and how high the land is
+//   3. GROUND COVER  groundCoverAt  grass, dirt or stone on land
+//   4. OBSTACLES     obstacleAt     boulders standing on land
+// getTerrainAt combines 1-3 into a tile's terrain type, and is the ONE place that decides
+// what is water (sea or lake): everything else asks it. TERRAIN HEIGHT (below) uses 2
+// for the land's height, and flattens whatever getTerrainAt calls water.
+//
+// Because 1 and 2 are independent, the sea's coastline cuts across the land at whatever
+// height the land has there (giving sea cliffs), while lakes, being the lowest relief,
+// always have gentle shores.
+
 // Triangle wave: 0 at whole numbers, 1 halfway between, straight lines in between.
 function jag(x) {
   return 2 * Math.abs(x - Math.floor(x + 0.5));
@@ -246,21 +257,48 @@ function wave(x) {
   return t * t * (3 - 2 * t);
 }
 
-// The sea: below 0.2 is open water. The map is a sea in the middle, a ring of land, a
-// ring of sea and land again in the corners.
-function baseAltAt(x, y) {
+// 1. SEA: a ring pattern around the map's center, wobbled. Below seaBelow is sea: the
+// map is a sea in the middle, a ring of land, a ring of sea, and land again in the
+// corners. The rings come from a triangle wave of the squared distance from the center
+// (q): the inner sea is the wave's first rise, the land ring is around its first crest
+// (q = 1/2), the outer sea its next trough, and so on.
+//
+// innerSeaShrink pulls the inner sea's coast out toward the crest, shrinking the inner
+// sea (0.5: about 25% less sea area) while leaving everything from the crest outward -
+// the ring's outer coast, the outer sea, the corners - exactly as it was. Inside the
+// crest q is remapped by t -> t * (1 + innerSeaShrink * (1 - t)), with t = 2q: 0 stays 0
+// and the crest stays the crest, so the field stays continuous. (Keep it within 0..1.)
+//
+// (getTerrainAt also turns the field above 0.875 into "mountain" stone. With the wobble
+// at 0.15 that now happens on about a dozen tiles, which skip the lake and ground-cover
+// rules.)
+const seaBelow = 0.2;
+const innerSeaShrink = 0.5;
+const mapCenterX = gridWidthN / 2;
+const mapCenterY = gridHeightN / 2;
+const mapCornerDist = Math.sqrt(mapCenterX * mapCenterX + mapCenterY * mapCenterY);
+
+function seaFieldAt(x, y) {
   // For desmos.com/3d:
   // 2*abs((x*x+y*y)-floor(x*x+y*y+0.5)) - 0.5
   // for x,y in range [-1.25, 1.25]
-  const [rx, ry] = [x - gCX, y - gCY].map(v => v * 1.25 / gRad);
-  return jag(rx * rx + ry * ry) - 0.5 + (
+  const [rx, ry] = [x - mapCenterX, y - mapCenterY].map(v => v * 1.25 / mapCornerDist);
+  let q = rx * rx + ry * ry;
+  if (q < 0.5) { // inside the land ring's crest: shrink the inner sea
+    const t = 2 * q;
+    q = 0.5 * t * (1 + innerSeaShrink * (1 - t));
+  }
+  return jag(q) - 0.7 + (
     jag(x / 103) + jag(y / 109) + jag ((x + y) / 127) + jag((x - y) / 199)
-  ) * 0.04;
+  ) * 0.25
 }
 
-// Local relief, 0..1: lakes below 0.44; above that it is the land's elevation (see
-// TERRAIN HEIGHT).
-function unitVariantAt(x, y) {
+// 2. RELIEF, 0..1: hills and hollows. Below lakeBelow is a lake; above it, the land's
+// elevation is how far above lakeBelow it is (landElevationAt), so the land rises from
+// the lakes' shores. lakeBelow is used for both: change it in one place only.
+const lakeBelow = 0.44;
+
+function reliefAt(x, y) {
   const sum = x + y;
   const dif = x - y;
   const fastNoise = jag(x / 19) + jag(y / 23) + jag(sum / 29) + jag(dif / 31); // => [0, 4]
@@ -269,33 +307,36 @@ function unitVariantAt(x, y) {
   return (fastNoise + slowNoise) / 6;
 }
 
+// Elevation of land above the lakes' level, in relief units (negative = a lake).
+function landElevationAt(x, y) {
+  return reliefAt(x, y) - lakeBelow;
+}
+
+// The terrain type of the tile containing (gx, gy): "water" (sea or lake), or the land's
+// ground cover ("grass", "dirt", "stone").
 function getTerrainAt(gx, gy) {
   // ensure the same result for any point in the tile
   const [x, y] = [gx, gy].map(v => Math.floor(v));
 
-  const baseAlt = baseAltAt(x, y);
-  if (baseAlt < 0.2) return "water"; // sea
-  if (baseAlt > 0.875) return "stone"; // mountain
-
-  const unitVariant = unitVariantAt(x, y);
-
-  if (unitVariant < 0.44) return "water";
+  const seaField = seaFieldAt(x, y);
+  if (seaField < seaBelow) return "water"; // sea
+  if (landElevationAt(x, y) < 0) return "water"; // lake
 
   return groundCoverAt(x, y);
-
-  // const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
-  // const pseudoRandom = hash - Math.floor(hash); // [0, 1)
-  // if (pseudoRandom < 0.75 * Math.pow(1 - (unitVariant * 2 - 0.5), 3)) return "bush";
-
-  // const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
-  // const types = ["dirt", "grass", "bush"];
-  // return types[Math.abs(typePseudorandInt) % types.length];
 }
 
-// GROUND COVER of land: grass, dirt or stone, independent of height (all passable;
-// boulders are separate, see OBSTACLES). Like the rest of the
-// terrain it is a pure function of the tile (no memory, no random numbers), cheap to
-// evaluate anywhere, and it makes continuous regions:
+// (Earlier experiments, not used. Note they rely on pseudorandom hashing, which the
+// terrain functions above avoid.)
+//   const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
+//   const pseudoRandom = hash - Math.floor(hash); // [0, 1)
+//   if (pseudoRandom < 0.75 * Math.pow(1 - (unitVariant * 2 - 0.5), 3)) return "bush";
+//
+//   const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
+//   const types = ["dirt", "grass", "bush"];
+//   return types[Math.abs(typePseudorandInt) % types.length];
+
+// 3. GROUND COVER of land: grass, dirt or stone, independent of height (all passable;
+// boulders are separate, see OBSTACLES). It makes continuous regions:
 //   1. warp: the tile's position is shifted by amounts that themselves vary slowly over
 //      the map (twice: broad and finer), so region edges meander instead of running
 //      along the straight lines and regular spacing of the waves below
@@ -329,11 +370,10 @@ function groundCoverAt(x, y) {
   return "grass";
 }
 
-// OBSTACLES: impassable objects standing on a tile, separate from what the ground is.
-// For now the only one is the boulder, on any land tile (none on water). Like the
-// terrain, placement is a pure function of the tile: no memory, no random numbers, and
-// cheap: a few triangle and smooth waves, no square roots or trig, and most tiles are
-// decided after the first test or two. Boulders cover about 4% of land, in two forms:
+// 4. OBSTACLES: impassable objects standing on a tile, separate from what the ground is.
+// For now the only one is the boulder, on any land tile (none on water: it asks
+// getTerrainAt). It is kept cheap: a few triangle and smooth waves, no square roots or
+// trig, and most tiles are decided after the first test or two. Boulders cover about 4% of land, in two forms:
 //   - WALLS one or two boulders thick, meandering in roughly parallel lines, only in some
 //     regions (running one way in some, another way in others) and broken by gaps. A
 //     wall is where jag(u) = 1/2 for a smoothly warped coordinate u: jag's slope is the
@@ -386,17 +426,18 @@ function isBlockedTile(gx, gy) {
 // tile's surface is the bilinear blend of its four corners. A tile's corners are all at
 // its base level m or m + 1, so a tile is flat or one of 14 slope shapes. (One level is
 // drawn as one block riser high; see animat.js.)
-//   - Land rises with unitVariant: levelsPerUnitVariant levels per unit above the
-//     water threshold (0.44).
-//   - All water is flat at level 0, and so is every vertex touching water: lakes and the
-//     sea share one water level, and shores meet it.
+//   - Land rises with its elevation (landElevationAt, from RELIEF): levelsPerReliefUnit
+//     levels per unit of relief above the lakes' level.
+//   - All water (whatever getTerrainAt calls water: sea or lake) is flat at level 0, and
+//     so is every vertex touching water: lakes and the sea share one water level, and
+//     shores meet it. Where the sea cuts across high land, that makes a sea cliff.
 //   - Where a tile's corners would differ by 2 or more levels the ground is too steep
 //     for a slope: the tile becomes a CLIFF tile. It keeps its tilt with its corners
 //     squeezed into [m, m + 1] (m = the floor of their average), so its edges no longer
 //     meet its neighbours' and a cliff face stands between them.
 // Moving, a critter can step up or down a ledge of up to maxStepLevels; anything higher
 // blocks it, like a boulder does.
-const levelsPerUnitVariant = 20;
+const levelsPerReliefUnit = 20;
 const maxStepLevels = 1.5; // a one-level ledge can be stepped; two levels or more can't
 
 function isWaterTile(i, j) {
@@ -414,7 +455,7 @@ let maxLevel = 0;
     const touchesWater = isWaterTile(i, j) || isWaterTile(i - 1, j)
       || isWaterTile(i, j - 1) || isWaterTile(i - 1, j - 1);
     vertex[i * (H + 1) + j] = touchesWater ? 0
-      : Math.max(0, Math.floor((unitVariantAt(i, j) - 0.44) * levelsPerUnitVariant));
+      : Math.max(0, Math.floor(landElevationAt(i, j) * levelsPerReliefUnit));
   }
   for (let i = 0; i < W; i++) for (let j = 0; j < H; j++) {
     let c = [vertex[i * (H + 1) + j], vertex[(i + 1) * (H + 1) + j],
