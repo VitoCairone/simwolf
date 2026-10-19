@@ -235,8 +235,16 @@ function applyPlayerIntent() {
   }
 }
 
+// Triangle wave: 0 at whole numbers, 1 halfway between, straight lines in between.
 function jag(x) {
   return 2 * Math.abs(x - Math.floor(x + 0.5));
+}
+
+// Smooth wave: like jag, but eased (smoothstep) so it rounds off at 0 and 1 instead of
+// turning sharply. Thresholds on sums of these give rounded regions, not polygons.
+function wave(x) {
+  const t = jag(x);
+  return t * t * (3 - 2 * t);
 }
 
 // The sea: below 0.2 is open water. The map is a sea in the middle, a ring of land, a
@@ -251,8 +259,8 @@ function baseAltAt(x, y) {
   ) * 0.04;
 }
 
-// Local relief, 0..1: lakes below 0.44, then grass, dirt, and rocky peaks above 0.7. It
-// is also the land's elevation (see TERRAIN HEIGHT).
+// Local relief, 0..1: lakes below 0.44; above that it is the land's elevation (see
+// TERRAIN HEIGHT).
 function unitVariantAt(x, y) {
   const sum = x + y;
   const dif = x - y;
@@ -273,7 +281,8 @@ function getTerrainAt(gx, gy) {
   const unitVariant = unitVariantAt(x, y);
 
   if (unitVariant < 0.44) return "water";
-  if (unitVariant > 0.7) return "rock";
+
+  return groundCoverAt(x, y);
 
   // const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
   // const pseudoRandom = hash - Math.floor(hash); // [0, 1)
@@ -282,9 +291,42 @@ function getTerrainAt(gx, gy) {
   // const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
   // const types = ["dirt", "grass", "bush"];
   // return types[Math.abs(typePseudorandInt) % types.length];
+}
 
-  if (unitVariant < 0.6) return "grass";
-  if (unitVariant < 0.75) return "dirt";
+// GROUND COVER of land: grass, dirt or rock, independent of height. Like the rest of the
+// terrain it is a pure function of the tile (no memory, no random numbers), cheap to
+// evaluate anywhere, and it makes continuous regions:
+//   1. warp: the tile's position is shifted by amounts that themselves vary slowly over
+//      the map (twice: broad and finer), so region edges meander instead of running
+//      along the straight lines and regular spacing of the waves below
+//   2. patch: four smooth waves of incommensurate periods, in four directions, sampled
+//      at the warped position; their average (0..1, mostly near 0.5) sets the region
+//   3. fringe: a little fast variation, so edges are ragged at the scale of single tiles
+// Highest patch values are rock, set inside the next band, dirt: rocky outcrops in bare
+// ground, among grass. (About 71% grass, 25% dirt, 4% rock on the current map.)
+const coverPatchTiles = 23;   // patch size: the waves' base period, in tiles
+const coverWarpTiles = 14;    // how far the broad warp moves a point, at most
+const coverFineWarpTiles = 5; // how far the finer warp moves it
+const coverFringe = 0.08;     // weight of the tile-scale raggedness
+const coverDirtAbove = 0.6;   // patch value above which ground is dirt...
+const coverRockAbove = 0.8;   // ...and rock
+
+function groundCoverAt(x, y) {
+  const ox = coverWarpTiles * (wave(y / 37 + 0.5 * wave(x / 53)) + wave((x - y) / 47) - 1);
+  const oy = coverWarpTiles * (wave(x / 41 + 0.5 * wave(y / 59)) + wave((x + y) / 61) - 1);
+  const wx = x + ox, wy = y + oy;
+  const vx = wx + coverFineWarpTiles * (wave(wy / 13) - 0.5);
+  const vy = wy + coverFineWarpTiles * (wave(wx / 11) - 0.5);
+
+  const s = coverPatchTiles;
+  const patch = (wave(vx / s) + wave(vy / (s * 1.13))
+    + wave((vx + vy) / (s * 1.41)) + wave((vx - vy) / (s * 1.73))) / 4;
+  const fringe = (jag(x / 3.7) + jag(y / 4.3) + jag((x + y) / 5.9)) / 3;
+  const v = patch + coverFringe * (fringe - 0.5);
+
+  if (v > coverRockAbove) return "rock";
+  if (v > coverDirtAbove) return "dirt";
+  return "grass";
 }
 
 // TERRAIN HEIGHT

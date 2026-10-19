@@ -1,6 +1,6 @@
 // Terrain height (see TERRAIN HEIGHT in sim.js): slopes, cliffs and flat water.
 //  - every tile is flat or one of the 14 slope shapes (corners within one level); water
-//    is flat at level 0; the map has both slopes and cliffs
+//    is flat at level 0; the map has both slopes and cliffs; ground cover isn't set by height
 //  - a critter is drawn at the ground's height, rising and falling as it walks a slope
 //  - a cliff of two levels or more blocks a critter; a one-level ledge doesn't
 // Saves a screenshot of the highest ground to tests/output/terrain/.
@@ -34,6 +34,18 @@ async function main(browser, r) {
   r.check(t.slopes > 500 && t.cliffEdges > 20 && t.maxLevel >= 4,
     `the map has slopes and cliffs: ${t.slopes} slope tiles, ${t.cliffEdges} cliff edges, ` +
     `${t.ledgeEdges} one-level ledges, heights up to level ${t.maxLevel}`);
+
+  // ground cover (grass, dirt, rock) doesn't follow height: each occurs across many levels
+  const cover = await p.evaluate(() => {
+    const levels = { grass: new Set(), dirt: new Set(), rock: new Set() };
+    for (let i = 0; i < sim.gridWidthN; i++) for (let j = 0; j < sim.gridHeightN; j++) {
+      const t = sim.getTerrainAt(i, j);
+      if (levels[t]) levels[t].add(Math.min(...sim.tileCorners(i, j)));
+    }
+    return Object.fromEntries(Object.entries(levels).map(([t, l]) => [t, l.size]));
+  });
+  r.check(cover.grass >= 4 && cover.dirt >= 4 && cover.rock >= 3,
+    `ground cover is independent of height: grass at ${cover.grass} levels, dirt at ${cover.dirt}, rock at ${cover.rock}`);
 
   // 2. a critter is drawn at the ground's height
   const drawn = await p.evaluate(() => {
