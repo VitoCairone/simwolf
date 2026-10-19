@@ -33,14 +33,14 @@ async function openGame(browser, { viewport, initScript, initArg } = {}) {
 }
 
 // Moves a critter (default: the player's wolf) to the middle of open dry land, at least
-// `radius` tiles from any water, rock or bush, stops it, and centers the camera on it.
+// `radius` tiles from any water or blocked tile (boulder), stops it, and centers the camera on it.
 // Use this before tests that expect land poses (walk/trot/gallop/idle): critters can
 // otherwise wander into water and swim. With clearOthers, every other critter is moved
 // off the map so nothing gets in the way.
-async function moveToOpenLand(page, { who = "pcWolf", radius = 6, clearOthers = false } = {}) {
+async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = false } = {}) {
   return page.evaluate(({ who, radius, clearOthers }) => {
     const a = who === "pcWolf" ? sim.pcWolf : eval(who);
-    const dry = (i, j) => { const t = sim.getTerrainAt(i, j); return t !== "water" && !sim.internals.isImpassable(t); };
+    const dry = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.internals.isBlockedTile(i, j);
     const tile = sim.internals.allLandTiles.find(([i, j]) => {
       if (i < radius || j < radius || i >= sim.gridWidthN - radius || j >= sim.gridHeightN - radius) return false;
       for (let di = -radius; di <= radius; di++)

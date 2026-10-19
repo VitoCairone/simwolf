@@ -28,8 +28,8 @@ async function main(browser, r) {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
     });
     window.__openTile = sim.internals.allLandTiles.find(([i, j]) => {
-      for (let di = -6; di <= 6; di++) for (let dj = -6; dj <= 6; dj++)
-        if (sim.internals.isImpassable(sim.getTerrainAt(i + di, j + dj)) || sim.getTerrainAt(i + di, j + dj) === "water") return false;
+      for (let di = -4; di <= 4; di++) for (let dj = -4; dj <= 4; dj++)
+        if (sim.internals.isBlockedTile(i + di, j + dj) || sim.getTerrainAt(i + di, j + dj) === "water") return false;
       return true;
     });
   });

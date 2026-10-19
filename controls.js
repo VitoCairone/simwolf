@@ -83,7 +83,8 @@ function onMovePadPointer(e) {
   // normalized vector from pad center; |v| = 1 at the outer ring
   const vx = (e.clientX - (rect.left + radPX)) / radPX;
   const vy = (e.clientY - (rect.top + rect.height / 2)) / radPX;
-  const ring = movePadRings.find(r => Math.hypot(vx, vy) <= r.frac);
+  const radiusL2 = vx * vx + vy * vy; // squared, compared with each ring's squared radius
+  const ring = movePadRings.find(r => radiusL2 <= r.frac * r.frac);
 
   // the pad element is square; its corners are outside the circles
   if (!ring) return releaseMovePad();

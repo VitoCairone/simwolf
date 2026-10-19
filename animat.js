@@ -277,11 +277,11 @@ function renderVisibleTiles() {
 // needed to reach down to the ground in front of it (where a cliff drops). Columns are
 // painted back to front (tileZIndex), so anything further down is covered by the ground
 // in front of it.
-const groundRowByTerrain = { grass: 0, dirt: 1, rock: 2 }; // sheet rows; rock stands on stone
+const groundRowByTerrain = { grass: 0, dirt: 1, stone: 2 }; // sheet rows
 const groundCellW = 32, groundCellH = 40;
 const groundBaseY = 16;    // y of the base plane's N corner within a shape cell
 const riserCol = 15;       // sheet column of the one-level riser strip
-// The boulder (.tile.rock in tiles.png) is drawn with no ground of its own: it rests on
+// The boulder (.tile.boulder: its image in tiles.png) has no ground of its own: it rests on
 // its tile. In its 32 x 32 cell its footprint's widest corners are on row 25 (columns 7
 // and 25) and its front tip on row 30, so the footprint's center, row 25, goes on the
 // ground at the tile's center.
@@ -332,9 +332,9 @@ function makeTileElement(i, j) {
   for (let k = 1; k <= base - 1 - floor; k++) {
     tile.appendChild(groundPiece(riserCol, row, k * levelHeightPY));
   }
-  if (terrain === "rock") { // the boulder, resting on the middle of the tile
+  if (sim.obstacleAt(i, j) === "boulder") { // resting on the middle of the tile
     const boulder = document.createElement("div");
-    boulder.className = "tile rock";
+    boulder.className = "tile boulder";
     // the tile's center on its surface, in the column's coordinates (base N corner = 0)
     const centerAboveBase = (corners[0] + corners[1] + corners[2] + corners[3]) / 4 - base;
     const centerY = isoProject(0.5, 0.5)[1] - centerAboveBase * levelHeightPY;

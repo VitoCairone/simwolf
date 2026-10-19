@@ -35,17 +35,17 @@ async function main(browser, r) {
     `the map has slopes and cliffs: ${t.slopes} slope tiles, ${t.cliffEdges} cliff edges, ` +
     `${t.ledgeEdges} one-level ledges, heights up to level ${t.maxLevel}`);
 
-  // ground cover (grass, dirt, rock) doesn't follow height: each occurs across many levels
+  // ground cover (grass, dirt, stone) doesn't follow height: each occurs across many levels
   const cover = await p.evaluate(() => {
-    const levels = { grass: new Set(), dirt: new Set(), rock: new Set() };
+    const levels = { grass: new Set(), dirt: new Set(), stone: new Set() };
     for (let i = 0; i < sim.gridWidthN; i++) for (let j = 0; j < sim.gridHeightN; j++) {
       const t = sim.getTerrainAt(i, j);
       if (levels[t]) levels[t].add(Math.min(...sim.tileCorners(i, j)));
     }
     return Object.fromEntries(Object.entries(levels).map(([t, l]) => [t, l.size]));
   });
-  r.check(cover.grass >= 4 && cover.dirt >= 4 && cover.rock >= 3,
-    `ground cover is independent of height: grass at ${cover.grass} levels, dirt at ${cover.dirt}, rock at ${cover.rock}`);
+  r.check(cover.grass >= 4 && cover.dirt >= 4 && cover.stone >= 3,
+    `ground cover is independent of height: grass at ${cover.grass} levels, dirt at ${cover.dirt}, stone at ${cover.stone}`);
 
   // 2. a critter is drawn at the ground's height
   const drawn = await p.evaluate(() => {
@@ -72,7 +72,7 @@ async function main(browser, r) {
   // dry, passable tiles, and walk a wolf straight at each from the tile beside it.
   const walk = await p.evaluate(() => {
     const T = (i, j) => sim.getTerrainAt(i, j);
-    const dry = (i, j) => T(i, j) !== "water" && !sim.internals.isImpassable(T(i, j));
+    const dry = (i, j) => T(i, j) !== "water" && !sim.internals.isBlockedTile(i, j);
     sim.allCritters.filter(c => c !== sim.pcWolf).forEach(c => {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
     });

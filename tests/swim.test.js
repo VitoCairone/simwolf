@@ -17,7 +17,7 @@ async function main(browser, r) {
     for (let i = 4; i < sim.gridWidthN - 12; i++) for (let j = 4; j < sim.gridHeightN - 4; j++) {
       let ok = true;
       for (let k = 0; k < 3 && ok; k++) for (let dj = -1; dj <= 1 && ok; dj++)
-        if (sim.internals.isImpassable(T(i - k, j + dj)) || T(i - k, j + dj) === "water") ok = false;
+        if (sim.internals.isBlockedTile(i - k, j + dj) || T(i - k, j + dj) === "water") ok = false;
       for (let k = 1; k <= 8 && ok; k++) for (let dj = -1; dj <= 1 && ok; dj++)
         if (T(i + k, j + dj) !== "water") ok = false;
       if (ok) return { shore: [i, j] };

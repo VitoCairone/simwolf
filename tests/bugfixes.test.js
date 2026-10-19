@@ -19,7 +19,7 @@ async function main(browser, r) {
       let s = 0, o = 0;
       sim.allCritters.forEach((a, i) => {
         if (sim.internals.getOccupiedTiles(a.gx, a.gy).some(t =>
-          sim.internals.isImpassable(sim.getTerrainAt(...t.split("_").map(Number))))) s++;
+          sim.internals.isBlockedTile(...t.split("_").map(Number)))) s++;
         sim.allCritters.slice(i + 1).forEach(b => {
           const span = 2 * sim.internals.critterBoxRad;
           if (Math.abs(a.gx - b.gx) < span && Math.abs(a.gy - b.gy) < span) o++;
@@ -31,7 +31,7 @@ async function main(browser, r) {
     if (page.problems.length) r.noProblems(page, `(load ${k})`);
     await page.close();
   }
-  r.check(badSpawns === 0, `bug 1: spawns touching impassable terrain across ${LOADS} loads = ${badSpawns}`);
+  r.check(badSpawns === 0, `bug 1: spawns touching blocked tiles across ${LOADS} loads = ${badSpawns}`);
   r.check(overlaps === 0, `bug 2: overlapping spawn pairs across ${LOADS} loads = ${overlaps}`);
 
   const page = await openGame(browser);
@@ -52,7 +52,7 @@ async function main(browser, r) {
     // find open ground with room for both
     const t = sim.internals.allLandTiles.find(([i, j]) =>
       [-1, 0, 1, 2, 3].every(di => [-1, 0, 1].every(dj => {
-        const t = sim.getTerrainAt(i + di, j + dj); return !sim.internals.isImpassable(t) && t !== "water"; })));
+        return !sim.internals.isBlockedTile(i + di, j + dj) && sim.getTerrainAt(i + di, j + dj) !== "water"; })));
     // move everyone else far away
     sim.allCritters.filter(c => c !== w && c !== d).forEach(c => {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;

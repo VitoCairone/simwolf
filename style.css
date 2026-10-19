@@ -111,7 +111,7 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   background-image: url('./images/stag-swim.png');
 }
 /* Land tiles: a .ground-column per tile, holding its .ground pieces (the shape sprite and
-   any cliff risers below it) and, on rock, a boulder (.tile.rock). See "GROUND" in
+   any cliff risers below it) and any obstacle on it (a boulder, .tile.boulder). See "GROUND" in
    animat.js; the sheet is made by spritecraft/make_slope_tiles.py. */
 .ground-column { position: absolute; }
 .ground {
@@ -176,7 +176,7 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
 .tile.bush      { background-position: -96px   -96px; }
 .tile.tallgrass { background-position: -160px  -96px; }
 .tile.flower    { background-position: -256px  -96px; }
-.tile.rock      { background-position: -288px -128px; }
+.tile.boulder   { background-position: -288px -128px; }
 .tile.stone     { background-position: -192px -160px; }
 .tile.water     { background-position: -192px -288px; }
 .tile.ice       { background-position:   0px  -320px; }

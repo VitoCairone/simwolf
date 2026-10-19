@@ -40,8 +40,9 @@ Set `CHROMIUM_PATH` to use a specific Chromium build instead of Playwright's.
 | `movepad.test.js` | Movement pad rings, direction, leaving the pad, camera mode vs wolf mode for the arrow keys, pad fixed under zoom. |
 | `gameloop.test.js` | Same game speed at 30/60/120/144 Hz, pause is immediate, step = one tick, rapid pause/unpause never starts a second loop, long stalls are capped. |
 | `movement.test.js` | No critter stays frozen for 50 game-seconds across 10 loads (spawn/collision deadlocks). Prints details for any frozen critter. |
+| `obstacles.test.js` | Boulders: only on land, infrequent, on every ground type, some forming barrier walls with gaps; stone ground is passable; a boulder blocks a walking wolf. Saves a screenshot of a barrier to `output/obstacles/`. |
 | `separation.test.js` | `sim.js` runs in Node with no browser (critters move, a player intent steers the wolf); the page defines only `sim`, `animat` and `controls`. |
-| `terrain.test.js` | Terrain height: every tile flat or a one-level slope, water flat at level 0, the map has slopes and cliffs, ground cover (grass/dirt/rock) found across many heights, critters drawn at the ground's height, a two-level cliff blocks a wolf and a one-level ledge doesn't. Saves a screenshot to `output/terrain/`. |
+| `terrain.test.js` | Terrain height: every tile flat or a one-level slope, water flat at level 0, the map has slopes and cliffs, ground cover (grass/dirt/stone) found across many heights, critters drawn at the ground's height, a two-level cliff blocks a wolf and a one-level ledge doesn't. Saves a screenshot to `output/terrain/`. |
 | `swim.test.js` | Water is passable: wolf and deer enter water and swim (own sheets, 5 / 8 km/h, no effect on wind or stamina), tread water when stopped, resume their land pose on shore. Saves screenshots to `output/swim/`. |
 | `facings.test.js` | Wolf sprite row and mirroring for all 8 directions, walking and idle. Saves screenshots to `output/facings/`. |
 

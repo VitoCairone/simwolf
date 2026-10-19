@@ -138,8 +138,7 @@ function randomlyPlaceCritter(a) {
     // collect all land tiles once
     for (var i = 0; i < gridWidthN; i++) {
       for (var j = 0; j < gridHeightN; j++) {
-        let ter = getTerrainAt(i, j);
-        if (ter !== "water" && ter !== "rock") allLandTiles.push([i, j]);
+        if (getTerrainAt(i, j) !== "water" && !isBlockedTile(i, j)) allLandTiles.push([i, j]);
       }
     }
   }
@@ -276,7 +275,7 @@ function getTerrainAt(gx, gy) {
 
   const baseAlt = baseAltAt(x, y);
   if (baseAlt < 0.2) return "water"; // sea
-  if (baseAlt > 0.875) return "rock"; // mountain
+  if (baseAlt > 0.875) return "stone"; // mountain
 
   const unitVariant = unitVariantAt(x, y);
 
@@ -293,7 +292,8 @@ function getTerrainAt(gx, gy) {
   // return types[Math.abs(typePseudorandInt) % types.length];
 }
 
-// GROUND COVER of land: grass, dirt or rock, independent of height. Like the rest of the
+// GROUND COVER of land: grass, dirt or stone, independent of height (all passable;
+// boulders are separate, see OBSTACLES). Like the rest of the
 // terrain it is a pure function of the tile (no memory, no random numbers), cheap to
 // evaluate anywhere, and it makes continuous regions:
 //   1. warp: the tile's position is shifted by amounts that themselves vary slowly over
@@ -302,14 +302,14 @@ function getTerrainAt(gx, gy) {
 //   2. patch: four smooth waves of incommensurate periods, in four directions, sampled
 //      at the warped position; their average (0..1, mostly near 0.5) sets the region
 //   3. fringe: a little fast variation, so edges are ragged at the scale of single tiles
-// Highest patch values are rock, set inside the next band, dirt: rocky outcrops in bare
-// ground, among grass. (About 71% grass, 25% dirt, 4% rock on the current map.)
+// Highest patch values are stone, set inside the next band, dirt: stony ground in bare
+// patches, among grass. (About 71% grass, 25% dirt, 4% stone on the current map.)
 const coverPatchTiles = 23;   // patch size: the waves' base period, in tiles
 const coverWarpTiles = 14;    // how far the broad warp moves a point, at most
 const coverFineWarpTiles = 5; // how far the finer warp moves it
 const coverFringe = 0.08;     // weight of the tile-scale raggedness
 const coverDirtAbove = 0.6;   // patch value above which ground is dirt...
-const coverRockAbove = 0.8;   // ...and rock
+const coverStoneAbove = 0.8;  // ...and stone
 
 function groundCoverAt(x, y) {
   const ox = coverWarpTiles * (wave(y / 37 + 0.5 * wave(x / 53)) + wave((x - y) / 47) - 1);
@@ -324,9 +324,61 @@ function groundCoverAt(x, y) {
   const fringe = (jag(x / 3.7) + jag(y / 4.3) + jag((x + y) / 5.9)) / 3;
   const v = patch + coverFringe * (fringe - 0.5);
 
-  if (v > coverRockAbove) return "rock";
+  if (v > coverStoneAbove) return "stone";
   if (v > coverDirtAbove) return "dirt";
   return "grass";
+}
+
+// OBSTACLES: impassable objects standing on a tile, separate from what the ground is.
+// For now the only one is the boulder, on any land tile (none on water). Like the
+// terrain, placement is a pure function of the tile: no memory, no random numbers, and
+// cheap: a few triangle and smooth waves, no square roots or trig, and most tiles are
+// decided after the first test or two. Boulders cover about 4% of land, in two forms:
+//   - WALLS one or two boulders thick, meandering in roughly parallel lines, only in some
+//     regions (running one way in some, another way in others) and broken by gaps. A
+//     wall is where jag(u) = 1/2 for a smoothly warped coordinate u: jag's slope is the
+//     same everywhere, so the walls keep an even width without measuring it. They can
+//     still cut off small patches of land here and there.
+//   - lone boulders, scattered in some areas, so that elsewhere there are open expanses.
+// Boulders block movement and sight.
+const wallHalfWidth = 0.085;  // of jag's 0..1 range; with wallSpacingTiles about 1.5 tiles thick
+const wallRag = 0.03;         // how much the walls' edges wander
+const wallWarpTiles = 9;      // how far the walls bend from straight lines
+const wallSpacingTiles = 23;  // distance between neighbouring walls in a region
+const wallRegionAbove = 0.8;  // walls running one way where the region field is above this...
+const wallRegionBelow = 0.2;  // ...and the other way where it is below this
+const wallGapTiles = 7;       // spacing of the gaps along walls
+const wallGapAbove = 0.75;    // larger = fewer, shorter gaps
+const loneBoulderAreaAbove = 0.55; // lone boulders only where this area field is above...
+const loneBoulderAbove = 0.8;      // ...and there, larger = fewer of them
+
+// The obstacle on tile (i, j) ("boulder"), or null.
+function obstacleAt(gx, gy) {
+  const x = Math.floor(gx), y = Math.floor(gy);
+  return isBoulderSite(x, y) && getTerrainAt(x, y) !== "water" ? "boulder" : null;
+}
+
+function isBoulderSite(x, y) {
+  const region = (jag(x / 71 + 0.3) + jag(y / 61 + 0.6)) / 2; // 0..1
+  let u = null;
+  if (region > wallRegionAbove) {
+    u = (x + wallWarpTiles * (wave(y / 17) + 0.6 * wave((x + y) / 29))) / wallSpacingTiles;
+  } else if (region < wallRegionBelow) {
+    u = (x + y + wallWarpTiles * (wave((x - y) / 19) + 0.6 * wave(y / 31))) / (wallSpacingTiles * 1.3);
+  }
+  if (u !== null) {
+    const rag = jag(x / 2.9) + jag(y / 3.3) - 1; // -1..1
+    if (Math.abs(jag(u) - 0.5) < wallHalfWidth + wallRag * rag
+      && jag(x / wallGapTiles) + jag(y / (wallGapTiles * 1.21)) < 2 * wallGapAbove) return true;
+  }
+  // lone boulders: only in some areas (leaving others open), scattered there
+  if (jag(x / 43 + 0.2) + jag(y / 37 + 0.7) < 2 * loneBoulderAreaAbove) return false;
+  return jag(x / 2.9) + jag(y / 3.3) + jag((x + y) / 4.7) + jag((x - y) / 5.3) > 4 * loneBoulderAbove;
+}
+
+// Whether a critter can't enter tile (i, j): impassable terrain or an obstacle on it.
+function isBlockedTile(gx, gy) {
+  return isImpassable(getTerrainAt(gx, gy)) || obstacleAt(gx, gy) !== null;
 }
 
 // TERRAIN HEIGHT
@@ -343,7 +395,7 @@ function groundCoverAt(x, y) {
 //     squeezed into [m, m + 1] (m = the floor of their average), so its edges no longer
 //     meet its neighbours' and a cliff face stands between them.
 // Moving, a critter can step up or down a ledge of up to maxStepLevels; anything higher
-// blocks it, like rock does.
+// blocks it, like a boulder does.
 const levelsPerUnitVariant = 20;
 const maxStepLevels = 1.5; // a one-level ledge can be stepped; two levels or more can't
 
@@ -522,7 +574,7 @@ function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
     if (fullTrace) {
       shifts.push([i, j]);
     } else {
-      if (isOpaque(getTerrainAt(...shiftToGrid([i, j])))) break;
+      if (blocksSight(...shiftToGrid([i, j]))) break;
     }
   }
 
@@ -558,7 +610,7 @@ function updateAllCritters() {
     if (nextGX >= critterBoxRad && nextGX < (gridWidthN - critterBoxRad)
       && nextGY >= critterBoxRad && nextGY < (gridHeightN - critterBoxRad)) {
       if (Math.abs(heightAt(nextGX, nextGY) - heightAt(a.gx, a.gy)) > maxStepLevels) {
-        // a cliff in the way: stay put and decide what to do instead, as against rock
+        // a cliff in the way: stay put and decide what to do instead, as at a boulder
         a.nextGX = a.gx;
         a.nextGY = a.gy;
         updateCritterAction(a);
@@ -869,7 +921,7 @@ function updateTerrainPose(a) {
 // that grows with its distance from the nearest land: distance / returnToLandSureDist,
 // so certain at returnToLandSureDist tiles or more. Once decided it swims straight for
 // the closest land tile and makes no other decisions until it is ashore. (If it stays
-// blocked for returnToLandGiveUpTicks, e.g. by rock in the way, it gives up and
+// blocked for returnToLandGiveUpTicks, e.g. by a boulder in the way, it gives up and
 // decides normally again, so it can't be stuck forever.)
 const returnToLandSureDist = 4;
 const returnToLandGiveUpTicks = 60;
@@ -879,25 +931,26 @@ const returnToLandGiveUpTicks = 60;
 function isLandTile(i, j) {
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return false;
   const t = getTerrainAt(i, j);
-  return t !== "water" && !isImpassable(t) && Math.min(...tileCorners(i, j)) <= maxStepLevels;
+  return t !== "water" && !isBlockedTile(i, j) && Math.min(...tileCorners(i, j)) <= maxStepLevels;
 }
 
-// Nearest land tile to a critter: { tile: [i, j], dist } where dist is the distance from
-// the critter to the closest point of that tile; null if there is no land on the map.
+// Nearest land tile to a critter: { tile: [i, j], distL2 } where distL2 is the SQUARED
+// distance from the critter to the closest point of that tile (squared, so no square
+// root is needed); null if there is no land on the map.
 function findNearestLand(a) {
   const ci = Math.floor(a.gx), cj = Math.floor(a.gy);
-  const distToTile = (i, j) => Math.hypot(
-    Math.max(i - a.gx, 0, a.gx - (i + 1)), Math.max(j - a.gy, 0, a.gy - (j + 1)));
+  const distToTileL2 = (i, j) => sqr(Math.max(i - a.gx, 0, a.gx - (i + 1)))
+    + sqr(Math.max(j - a.gy, 0, a.gy - (j + 1)));
   let best = null;
   const maxR = Math.max(gridWidthN, gridHeightN);
   // search square rings outward; a ring at radius r can't beat a find closer than r - 1
   for (let r = 0; r <= maxR; r++) {
-    if (best && best.dist <= r - 1) break;
+    if (best && r >= 1 && best.distL2 <= sqr(r - 1)) break;
     for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
       if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue; // ring only
       if (!isLandTile(i, j)) continue;
-      const d = distToTile(i, j);
-      if (!best || d < best.dist) best = { tile: [i, j], dist: d };
+      const d = distToTileL2(i, j);
+      if (!best || d < best.distL2) best = { tile: [i, j], distL2: d };
     }
   }
   return best;
@@ -906,7 +959,10 @@ function findNearestLand(a) {
 // Called at a swimming critter's decision time. Returns true if it decided to go ashore.
 function maybeDecideReturnToLand(a) {
   const land = findNearestLand(a);
-  if (!land || Math.random() >= Math.min(1, land.dist / returnToLandSureDist)) return false;
+  // chance min(1, distance / returnToLandSureDist), compared squared:
+  // random * sureDist >= distance  <=>  (random * sureDist)^2 >= distance^2
+  const roll = Math.random() * returnToLandSureDist;
+  if (!land || sqr(roll) >= land.distL2) return false;
   a.returnToLand = { gx: land.tile[0] + 0.5, gy: land.tile[1] + 0.5, blockedTicks: 0 };
   a.redecideCd = Infinity; // no other decisions until ashore (see endReturnToLand)
   steerToLand(a);
@@ -931,7 +987,7 @@ const wolfAudibleToDeerL2ByTerrainAndSpeed = {
   grass:   { walk: sqr(3),  trot: sqr(11), gallop: sqr(30) },
   dirt:    { walk: sqr(4),  trot: sqr(15), gallop: sqr(40) },
   leaves:  { walk: sqr(6),  trot: sqr(22), gallop: sqr(60) },
-  rock:    { walk: sqr(8),  trot: sqr(30), gallop: sqr(80) },
+  stone:   { walk: sqr(8),  trot: sqr(30), gallop: sqr(80) },
   gravel:  { walk: sqr(9),  trot: sqr(37), gallop: sqr(95) },
   water:   { walk: sqr(9),  trot: sqr(37), gallop: sqr(95), swim: sqr(12) }, // placeholder
   bush:    { walk: sqr(3),  trot: sqr(11), gallop: sqr(30) }, // placeholder
@@ -1062,7 +1118,7 @@ function setCritterMoving(a, dir, newPose = "walk") {
   const moveVec = moveVecByDir[dir];
   const [nextX, nextY] = [a.gx + moveVec[0], a.gy + moveVec[1]];
   // (not while heading for land: that makes no new decisions until ashore)
-  if (isImpassable(getTerrainAt(nextX, nextY)) && !a.returnToLand) {
+  if (isBlockedTile(nextX, nextY) && !a.returnToLand) {
     a.redecideCd = Math.min(a.redecideCd, 5);
   }
 }
@@ -1209,13 +1265,15 @@ function doNextBoundingBoxesOverlap(a, b) {
   return Math.abs(a.nextGX - b.nextGX) < span && Math.abs(a.nextGY - b.nextGY) < span;
 }
 
+// Terrain no critter can enter. (Water is passable: critters swim, see
+// updateTerrainPose. Boulders are obstacles, not terrain: see isBlockedTile.)
 function isImpassable(terrain) {
-  // water is passable: critters swim (see updateTerrainPose)
-  return terrain === "rock" || terrain === "bush";
+  return terrain === "bush";
 }
 
-function isOpaque(terrain) {
-  return terrain === "rock";
+// Whether tile (i, j) blocks the line of sight: a boulder does.
+function blocksSight(i, j) {
+  return obstacleAt(i, j) !== null;
 }
 
 // returns a list of pairs of integers e.g. [[1,2], [3,6]]
@@ -1230,8 +1288,10 @@ function findCollidingPairs(creatures) {
 
   const tileMap = new Map();  // key: tile "x_y", value: critter indexes
   const potentialPairs = new Set();  // store "i|j" where i < j
-  // terrain of each tile looked at this call, so each is computed once
+  // terrain of each tile looked at this call, and whether it's blocked, so each is
+  // computed once
   const terrainByTile = new Map();
+  const blockedByTile = new Map();
 
   for (let i = 0; i < creatures.length; i++) {
     const creature = creatures[i];
@@ -1250,11 +1310,12 @@ function findCollidingPairs(creatures) {
         const [tileX, tileY] = tile.split("_").map(Number);
         terrain = getTerrainAt(tileX, tileY);
         terrainByTile.set(tile, terrain);
+        blockedByTile.set(tile, isBlockedTile(tileX, tileY));
       }
       if (terrain !== "water") allWater = false;
 
       if (!tileMap.has(tile)) {
-        if (isImpassable(terrain)) {
+        if (blockedByTile.get(tile)) {
           potentialPairs.add(`-1|${i}`);
         } else {
           tileMap.set(tile, [i]);
@@ -1274,7 +1335,7 @@ function findCollidingPairs(creatures) {
   const collisions = [];
   for (const pairKey of potentialPairs) {
     const [i, j] = pairKey.split('|').map(Number);
-    // i == -1 for impassable terrain
+    // i == -1 for a blocked tile (impassable terrain or an obstacle)
     if (i === -1 || doNextBoundingBoxesOverlap(creatures[i], creatures[j])) {
       collisions.push([i, j]);
     }
@@ -1374,7 +1435,7 @@ return {
   onTick, onFrame,
 
   // the world
-  gridWidthN, gridHeightN, getTerrainAt,
+  gridWidthN, gridHeightN, getTerrainAt, obstacleAt,
   tileCorners, heightAt, get maxLevel() { return maxLevel; },
   allCritters, allCorpses, pcWolf, deathDurationSBySpecies,
 
@@ -1386,7 +1447,7 @@ return {
   // controllers must not use these.
   internals: {
     tick, wolves, deer, allLandTiles,
-    setCritterIdle, setCritterMoving, isInWater, isImpassable, getOccupiedTiles,
+    setCritterIdle, setCritterMoving, isInWater, isImpassable, isBlockedTile, getOccupiedTiles,
     forbidOverlapsOnStart, critterBoxRad, travelSpeedBySpeciesAndPose,
     windRefillHalfLifeSByPose, staminaFullRefillSByPose, maxStepLevels,
     get loopHandle() { return loopHandle; },

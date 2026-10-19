@@ -11,7 +11,7 @@ async function main(browser, r) {
   });
   r.check(pad.right === 24 && pad.bottom === 24 && pad.R === 80, `pad sits in the lower-right ${JSON.stringify(pad)}`);
   // these checks are about land poses, so keep the wolf on open dry ground
-  r.check(!!(await moveToOpenLand(p, { radius: 6, clearOthers: true })), "wolf placed on open dry land");
+  r.check(!!(await moveToOpenLand(p, { radius: 4, clearOthers: true })), "wolf placed on open dry land");
 
   // mouse over the map does nothing to the wolf
   await p.mouse.move(700, 450); await p.mouse.move(300, 200, { steps: 5 });
@@ -55,7 +55,7 @@ async function main(browser, r) {
   r.check(!s.inPad && s.pose === "idle" && !s.knob && s.active.length === 0, "leaving the pad stops the wolf and hides the knob");
 
   // camera mode: arrows pan even while the pad steers, and the camera stays put
-  await p.mouse.move(400, 300, { steps: 2 }); await moveToOpenLand(p, { radius: 6 });
+  await p.mouse.move(400, 300, { steps: 2 }); await moveToOpenLand(p, { radius: 4 });
   await p.mouse.move(pad.x + 0.3 * pad.R, pad.y, { steps: 2 });
   const cam0 = await p.evaluate(() => animat.camera.shiftPX);
   await p.keyboard.down("ArrowLeft"); await p.waitForTimeout(400);
@@ -78,7 +78,7 @@ async function main(browser, r) {
   r.check(recentered, "re-entering the pad re-centers the camera on the wolf");
 
   // wolf mode
-  await p.mouse.move(400, 300, { steps: 2 }); await moveToOpenLand(p, { radius: 6 });
+  await p.mouse.move(400, 300, { steps: 2 }); await moveToOpenLand(p, { radius: 4 });
   await p.mouse.move(400, 300, { steps: 3 });
   await p.click("#arrow-mode-toggle"); await p.mouse.move(400, 300);
   r.check(await p.evaluate(() => controls.arrowsMoveWolf), "toggle switches arrows to moving the wolf");
