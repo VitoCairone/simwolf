@@ -110,6 +110,11 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   height: 48px;
   background-image: url('./images/stag-swim.png');
 }
+.deer-death {
+  width: 48px;
+  height: 48px;
+  background-image: url('./images/stag-death.png');
+}
 /* Land tiles: a .ground-column per tile, holding its .ground pieces (the shape sprite and
    any cliff risers below it) and any obstacle on it (a boulder, .tile.boulder). See "GROUND" in
    animat.js; the sheet is made by spritecraft/make_slope_tiles.py. */

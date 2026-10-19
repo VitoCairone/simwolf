@@ -65,6 +65,18 @@ function screenDirToGridDir(screenDir) {
 }
 
 // SPRITE SHEETS
+// A pose may set its own facing rows (rowByDir, mirrorByDir: by grid direction DIR_*),
+// for a sheet laid out differently from its species' usual one.
+
+// The deer's death sheet has two drawn facings, row 0 facing N (up-right) and row 1
+// facing E (down-right); S (down-left) is E mirrored and W (up-left) is N mirrored. A
+// deer facing between two diagonals (SE, SW, NW, NE) dies facing the next diagonal
+// clockwise: SE -> S, SW -> W, NW -> N, NE -> E.
+//                  E(↘)   SE(↓) S(↙)  SW(←) W(↖)  NW(↑)  N(↗)   NE(→)
+const deerDeathFacing = {
+  rowByDir:    [1,     1,    1,    0,    0,    0,     0,     1],
+  mirrorByDir: [false, true, true, true, true, false, false, false],
+};
 // `sheet` names the sprite sheet's CSS class in style.css (.wolf, .wolf-swim, ...),
 // which sets the sheet image and frame size; frameW/frameH must match that class.
 // holdTks: how many simulation ticks each frame is shown.
@@ -98,12 +110,14 @@ const frameDataBySpeciesAndPose = {
     // same topToShadow as the deer's land poses, as for the wolf's swim (see there)
     swim: {sheet: "deer-swim", nFrames: 10, colZero: 0, frameW: 40, frameH: 48,
       holdTks: 10, topToShadow: 33 },
-    // death: col 45 is a pale hit-flash, col 46 the same pose in full color. Must play
-    // through exactly once in the simulation's deathDurationSBySpecies (checked by attach).
-    death: {sheet: "deer", nFrames: 2, colZero: 45, frameW: 32, frameH: 41,
-      holdTks: 15, topToShadow: 33},
-    dead: {sheet: "deer", nFrames: 1, colZero: 45, frameW: 32, frameH: 41,
-      holdTks: Infinity, topToShadow: 33},
+    // death: its own sheet (made by spritecraft/make_deer_death.py), 48x48 frames: the
+    // knees give, it rolls over and lies on its side. Two drawn facings, mirrored for the
+    // other two (deerDeathFacing). Must play through exactly once in the simulation's
+    // deathDurationSBySpecies (checked by attach). The corpse ("dead") is its last frame.
+    death: {sheet: "deer-death", nFrames: 5, colZero: 0, frameW: 48, frameH: 48,
+      holdTks: 8, topToShadow: 40, ...deerDeathFacing},
+    dead: {sheet: "deer-death", nFrames: 1, colZero: 4, frameW: 48, frameH: 48,
+      holdTks: Infinity, topToShadow: 40, ...deerDeathFacing},
   }
 };
 
@@ -367,10 +381,12 @@ function drawCritter(a) {
   if (s.node.className !== className) s.node.className = className;
 
   const frameCol = fd.colZero + frameIndex(a, fd);
+  const row = fd.rowByDir ? fd.rowByDir[a.currentDirection] : spriteRow(a);
   setStyle(s.node, s.css, "backgroundPosition",
-    `-${frameCol * fd.frameW}px -${spriteRow(a) * fd.frameH}px`);
+    `-${frameCol * fd.frameW}px -${row * fd.frameH}px`);
   // the element is centered on the critter's x, so mirroring about its center is safe
-  const mirror = mirrorByDir[a.species]?.[a.currentDirection] ?? false;
+  const mirror = fd.mirrorByDir ? fd.mirrorByDir[a.currentDirection]
+    : (mirrorByDir[a.species]?.[a.currentDirection] ?? false);
   setStyle(s.node, s.css, "transform", mirror ? "scaleX(-1)" : "");
 
   // critter image is offset so its noon-shadow center is at its grid coordinate, on the

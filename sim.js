@@ -53,7 +53,7 @@ function sample(list) {
 // How long a dying critter is in the "death" pose before it becomes a corpse ("dead").
 // (animat times the death animation to play through exactly once in this time, and
 // checks that it does.)
-const deathDurationSBySpecies = { deer: 0.5 };
+const deathDurationSBySpecies = { deer: 2 / 3 }; // deer: 5 frames of 8 ticks
 
 const hourS = 60 * 60;
 const dayS = 24 * hourS;
@@ -257,21 +257,22 @@ function wave(x) {
   return t * t * (3 - 2 * t);
 }
 
-// 1. SEA: a ring pattern around the map's center, wobbled. Below seaBelow is sea: the
-// map is a sea in the middle, a ring of land, a ring of sea, and land again in the
-// corners. The rings come from a triangle wave of the squared distance from the center
-// (q): the inner sea is the wave's first rise, the land ring is around its first crest
-// (q = 1/2), the outer sea its next trough, and so on.
+// 1. SEA: a ring pattern around the map's center, made irregular by jitter. Below
+// seaBelow is sea: the map is a sea in the middle, a ring of land, a ring of sea, and
+// land again in the corners. The rings come from a triangle wave of the squared distance
+// from the center (q): the inner sea is the wave's first rise, the land ring is around
+// its first crest (q = 1/2), the outer sea its next trough, and so on. The field is that
+// wave minus 0.7, plus jitter: four very slow triangle waves (periods 103 to 199 tiles,
+// in four directions) weighted 0.25 between them, which push the coasts in and out by
+// different amounts in different places, so the rings' edges aren't circles.
 //
 // innerSeaShrink pulls the inner sea's coast out toward the crest, shrinking the inner
-// sea (0.5: about 25% less sea area) while leaving everything from the crest outward -
-// the ring's outer coast, the outer sea, the corners - exactly as it was. Inside the
-// crest q is remapped by t -> t * (1 + innerSeaShrink * (1 - t)), with t = 2q: 0 stays 0
-// and the crest stays the crest, so the field stays continuous. (Keep it within 0..1.)
-//
-// (getTerrainAt also turns the field above 0.875 into "mountain" stone. With the wobble
-// at 0.15 that now happens on about a dozen tiles, which skip the lake and ground-cover
-// rules.)
+// sea while leaving everything from the crest outward - the ring's outer coast, the
+// outer sea, the corners - exactly as it was. (At 0.5 that was about 25% less sea with
+// the gentler jitter it was tuned with; with the jitter at 0.25 the inner water is about
+// 12% smaller than without it, lakes included.) Inside the crest q is remapped by
+// t -> t * (1 + innerSeaShrink * (1 - t)), with t = 2q: 0 stays 0 and the crest stays
+// the crest, so the field stays continuous. (Keep it within 0..1.)
 const seaBelow = 0.2;
 const innerSeaShrink = 0.5;
 const mapCenterX = gridWidthN / 2;
@@ -280,7 +281,7 @@ const mapCornerDist = Math.sqrt(mapCenterX * mapCenterX + mapCenterY * mapCenter
 
 function seaFieldAt(x, y) {
   // For desmos.com/3d:
-  // 2*abs((x*x+y*y)-floor(x*x+y*y+0.5)) - 0.5
+  // 2*abs((x*x+y*y)-floor(x*x+y*y+0.5)) - 0.7  (the ring wave, before jitter)
   // for x,y in range [-1.25, 1.25]
   const [rx, ry] = [x - mapCenterX, y - mapCenterY].map(v => v * 1.25 / mapCornerDist);
   let q = rx * rx + ry * ry;

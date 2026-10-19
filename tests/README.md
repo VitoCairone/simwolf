@@ -44,6 +44,7 @@ Set `CHROMIUM_PATH` to use a specific Chromium build instead of Playwright's.
 | `separation.test.js` | `sim.js` runs in Node with no browser (critters move, a player intent steers the wolf); the page defines only `sim`, `animat` and `controls`. |
 | `terrain.test.js` | Terrain height: every tile flat or a one-level slope, water flat at level 0, the map has slopes and cliffs, ground cover (grass/dirt/stone) found across many heights, critters drawn at the ground's height, a two-level cliff blocks a wolf and a one-level ledge doesn't. Saves a screenshot to `output/terrain/`. |
 | `swim.test.js` | Water is passable: wolf and deer enter water and swim (own sheets, 5 / 8 km/h, no effect on wind or stamina), tread water when stopped, resume their land pose on shore. Saves screenshots to `output/swim/`. |
+| `death.test.js` | Deer death: a killed deer plays the 5 death frames in order from its own sheet, the corpse holds the last frame, and all 8 directions use the right drawn facing or its mirror. Saves the fall frame by frame to `output/death/`. |
 | `facings.test.js` | Wolf sprite row and mirroring for all 8 directions, walking and idle. Saves screenshots to `output/facings/`. |
 
 `output/` holds generated screenshots and is git-ignored.
