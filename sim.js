@@ -121,7 +121,7 @@ const nWolves = 10;
 const wolves = Array.from({length: nWolves}, () => ({}));
 const pcWolf = wolves[0];
 
-const nDeer = 10;
+const nDeer = 30;
 const deer = Array.from({length: nDeer}, () => ({}));
 
 const allLandTiles = [];
@@ -146,6 +146,7 @@ function randomlyPlaceCritter(a) {
   a.gx = randLandX + 0.5;
   a.gy = randLandY + 0.5;
   a.currentDirection = Math.floor(Math.random() * 4) * 2;
+  [a.hx, a.hy] = moveVecByDir[a.currentDirection];
   setCritterIdle(a);
 }
 
@@ -198,24 +199,56 @@ const moveVecByDir = [
 // never changes while paused), within what the world allows (wind, stamina, water,
 // cliffs, other critters). Intents come from outside: a mind (mind.js) sets one for any
 // critter; the player sets one for the player's wolf (pcWolf), which wins while the
-// player is in control. How they are produced is not the simulation's business.
+// player is in control. How they are produced, and how often, is not the simulation's
+// business.
 //   null / none           no intent: the critter carries on as it is
 //   { gait: "idle" }      stand still (tread water, in water)
-//   { dir, gait }         move in grid direction dir (DIR_*) at gait walk/trot/gallop,
-//                         or the best gait wind and stamina allow
-// When a move fails (another critter, a boulder, a cliff, the map's edge), the critter
-// stays put and a.blockedTick records the tick: a fact for whoever decides.
+//   { dx, dy, gait }      move along grid vector (dx, dy), any heading and any length,
+//                         at gait walk/trot/gallop, or the best gait wind and stamina allow
+//   { dir, gait }         the same along one of the 8 grid directions (DIR_*)
+// HEADINGS: a moving critter goes along its heading (a.hx, a.hy), a unit vector. An
+// intent's vector is scaled to unit length here, once, when the intent is set (the only
+// square root it takes); setting the same vector again reuses it. Its sprite faces one
+// of 8 ways (a.currentDirection): the nearest to its heading, but it keeps its facing
+// while the heading is within facingKeepCos of it, so a heading near the boundary
+// between two facings doesn't flip the sprite back and forth.
+// STUNNED: when a move fails (another critter, a corpse, a boulder, a cliff, the map's
+// edge) the critter stays at its last legal position, stopped, and is stunned for a
+// moment (stunMinS - stunMaxS): it does nothing, and its intent waits until it recovers.
+// a.blockedTick records the tick it was blocked, and a.stunnedUntil the tick it recovers:
+// facts for whoever decides.
 const intents = new Map(); // critter -> its intent, from a mind
 let playerIntent = null;
 let playerIntentApplied = false; // whether the player was in control at the last tick
 
+const facingKeepCos = 0.866;  // keep facing while the heading is within 30 degrees of it
+const stunMinS = 0.1;         // stunned this long at least after a failed move
+const stunMaxS = 0.5;         // ...and at most
+
+// An intent as applied: with its heading (hx, hy) at unit length. The scaling (a square
+// root) is done only for a new vector; the same vector as before reuses the old heading.
+function prepareIntent(intent, prev) {
+  if (!intent || intent.gait === "idle") return intent || null;
+  if (intent.dir !== undefined) {
+    const [hx, hy] = moveVecByDir[intent.dir];
+    return { dir: intent.dir, gait: intent.gait, hx, hy };
+  }
+  const { dx, dy } = intent;
+  if (prev && prev.dx === dx && prev.dy === dy && prev.hx !== undefined)
+    return { dx, dy, gait: intent.gait, hx: prev.hx, hy: prev.hy };
+  const len2 = dx * dx + dy * dy;
+  if (!(len2 > 0)) return { gait: "idle" };
+  const inv = 1 / Math.sqrt(len2);
+  return { dx, dy, gait: intent.gait, hx: dx * inv, hy: dy * inv };
+}
+
 function setIntent(a, intent) {
-  if (intent) intents.set(a, intent);
+  if (intent) intents.set(a, prepareIntent(intent, intents.get(a)));
   else intents.delete(a);
 }
 
 function setPlayerIntent(intent) {
-  playerIntent = intent || null;
+  playerIntent = prepareIntent(intent, playerIntent);
 }
 
 function playerHasControl() {
@@ -223,8 +256,16 @@ function playerHasControl() {
 }
 
 function applyIntent(a, intent) {
+  if (a.stunnedUntil > g_tick) return; // stunned: it waits
   if (intent.gait === "idle") setCritterIdle(a);
-  else setCritterMoving(a, intent.dir, intent.gait);
+  else setCritterHeading(a, intent.hx, intent.hy, intent.gait, intent.dir);
+}
+
+// A failed move: stop where it is (its last legal position), stunned for a moment.
+function stun(a) {
+  a.blockedTick = g_tick;
+  setCritterIdle(a);
+  a.stunnedUntil = g_tick + Math.max(1, Math.round(randBetween(stunMinS, stunMaxS) / tempo));
 }
 
 function applyIntents() {
@@ -554,25 +595,19 @@ function updateAllCritters() {
       return;
     }
 
-    const moveVec = moveVecByDir[a.currentDirection];
-    const [velGX, velGY] = moveVec.map(v => v * a.speed);
-    const nextGX = a.gx + velGX;
-    const nextGY = a.gy + velGY;
+    const nextGX = a.gx + a.hx * a.speed;
+    const nextGY = a.gy + a.hy * a.speed;
     // keep the collision box (radius critterBoxRad) inside the grid
     if (nextGX >= critterBoxRad && nextGX < (gridWidthN - critterBoxRad)
       && nextGY >= critterBoxRad && nextGY < (gridHeightN - critterBoxRad)) {
       if (Math.abs(heightAt(nextGX, nextGY) - heightAt(a.gx, a.gy)) > maxStepLevels) {
-        // a cliff in the way: stay put, as at a boulder
-        a.nextGX = a.gx;
-        a.nextGY = a.gy;
-        a.blockedTick = g_tick;
+        stun(a); // a cliff in the way: stay put, as at a boulder
         return;
       }
       a.nextGX = nextGX;
       a.nextGY = nextGY;
     } else {
-      setCritterIdle(a); // the map's edge
-      a.blockedTick = g_tick;
+      stun(a); // the map's edge
     }
   });
 
@@ -596,9 +631,9 @@ function applyExertion(a) {
   // out of a reserve: drop to the next gait down (trot falls through to walk if
   // stamina is too low to start it)
   if (a.pose === "gallop" && (a.wind <= 0 || a.stamina <= 0)) {
-    setCritterMoving(a, a.currentDirection, "trot");
+    setCritterHeading(a, a.hx, a.hy, "trot");
   } else if (a.pose === "trot" && a.stamina <= 0) {
-    setCritterMoving(a, a.currentDirection, "walk");
+    setCritterHeading(a, a.hx, a.hy, "walk");
   }
 }
 
@@ -648,12 +683,12 @@ function moveAllTogether(movers, statics = []) {
     if (thing.nextGX === thing.gx && thing.nextGY === thing.gy) return;
 
     if (didCollide[idx]) {
-      // this thing's gx and gy do NOT get updated this tick: it was blocked (whoever
-      // decides for it can see that, and choose what to do next)
+      // this thing's gx and gy do NOT get updated this tick: it was blocked, and is
+      // stunned (whoever decides for it can see that, and choose what to do next)
 
       // TODO: allow a rear-ended collider to continue moving when space in front is open
       // this 'should' already be the behavior since creatures move all together, investigate
-      thing.blockedTick = g_tick;
+      stun(thing);
     } else {
       // this is the ONLY PLACE ANYWHERE that thing gx and gy should change!
       thing.gx = thing.nextGX;
@@ -861,7 +896,7 @@ function updateTerrainPose(a) {
     const resume = a.landPose || "walk";
     if (a.speed > 0 && resume !== "idle") {
       setPose(a, null); // no current pose, so setCritterMoving applies the change and its checks
-      setCritterMoving(a, a.currentDirection, resume);
+      setCritterHeading(a, a.hx, a.hy, resume);
     } else {
       setCritterIdle(a);
     }
@@ -986,11 +1021,32 @@ function canUseGait(a, gait, isAlready = false) {
   return true;
 }
 
+// Move along one of the 8 grid directions (for tests and debugging; intents use
+// setCritterHeading).
 function setCritterMoving(a, dir, newPose = "walk") {
-  if (!isLiveCritter(a)) return;
-  if (a.isHaltedUntil > g_tick) return;
+  const [hx, hy] = moveVecByDir[dir];
+  setCritterHeading(a, hx, hy, newPose, dir);
+}
 
-  if (newPose === a.pose && a.currentDirection === dir) return;
+// The sprite's facing for heading (hx, hy): its current facing while the heading is
+// within facingKeepCos of it, otherwise the nearest of the 8.
+function facingFor(a, hx, hy) {
+  const cur = a.currentDirection;
+  if (cur !== undefined) {
+    const [ux, uy] = moveVecByDir[cur];
+    if (hx * ux + hy * uy >= facingKeepCos) return cur;
+  }
+  return getDir(hx, hy, cur || 0);
+}
+
+// Move along heading (hx, hy), a unit vector, at gait newPose (or the best the world
+// allows). facing: one of the 8 directions to face, if given; otherwise from the heading.
+function setCritterHeading(a, hx, hy, newPose = "walk", facing = undefined) {
+  if (!isLiveCritter(a)) return;
+  if (a.stunnedUntil > g_tick) return;
+  const same = a.hx === hx && a.hy === hy && (facing === undefined || facing === a.currentDirection);
+
+  if (newPose === a.pose && same) return;
 
   if (isInWater(a)) {
     // in water every movement is swimming; remember what was asked for on land
@@ -1004,10 +1060,12 @@ function setCritterMoving(a, dir, newPose = "walk") {
     a.landPose = newPose;
   }
   // (a swimmer treading water has speed 0, so it still needs to start moving)
-  if (newPose === a.pose && a.currentDirection === dir && a.speed > 0) return;
+  if (newPose === a.pose && same && a.speed > 0) return;
 
   setPose(a, newPose);
-  a.currentDirection = dir;
+  a.currentDirection = facing !== undefined ? facing : facingFor(a, hx, hy);
+  a.hx = hx;
+  a.hy = hy;
   a.speed = travelSpeedBySpeciesAndPose[a.species][a.pose];
 }
 
@@ -1264,7 +1322,8 @@ function start({ consoleOnly = false } = {}) {
 
 // THE INTERFACE
 // What viewers and controllers use. They read critters' fields directly (gx, gy, pose,
-// poseTick, currentDirection, species, wind, stamina, uid) but change the world only
+// poseTick, currentDirection (the facing), hx, hy (the heading), speed, species, wind,
+// stamina, uid, blockedTick, stunnedUntil) but change the world only
 // through the functions here.
 return {
   // lifecycle and time
@@ -1289,7 +1348,7 @@ return {
   // controllers must not use these.
   internals: {
     tick, wolves, deer, allLandTiles,
-    setCritterIdle, setCritterMoving, isInWater, isImpassable, getOccupiedTiles,
+    setCritterIdle, setCritterMoving, setCritterHeading, isInWater, isImpassable, getOccupiedTiles,
     forbidOverlapsOnStart, critterBoxRad, travelSpeedBySpeciesAndPose,
     windRefillHalfLifeSByPose, staminaFullRefillSByPose, maxStepLevels,
     get loopHandle() { return loopHandle; },

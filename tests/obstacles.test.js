@@ -1,6 +1,8 @@
 // Obstacles (see OBSTACLES in sim.js): boulders stand on tiles, separate from the ground.
 //  - only on land, infrequent, on every kind of ground, some joined into barrier walls
-//  - stone ground is passable like grass and dirt; a boulder blocks a walking wolf
+//  - stone ground is passable like grass and dirt; a boulder blocks a walking wolf, which
+//    is stunned: stopped at its last legal position for 0.1 - 0.5 s, then tries again
+//    (its intent waits while it is stunned)
 // Saves a screenshot of a barrier to tests/output/obstacles/.
 
 const path = require("path");
@@ -74,13 +76,39 @@ async function main(browser, r) {
     };
     const stone = tryWalk(find((i, j) => T(i + 1, j) === "stone" && T(i + 2, j) === "stone"
       && !sim.isBlockedTile(i + 1, j) && !sim.isBlockedTile(i + 2, j)));
-    const boulder = tryWalk(find((i, j) => sim.obstacleAt(i + 1, j) === "boulder"));
-    return { stone, boulder };
+    const boulderTile = find((i, j) => sim.obstacleAt(i + 1, j) === "boulder");
+    const boulder = tryWalk(boulderTile);
+    // stunned: walk into the boulder again and watch the moment it is blocked
+    let stun = null;
+    if (boulderTile) {
+      const w = sim.pcWolf;
+      w.gx = w.nextGX = boulderTile[0] + 0.5; w.gy = w.nextGY = boulderTile[1] + 0.5;
+      w.stunnedUntil = 0; sim.internals.setCritterIdle(w);
+      sim.setPlayerIntent({ dir: sim.DIR_E, gait: "walk" });
+      let n = 0;
+      for (; n < 120 && w.blockedTick !== sim.tickCount - 1; n++) sim.internals.tick();
+      const at = [w.gx, w.gy], ticks = w.stunnedUntil - w.blockedTick;
+      let stayed = true, still = true;
+      while (sim.tickCount < w.stunnedUntil) {
+        sim.internals.tick();
+        if (w.gx !== at[0] || w.gy !== at[1]) stayed = false;
+        if (w.speed !== 0 || w.pose !== "idle") still = false;
+      }
+      sim.internals.tick(); // recovered: its intent applies again, into the boulder again
+      stun = { blocked: n < 120, ticks, stayed, still, again: w.blockedTick === sim.tickCount - 1 };
+      sim.setPlayerIntent(null); sim.internals.tick();
+    }
+    return { stone, boulder, stun };
   });
   r.check(walk.stone && walk.stone.gx > walk.stone.from[0] + 1.5,
     `a wolf walks onto stone ground (${walk.stone ? "reached x " + walk.stone.gx.toFixed(2) + " from " + walk.stone.from[0] : "no stone found"})`);
   r.check(walk.boulder && walk.boulder.gx < walk.boulder.from[0] + 1,
     `a boulder stops a walking wolf (${walk.boulder ? "stopped at x " + walk.boulder.gx.toFixed(2) + ", boulder at " + (walk.boulder.from[0] + 1) : "no boulder found"})`);
+
+  const st = walk.stun;
+  r.check(st && st.blocked && st.ticks >= 6 && st.ticks <= 30 && st.stayed && st.still && st.again,
+    `a blocked wolf is stunned: stopped where it was for ${st ? st.ticks : "?"} ticks (0.1 - 0.5 s), ` +
+    `then tries again (${st ? (st.stayed ? "stayed put" : "MOVED") + ", " + (st.still ? "idle" : "NOT idle") + ", then " + (st.again ? "blocked again" : "did NOT try") : "no boulder"})`);
 
   // 3. boulders are drawn: look at the longest barrier
   const drawn = await p.evaluate(at => {

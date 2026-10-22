@@ -20,7 +20,8 @@ const cameraSpeed = 50; // screen px per tick while panning with the arrow keys
 
 // Arrow mode (sidebar toggle): the arrow keys move the wolf (true) or pan the camera.
 let arrowsMoveWolf = false;
-// The movement pad while the pointer is in one of its rings: { pose, dir }, else null.
+// The movement pad while the pointer is in one of its rings: { pose, dx, dy } (the grid
+// vector to move along: any heading), else null.
 let pad = null;
 
 // THE PLAYER'S INTENT for the wolf, from everything currently held:
@@ -31,7 +32,7 @@ let pad = null;
 function updatePlayerIntent() {
   let intent = null;
   if (pad) {
-    intent = pad.pose === "idle" ? { gait: "idle" } : { dir: pad.dir, gait: pad.pose };
+    intent = pad.pose === "idle" ? { gait: "idle" } : { dx: pad.dx, dy: pad.dy, gait: pad.pose };
   } else if (arrowsMoveWolf) {
     const screenX = (keysPressed["ArrowRight"] ? 1 : 0) - (keysPressed["ArrowLeft"] ? 1 : 0);
     const screenY = (keysPressed["ArrowDown"] ? 1 : 0) - (keysPressed["ArrowUp"] ? 1 : 0);
@@ -72,7 +73,7 @@ function toggleArrowMode() {
 
 // MOVEMENT PAD
 // Fixed on-screen joystick (see #move-pad in index.html). The pointer's offset from the
-// pad center gives the direction; which concentric ring it is in gives the gait.
+// pad center gives the direction (any heading, not just 8: exactly where it points); which concentric ring it is in gives the gait.
 // Ring radii are read from the SVG (viewBox radius 100) so drawing and logic can't drift.
 let movePadEl = null;
 let movePadRings = [];
@@ -90,7 +91,9 @@ function onMovePadPointer(e) {
   if (!ring) return releaseMovePad();
 
   if (!pad) animat.followWolf(); // taking the wolf: bring the camera back to it
-  pad = { pose: ring.pose, dir: animat.screenDirToGridDir(sim.getDir(vx, vy)) };
+  // any heading: the way the pointer is from the pad's center, on screen, as a grid vector
+  const [dx, dy] = animat.screenVecToGridVec(vx, vy);
+  pad = { pose: ring.pose, dx, dy };
   animat.showMovePad(vx, vy, ring.pose);
   updatePlayerIntent();
 }

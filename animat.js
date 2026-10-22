@@ -64,6 +64,13 @@ function screenDirToGridDir(screenDir) {
   return (screenDir + 7) % 8;
 }
 
+// The grid vector drawn as screen vector (sx, sy) on flat ground: the inverse of
+// isoProject's linear part, up to scale (the length doesn't matter). Screen right (1, 0)
+// is grid (1, -1), NE; screen down (0, 1) is grid (2, 2), SE.
+function screenVecToGridVec(sx, sy) {
+  return [sx + 2 * sy, 2 * sy - sx];
+}
+
 // SPRITE SHEETS
 // A pose may set its own facing rows (rowByDir, mirrorByDir: by grid direction DIR_*),
 // for a sheet laid out differently from its species' usual one.
@@ -569,7 +576,7 @@ return {
   zoomIn, zoomOut, setZoom, panCamera, centerCameraOn, followWolf,
   showMovePad, showArrowMode, showCursorCoords,
   // reading the view
-  screenToGrid, screenDirToGridDir, isoProject,
+  screenToGrid, screenDirToGridDir, screenVecToGridVec, isoProject,
   get camera() {
     return { ...camera, viewportWidth, viewportHeight, worldRadPX, zoomMin, zoomMax };
   },

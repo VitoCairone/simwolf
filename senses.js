@@ -20,10 +20,6 @@ let sim = null; // set by attach()
 
 const sightRangeTiles = 10;
 
-// The unit vector of each grid direction (DIR_*), to report which way a creature moves.
-const DIR_VEC = [[1, 0], [Math.SQRT1_2, Math.SQRT1_2], [0, 1], [-Math.SQRT1_2, Math.SQRT1_2],
-  [-1, 0], [-Math.SQRT1_2, -Math.SQRT1_2], [0, -1], [Math.SQRT1_2, -Math.SQRT1_2]];
-
 // What critter a perceives now: one observation per creature it can see, a snapshot
 // (not the creature itself), with what can be seen of it:
 //   { uid, species, alive, gx, gy, vx, vy, swimming }
@@ -37,10 +33,10 @@ function perceive(a) {
       if (b === a) continue;
       const dx = b.gx - a.gx, dy = b.gy - a.gy;
       if (dx * dx + dy * dy > range2) continue;
-      const v = DIR_VEC[b.currentDirection] || [0, 0];
+      const speed = b.speed || 0; // (its heading, b.hx and b.hy, is a unit vector)
       seen.push({
         uid: b.uid, species: b.species, alive: sim.isLiveCritter(b),
-        gx: b.gx, gy: b.gy, vx: v[0] * b.speed, vy: v[1] * b.speed,
+        gx: b.gx, gy: b.gy, vx: speed ? b.hx * speed : 0, vy: speed ? b.hy * speed : 0,
         swimming: b.pose === "swim",
       });
     }

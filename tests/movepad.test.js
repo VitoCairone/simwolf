@@ -17,11 +17,12 @@ async function main(browser, r) {
   await p.mouse.move(700, 450); await p.mouse.move(300, 200, { steps: 5 });
   r.check(await p.evaluate(() => !controls.padInUse && !sim.playerHasControl()), "mouse over the map does not take control of the wolf");
 
-  const state = () => p.evaluate(() => ({
+  // (after a moment, so the game has ticked since the last pointer move)
+  const state = async () => { await p.waitForTimeout(80); return p.evaluate(() => ({
     pose: sim.pcWolf.pose, dir: sim.pcWolf.currentDirection, inPad: controls.padInUse,
     knob: document.getElementById("move-pad-knob").classList.contains("visible"),
     active: [...document.querySelectorAll("#move-pad .ring.active")].map(e => e.dataset.pose),
-  }));
+  })); };
 
   // each ring gives its pose
   for (const [f, pose] of [[0.05, "idle"], [0.3, "walk"], [0.6, "trot"], [0.9, "gallop"]]) {
@@ -41,8 +42,23 @@ async function main(browser, r) {
   r.check((dx > 0 && Math.abs(dy) < Math.abs(dx) * 0.2) || after.pose === "idle",
     `pointer right -> wolf moves right on screen (dx ${dx.toFixed(1)}, dy ${dy.toFixed(1)})`);
   await p.mouse.move(pad.x, pad.y - 0.3 * pad.R, { steps: 3 });
+  await p.waitForTimeout(80);
   const up = await p.evaluate(() => sim.pcWolf.currentDirection === sim.DIR_NW);
   r.check(up, "pointer up -> grid NW (straight up on screen)");
+
+  // any heading: the wolf goes exactly the way the pointer is from the center, on screen
+  await p.evaluate(() => { sim.pcWolf.stunnedUntil = 0; });
+  await p.mouse.move(pad.x + 0.5 * pad.R, pad.y + 0.2 * pad.R, { steps: 3 });
+  await p.waitForTimeout(80);
+  const aim = await p.evaluate(() => {
+    const w = sim.pcWolf;
+    // the screen direction of its heading (isoProject is linear apart from the offset)
+    const [x0, y0] = animat.isoProject(0, 0), [x1, y1] = animat.isoProject(w.hx, w.hy);
+    return { sx: x1 - x0, sy: y1 - y0, pose: w.pose };
+  });
+  const ratio = aim.sy / aim.sx;
+  r.check(aim.sx > 0 && Math.abs(ratio - 0.4) < 0.02,
+    `pointer at (0.5, 0.2) -> heading drawn at screen slope ${ratio.toFixed(3)} (wanted 0.4; not snapped to one of 8)`);
 
   // the square pad's corners are outside the circles
   await p.mouse.move(pad.x + 0.95 * pad.R, pad.y + 0.95 * pad.R, { steps: 3 });

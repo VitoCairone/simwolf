@@ -7,6 +7,12 @@
 //  - no dithering: a wolf with two deer about as near in opposite directions picks the
 //    one ahead of it and keeps to it, without flipping between them
 //  - a chase ends in a kill: a wolf runs down a tired deer
+//  - galloping is only for chasing and fleeing: over a minute of play, no calm critter
+//    gallops
+//  - any heading: a critter moves along whatever grid vector it is told, facing the
+//    nearest of its 8 directions; the vector is scaled (a square root) only when it changes
+//  - turns: each critter decides at most 10 times a game-second and once a tick, and about
+//    as many wolves (and deer) decide on each tick as on any other
 // Each encounter is set up on open land (no water or boulders nearby) with every other
 // critter parked off the map and left alone by the mind, and the two starting with no
 // memories.
@@ -88,7 +94,7 @@ async function main(browser, r) {
   const deerMem = await p.evaluate(`(() => {
     if (!setup({ deerAt: [4, 4], wolfThinks: false })) return null;
     const [w, d] = [__w, __d];
-    sim.internals.tick();                                   // sees the wolf
+    for (let n = 0; n < mind.turnTicks; n++) sim.internals.tick(); // its turn: sees the wolf
     const wolfWas = [w.gx, w.gy];
     w.gx = w.gy = w.nextGX = w.nextGY = -90;                // the wolf vanishes from sight
     const from0 = Math.hypot(d.gx - wolfWas[0], d.gy - wolfWas[1]);
@@ -110,15 +116,15 @@ async function main(browser, r) {
     if (!setup({ deerAt: [3, -3], deerThinks: false })) return null;
     const [w, d] = [__w, __d];
     sim.internals.setCritterMoving(d, sim.DIR_E, "trot");    // the deer heads east...
-    sim.internals.tick();                                     // ...the wolf sees it
+    for (let n = 0; n < mind.turnTicks; n++) sim.internals.tick(); // ...the wolf sees it
     const seen = [d.gx, d.gy];
     d.gx = d.gy = d.nextGX = d.nextGY = -90; d.speed = 0;    // ...and loses it
     const w0 = [w.gx, w.gy];
     for (let n = 0; n < 60; n++) sim.internals.tick();       // 1 s
-    const s = mind.stateOf(w);
+    const s = mind.stateOf(w), w1 = [w.gx, w.gy];
     const seesDeer = senses.perceive(w).some(o => o.species === "deer");
     for (let n = 0; n < 21 * 60; n++) sim.internals.tick();  // 21 s more
-    return { seen, w0, w1: [w.gx, w.gy], mode: s.mode, seesDeer, modeLater: mind.stateOf(w).mode };
+    return { seen, w0, w1, mode: s.mode, seesDeer, modeLater: mind.stateOf(w).mode };
   })()`);
   const east = wolfMem && wolfMem.w1[0] - wolfMem.w0[0];
   r.check(wolfMem && !wolfMem.seesDeer && wolfMem.mode === "chase" && east > 2,
@@ -132,10 +138,13 @@ async function main(browser, r) {
     if (!setup({ deerAt: [4, -4], deer2At: [-3.8, 3.8], deerThinks: false })) return null;
     const [w, ahead, behind] = [__w, __d, __d2];
     w.currentDirection = sim.DIR_NE;                       // facing the first deer
+    [w.hx, w.hy] = sim.moveVecByDir[sim.DIR_NE];            // ...and heading that way
     const targets = [], dirs = [];
     for (let n = 0; n < 90; n++) {                          // 1.5 s
       sim.internals.tick();
-      targets.push(mind.stateOf(w).target); dirs.push(w.currentDirection);
+      const t = mind.stateOf(w)?.target;
+      if (t !== undefined && t !== null) targets.push(t);
+      dirs.push(w.currentDirection);
     }
     let turns = 0;
     for (let n = 1; n < dirs.length; n++) if (dirs[n] !== dirs[n - 1]) turns++;
@@ -161,6 +170,85 @@ async function main(browser, r) {
   })()`);
   r.check(kill && (kill.pose === "death" || kill.pose === "dead"),
     `a wolf runs down a tired deer (killed after ${kill && kill.s.toFixed(1)} s; the wolf then ${kill && kill.wolfMode}s)`);
+
+  // 8. any heading, and square roots only for new headings
+  await fresh();
+  const heading = await p.evaluate(`(() => {
+    if (!setup({ deerAt: [8, 8], wolfThinks: false, deerThinks: false })) return null;
+    const w = __w;
+    let roots = 0; const sqrt = Math.sqrt;
+    Math.sqrt = x => { roots++; return sqrt(x); };
+    try {
+      const from = [w.gx, w.gy];
+      sim.setIntent(w, { dx: 3, dy: 1, gait: "walk" });
+      for (let n = 0; n < 60; n++) {
+        if (n % 6 === 0) sim.setIntent(w, { dx: 3, dy: 1, gait: "walk" }); // the same, again
+        sim.internals.tick();
+      }
+      const rootsSame = roots;
+      const slope = (w.gy - from[1]) / (w.gx - from[0]), facing = w.currentDirection;
+      sim.setIntent(w, { dx: 1, dy: 3, gait: "walk" });                  // a new heading
+      sim.internals.tick();
+      return { slope, facing, rootsSame, rootsNew: roots - rootsSame, facingNew: w.currentDirection,
+        E: sim.DIR_E, S: sim.DIR_S };
+    } finally { Math.sqrt = sqrt; }
+  })()`);
+  r.check(heading && Math.abs(heading.slope - 1 / 3) < 0.01,
+    `any heading: told to go along (3, 1), a wolf goes along it (slope ${heading && heading.slope.toFixed(3)}, wanted 0.333)`);
+  r.check(heading && heading.facing === heading.E && heading.facingNew === heading.S,
+    `...facing the nearest of its 8 directions ((3, 1): ${heading && heading.facing}, wanted E; ` +
+    `(1, 3): ${heading && heading.facingNew}, wanted S)`);
+  r.check(heading && heading.rootsSame === 1 && heading.rootsNew === 1,
+    `square roots only for a new heading (${heading && heading.rootsSame} for one heading set 11 times, ` +
+    `${heading && heading.rootsNew} for a new one)`);
+
+  // 9. turns: at most 10 a game-second, once a tick; spread evenly across ticks
+  await fresh();
+  const turns = await p.evaluate(() => {
+    sim.pause();
+    const T = 600, period = mind.turnTicks, perCritter = new Map(), byTick = [];
+    for (let n = 0; n < T; n++) {
+      sim.internals.tick();
+      const now = sim.tickCount - 1, count = { wolf: 0, deer: 0 };
+      for (const c of sim.allCritters) {
+        const st = mind.stateOf(c);
+        if (!st || st.lastTurn !== now || !sim.isLiveCritter(c)) continue;
+        if (c === sim.pcWolf && sim.playerHasControl()) continue;
+        count[c.species]++;
+        perCritter.set(c, (perCritter.get(c) || 0) + 1);
+      }
+      byTick.push(count);
+    }
+    const perS = [...perCritter.values()].map(v => v / (T * sim.tempo));
+    // per slot of the cycle, over the first cycle after everyone has started
+    const slots = byTick.slice(period, 2 * period);
+    const spread = sp => Math.max(...slots.map(c => c[sp])) - Math.min(...slots.map(c => c[sp]));
+    return { period, maxPerS: Math.max(...perS), spreadWolf: spread("wolf"), spreadDeer: spread("deer"),
+      slots: slots.map(c => c.wolf + "w" + c.deer + "d").join(" ") };
+  });
+  r.check(turns.maxPerS <= 10 + 1e-9, `each critter decides at most 10 times a game-second (most: ${turns.maxPerS.toFixed(2)})`);
+  r.check(turns.spreadWolf <= 1 && turns.spreadDeer <= 1,
+    `turns are spread evenly over the ${turns.period} ticks of each 0.1 s, for wolves and for deer (${turns.slots})`);
+
+  // 10. galloping only to chase or flee
+  await fresh();
+  const gallops = await p.evaluate(() => {
+    sim.pause();
+    const byMode = {};
+    for (let n = 0; n < 60 * 60; n++) {
+      sim.internals.tick();
+      for (const c of sim.allCritters) {
+        if (c.pose !== "gallop" || c === sim.pcWolf && sim.playerHasControl()) continue;
+        const mode = mind.stateOf(c)?.mode;
+        byMode[mode] = (byMode[mode] || 0) + 1;
+      }
+    }
+    return byMode;
+  });
+  const calmGallops = Object.entries(gallops).filter(([mode]) => mode !== "chase" && mode !== "flee");
+  r.check(calmGallops.length === 0,
+    `galloping only to chase or flee (critter-ticks galloping in a minute: ${JSON.stringify(gallops)})`);
+
   r.noProblems(p);
   await p.close();
 }
