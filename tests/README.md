@@ -41,7 +41,8 @@ Set `CHROMIUM_PATH` to use a specific Chromium build instead of Playwright's.
 | `gameloop.test.js` | Same game speed at 30/60/120/144 Hz, pause is immediate, step = one tick, rapid pause/unpause never starts a second loop, long stalls are capped. |
 | `movement.test.js` | No critter stays frozen for 50 game-seconds across 10 loads (spawn/collision deadlocks). Prints details for any frozen critter. |
 | `obstacles.test.js` | Boulders: only on land, infrequent, on every ground type, some forming barrier walls with gaps; stone ground is passable; a boulder blocks a walking wolf. Saves a screenshot of a barrier to `output/obstacles/`. |
-| `separation.test.js` | `sim.js` runs in Node with no browser (critters move, a player intent steers the wolf); the page defines only `sim`, `animat` and `controls`. |
+| `separation.test.js` | `sim.js` runs in Node with no browser and on its own decides nothing (no critter moves); an intent (the player's) steers the wolf; with `senses.js` and `mind.js` also loaded in Node, critters move by themselves; the page defines only `sim`, `senses`, `mind`, `animat` and `controls`. |
+| `decisions.test.js` | Senses and decisions: sight reaches 10 tiles and no further; a deer flees a wolf it sees and a wolf chases a deer it sees; out of sight, a deer keeps fleeing from where it last saw the wolf and a wolf keeps after a deer the way it was heading, and both give up later; a wolf with two deer about as near in opposite directions picks the one ahead and keeps to it; a wolf runs down a tired deer. |
 | `terrain.test.js` | Terrain height: every tile flat or a one-level slope, water flat at level 0, the map has slopes and cliffs, ground cover (grass/dirt/stone) found across many heights, critters drawn at the ground's height, a two-level cliff blocks a wolf and a one-level ledge doesn't. Saves a screenshot to `output/terrain/`. |
 | `swim.test.js` | Water is passable: wolf and deer enter water and swim (own sheets, 5 / 8 km/h, no effect on wind or stamina), tread water when stopped, resume their land pose on shore. Saves screenshots to `output/swim/`. |
 | `death.test.js` | Deer death: a killed deer plays the 5 death frames in order from its own sheet, the corpse holds the last frame, and all 8 directions use the right drawn facing or its mirror. Saves the fall frame by frame to `output/death/`. |
@@ -61,3 +62,8 @@ hand doesn't redraw: call `animat.render()` before reading anything on the page
 Critters can swim, so a test that expects land poses (walk, trot, gallop, idle)
 should first call `moveToOpenLand(page)` from `helpers.js`, which puts the wolf
 (or another critter) in the middle of open dry ground.
+
+Critters decide for themselves (`mind.js`). To drive one by hand, first call
+`mind.ignore(critter)` so the mind leaves it alone, then tell it what to do with
+`sim.internals.setCritterMoving(...)` or `sim.setIntent(critter, intent)`.
+`mind.forget(critter)` wipes what it remembers.

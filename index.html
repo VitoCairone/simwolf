@@ -76,18 +76,25 @@
     </div>
   </div>
 
-  <!-- The game is three parts, each defining ONE global object with an explicit interface:
-         sim       the world and its rules (sim.js; never touches the page)
+  <!-- The game is five parts, each defining ONE global object with an explicit interface:
+         sim       the world and its rules (sim.js; never touches the page, decides nothing)
+         senses    what each critter perceives (senses.js; only reads sim)
+         mind      what each critter decides to do, as intents for sim (mind.js)
          animat    draws the world (animat.js; only reads sim)
          controls  the player's input, turned into intents for sim and animat (controls.js)
        They are connected here and nowhere else. For a console-only run with nothing drawn,
-       load just sim.js and run: sim.init(); sim.start({ consoleOnly: true }); -->
+       load sim.js, senses.js and mind.js, then run:
+         sim.init(); senses.attach(sim); mind.attach(sim, senses); sim.start({ consoleOnly: true }); -->
   <script src="sim.js"></script>
+  <script src="senses.js"></script>
+  <script src="mind.js"></script>
   <script src="animat.js"></script>
   <script src="controls.js"></script>
   <script>
     window.addEventListener("load", () => {
       sim.init();
+      senses.attach(sim);
+      mind.attach(sim, senses);
       animat.attach(sim);
       controls.attach(sim, animat);
       sim.start();

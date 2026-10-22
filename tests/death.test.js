@@ -19,15 +19,15 @@ async function main(browser, r) {
   const setup = await p.evaluate(() => {
     sim.pause();
     const w = sim.internals.wolves[1], d = sim.internals.deer[0];
-    const free = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.internals.isBlockedTile(i, j);
+    const free = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.isBlockedTile(i, j);
     const level = (i, j) => { const c = sim.tileCorners(i, j); return Math.max(...c) === Math.min(...c); };
     const t = sim.internals.allLandTiles.find(([i, j]) =>
       [-1, 0, 1, 2, 3].every(di => [-1, 0, 1].every(dj => free(i + di, j + dj) && level(i + di, j + dj))));
     sim.allCritters.filter(c => c !== w && c !== d).forEach(c => {
-      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
+      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
     });
     w.gx = t[0] + 0.5; w.gy = t[1] + 0.5; d.gx = t[0] + 1.6; d.gy = t[1] + 0.5;
-    sim.internals.setCritterIdle(d); d.redecideCd = 1e9; w.redecideCd = 1e9;
+    sim.internals.setCritterIdle(d); mind.ignore(d); mind.ignore(w);
     d.currentDirection = sim.DIR_E;
     sim.internals.setCritterMoving(w, sim.DIR_E, "walk");
     for (let n = 0; n < 120 && d.pose !== "death"; n++) sim.internals.tick();

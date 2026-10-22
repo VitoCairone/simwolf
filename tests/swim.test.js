@@ -11,13 +11,13 @@ async function main(browser, r) {
   const setup = await p.evaluate(() => {
     sim.pause();
     sim.allCritters.filter(c => c !== sim.pcWolf && c !== sim.internals.deer[0]).forEach(c => {
-      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
+      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
     });
     const T = (i, j) => sim.getTerrainAt(i, j);
     for (let i = 4; i < sim.gridWidthN - 12; i++) for (let j = 4; j < sim.gridHeightN - 4; j++) {
       let ok = true;
       for (let k = 0; k < 3 && ok; k++) for (let dj = -1; dj <= 1 && ok; dj++)
-        if (sim.internals.isBlockedTile(i - k, j + dj) || T(i - k, j + dj) === "water") ok = false;
+        if (sim.isBlockedTile(i - k, j + dj) || T(i - k, j + dj) === "water") ok = false;
       for (let k = 1; k <= 8 && ok; k++) for (let dj = -1; dj <= 1 && ok; dj++)
         if (T(i + k, j + dj) !== "water") ok = false;
       if (ok) return { shore: [i, j] };
@@ -31,7 +31,7 @@ async function main(browser, r) {
   const w1 = await p.evaluate(([i, j]) => {
     const w = sim.pcWolf;
     w.gx = w.nextGX = i - 1 + 0.5; w.gy = w.nextGY = j + 0.5; w.wind = 0.4; w.stamina = 0.7;
-    sim.internals.setCritterIdle(w); w.redecideCd = 1e9;
+    sim.internals.setCritterIdle(w); mind.ignore(w);
     sim.internals.setCritterMoving(w, sim.DIR_E, "walk");
     let enteredAt = null;
     for (let n = 0; n < 600 && enteredAt === null; n++) { sim.internals.tick(); if (w.pose === "swim") enteredAt = n; }
@@ -91,7 +91,7 @@ async function main(browser, r) {
   const d = await p.evaluate(([i, j]) => {
     sim.pcWolf.gx = sim.pcWolf.gy = sim.pcWolf.nextGX = sim.pcWolf.nextGY = -80; sim.internals.setCritterIdle(sim.pcWolf);
     const a = sim.internals.deer[0];
-    a.gx = a.nextGX = i - 1 + 0.5; a.gy = a.nextGY = j + 0.5; a.redecideCd = 1e9;
+    a.gx = a.nextGX = i - 1 + 0.5; a.gy = a.nextGY = j + 0.5; mind.ignore(a);
     sim.internals.setCritterIdle(a); sim.internals.setCritterMoving(a, sim.DIR_E, "walk");
     for (let n = 0; n < 600 && a.pose !== "swim"; n++) sim.internals.tick();
     const startGX = a.gx;

@@ -20,7 +20,7 @@ async function main(browser, r) {
       // Explain each frozen critter: how much of the time it chose to stand still, and
       // how big the patch of passable land it's on is (1 = an enclosed single tile).
       const passable = (i, j) => i >= 0 && j >= 0 && i < sim.gridWidthN && j < sim.gridHeightN
-        && !sim.internals.isBlockedTile(i, j);
+        && !sim.isBlockedTile(i, j);
       const regionSize = (i0, j0, cap = 500) => {
         const seen = new Set([i0 + "_" + j0]); const q = [[i0, j0]];
         while (q.length && seen.size < cap) {

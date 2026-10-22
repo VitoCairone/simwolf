@@ -50,14 +50,14 @@ async function main(browser, r) {
   const walk = await p.evaluate(() => {
     const T = (i, j) => sim.getTerrainAt(i, j);
     sim.allCritters.filter(c => c !== sim.pcWolf).forEach(c => {
-      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
+      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
     });
     // walk east from tile (i, j) for 1 s; flat, level ground on the way
     const level = (i, j) => { const c = sim.tileCorners(i, j); return Math.max(...c) === Math.min(...c); };
     const ok = (i, j) => T(i, j) !== "water" && level(i, j);
     const find = test => {
       for (let i = 2; i < sim.gridWidthN - 4; i++) for (let j = 2; j < sim.gridHeightN - 2; j++)
-        if (ok(i, j) && ok(i + 1, j) && ok(i + 2, j) && !sim.internals.isBlockedTile(i, j)
+        if (ok(i, j) && ok(i + 1, j) && ok(i + 2, j) && !sim.isBlockedTile(i, j)
           && sim.tileCorners(i, j)[0] === sim.tileCorners(i + 1, j)[0]
           && sim.tileCorners(i + 1, j)[0] === sim.tileCorners(i + 2, j)[0] && test(i, j)) return [i, j];
       return null;
@@ -73,7 +73,7 @@ async function main(browser, r) {
       return { from: tile, gx: w.gx };
     };
     const stone = tryWalk(find((i, j) => T(i + 1, j) === "stone" && T(i + 2, j) === "stone"
-      && !sim.internals.isBlockedTile(i + 1, j) && !sim.internals.isBlockedTile(i + 2, j)));
+      && !sim.isBlockedTile(i + 1, j) && !sim.isBlockedTile(i + 2, j)));
     const boulder = tryWalk(find((i, j) => sim.obstacleAt(i + 1, j) === "boulder"));
     return { stone, boulder };
   });

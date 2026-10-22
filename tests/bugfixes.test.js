@@ -19,7 +19,7 @@ async function main(browser, r) {
       let s = 0, o = 0;
       sim.allCritters.forEach((a, i) => {
         if (sim.internals.getOccupiedTiles(a.gx, a.gy).some(t =>
-          sim.internals.isBlockedTile(...t.split("_").map(Number)))) s++;
+          sim.isBlockedTile(...t.split("_").map(Number)))) s++;
         sim.allCritters.slice(i + 1).forEach(b => {
           const span = 2 * sim.internals.critterBoxRad;
           if (Math.abs(a.gx - b.gx) < span && Math.abs(a.gy - b.gy) < span) o++;
@@ -52,18 +52,18 @@ async function main(browser, r) {
     // find open ground with room for both
     const t = sim.internals.allLandTiles.find(([i, j]) =>
       [-1, 0, 1, 2, 3].every(di => [-1, 0, 1].every(dj => {
-        return !sim.internals.isBlockedTile(i + di, j + dj) && sim.getTerrainAt(i + di, j + dj) !== "water"; })));
+        return !sim.isBlockedTile(i + di, j + dj) && sim.getTerrainAt(i + di, j + dj) !== "water"; })));
     // move everyone else far away
     sim.allCritters.filter(c => c !== w && c !== d).forEach(c => {
-      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
+      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
     });
     w.gx = t[0] + 0.5; w.gy = t[1] + 0.5; d.gx = t[0] + 1.6; d.gy = t[1] + 0.5;
-    sim.internals.setCritterIdle(d); d.redecideCd = 1e9; w.redecideCd = 1e9; w.wind = 1; w.stamina = 1;
+    sim.internals.setCritterIdle(d); mind.ignore(d); mind.ignore(w); w.wind = 1; w.stamina = 1;
     sim.internals.setCritterMoving(w, sim.DIR_E, "walk");
     let diedAt = null; const poses = [], bgs = [];
     for (let n = 0; n < 120; n++) {
       sim.internals.tick(); animat.render();
-      if (d.pose === "death" && diedAt === null) { diedAt = sim.tickCount; d.redecideCd = 1; } // force a redecision while dying
+      if (d.pose === "death" && diedAt === null) { diedAt = sim.tickCount; sim.setIntent(d, { dir: sim.DIR_W, gait: "gallop" }); } // told to run while dying
       poses.push(d.pose);
       if (d.pose === "death" || d.pose === "dead") bgs.push(animat.spriteEl(d).style.backgroundPosition);
     }
@@ -80,7 +80,7 @@ async function main(browser, r) {
   });
   r.check(k.diedAt !== null, "bug 3: a wolf kills an IDLE deer");
   r.check(!k.walkedAfterDeath && k.final === "dead" && k.kind === "corpse" && k.inCorpses,
-    "bug 4: a dying deer forced to redecide still becomes a corpse");
+    "bug 4: a dying deer told to run still becomes a corpse");
   r.check(k.deathTicks === k.expectedDeathTicks,
     `bug 5: death animation plays in full (${k.deathTicks} ticks, expected ${k.expectedDeathTicks})`);
   r.check(k.corpseX === k.expectedCorpseX,

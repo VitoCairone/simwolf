@@ -1,11 +1,12 @@
 // THE SIMULATION: the world, its critters and its rules, advanced one tick at a time.
 //
-// This file has no idea how (or whether) the world is drawn or controlled: it never
-// touches the DOM, and it runs as is without a browser (see tests/headless.test.js).
-// Everything it offers is on the one global it defines, `sim` (the interface at the end
-// of this file). Drawing is animat.js, which reads sim's state; input is controls.js,
-// which turns the player's input into intents for sim. Neither is required: without them
-// (consoleOnly) the world simply runs on its own as fast as it can.
+// This file has no idea how (or whether) the world is drawn or controlled, and it makes
+// no decisions for anyone: it never touches the DOM, and it runs as is without a browser
+// (see tests/separation.test.js). Everything it offers is on the one global it defines,
+// `sim` (the interface at the end of this file). Drawing is animat.js, which reads sim's
+// state; input is controls.js, which turns the player's input into an intent for the
+// player's wolf; deciding is mind.js (with senses.js), which sets every critter's intent.
+// None is required: without a mind, critters simply stand still unless told to move.
 //
 // Positions are grid coordinates: tile (i, j) covers [i, i+1) x [j, j+1).
 
@@ -144,7 +145,6 @@ function randomlyPlaceCritter(a) {
   // position tile centered (on half-integer vals) for simple initial overlap check
   a.gx = randLandX + 0.5;
   a.gy = randLandY + 0.5;
-  a.redecideCd = 0; // Cd = Cooldown (ticks)
   a.currentDirection = Math.floor(Math.random() * 4) * 2;
   setCritterIdle(a);
 }
@@ -193,18 +193,26 @@ const moveVecByDir = [
   [ INVROOT2, -INVROOT2 ],
 ];
 
-// THE PLAYER
-// The player's wolf (pcWolf) is driven by the player's intent when there is one, and by
-// its own decisions (like every other critter) when there isn't. How the intent is
-// produced (keys, the movement pad, a script) is not the simulation's business: it is
-// set with setPlayerIntent and applied at the start of every tick, so the world never
-// changes while paused.
-//   null                  no intent: the wolf decides for itself
+// INTENTS: how critters are told what to do. The simulation makes no decisions: each
+// critter does what its intent says, applied at the start of every tick (so the world
+// never changes while paused), within what the world allows (wind, stamina, water,
+// cliffs, other critters). Intents come from outside: a mind (mind.js) sets one for any
+// critter; the player sets one for the player's wolf (pcWolf), which wins while the
+// player is in control. How they are produced is not the simulation's business.
+//   null / none           no intent: the critter carries on as it is
 //   { gait: "idle" }      stand still (tread water, in water)
 //   { dir, gait }         move in grid direction dir (DIR_*) at gait walk/trot/gallop,
 //                         or the best gait wind and stamina allow
+// When a move fails (another critter, a boulder, a cliff, the map's edge), the critter
+// stays put and a.blockedTick records the tick: a fact for whoever decides.
+const intents = new Map(); // critter -> its intent, from a mind
 let playerIntent = null;
 let playerIntentApplied = false; // whether the player was in control at the last tick
+
+function setIntent(a, intent) {
+  if (intent) intents.set(a, intent);
+  else intents.delete(a);
+}
 
 function setPlayerIntent(intent) {
   playerIntent = intent || null;
@@ -214,18 +222,23 @@ function playerHasControl() {
   return playerIntent !== null;
 }
 
-function applyPlayerIntent() {
+function applyIntent(a, intent) {
+  if (intent.gait === "idle") setCritterIdle(a);
+  else setCritterMoving(a, intent.dir, intent.gait);
+}
+
+function applyIntents() {
+  for (const [a, intent] of intents) {
+    if (!isLiveCritter(a)) { intents.delete(a); continue; } // the dead take no orders
+    if (a === pcWolf && playerIntent) continue;             // the player's wins
+    applyIntent(a, intent);
+  }
   if (playerIntent) {
     playerIntentApplied = true;
-    if (playerIntent.gait === "idle") setCritterIdle(pcWolf);
-    else setCritterMoving(pcWolf, playerIntent.dir, playerIntent.gait);
+    applyIntent(pcWolf, playerIntent);
   } else if (playerIntentApplied) {
-    // the player let go: stop, and let the wolf's own decisions resume after a normal
-    // interval instead of instantly overriding the stop (redecideCd keeps counting down
-    // while the player is in control)
-    playerIntentApplied = false;
+    playerIntentApplied = false; // the player let go: stop
     setCritterIdle(pcWolf);
-    pcWolf.redecideCd = Math.max(pcWolf.redecideCd, 120);
   }
 }
 
@@ -527,156 +540,13 @@ function heightAt(gx, gy) {
   return nw * (1 - u) * (1 - v) + ne * u * (1 - v) + sw * (1 - u) * v + se * u * v;
 }
 
-function getOnTileXY(a) {
-  if (!a || !(a.hasOwnProperty('gx'))) return alert("Invalid arg to getOnTileXY");
-
-  return [a.gx, a.gy].map(v => Math.floor(v));
-}
-
-function canSee(a, b) {
-  if (!a || !b || a.kind !== 'critter') return alert("Invalid arg to canSee");
-  if (distBetweenL2(a, b) > 10000) return false;
-
-  const [aX, aY] = getOnTileXY(a);
-  const [bX, bY] = getOnTileXY(b);
-
-  const [visX, visY] = traverseGrid(aX, aY, bX, bY);
-  return visX === bX && visY === bY;
-}
-
-function areSetsEqual(setA, setB) {
-  if (!setA || !setB) return (!setA && !setB);
-  if (setA.size !== setB.size) return false;
-  for (const element of setA) if (!setB.has(element)) return false;
-  return true;
-}
-
-function dirDiff(dirA, dirB) {
-  const diff = Math.abs(dirA - dirB);
-  return Math.min(diff, 8 - diff);
-}
-
-function isVisionFacing(a, b) {
-  return true; // TODO: FIX! isVisonFacing still causes deer to jitter in place
-  const dirTo = getDir(...vecToObj(a, b));
-  const diff = dirDiff(dirTo, a.currentDirection);
-  return diff <= 1 || (a.species === "deer" && diff === 2);
-}
-
-function setPresentOthersIneffMethod() {
-  // this scales O(n^2), rendering somewhat irrelevant
-  // the efficiency benefits in other methods like collision detection.
-  // TODO: replace with faster logic,
-  // e.g. a similar tile-based nearness groupings with larger scale tiles
-
-  allCritters.forEach(a => {
-    // TODO: evaluate whether there is a clean way to do everything we
-    // want in-place with two sets, or better yet one,
-    // and not write a new set every time
-    a.priorOthers = a.presentOthers || new Set();
-    a.presentOthers = new Set();
-  });
-
-  for (var iA = 0; iA < allCritters.length; iA++) {
-    const a = allCritters[iA];
-    for (var iB = iA + 1; iB < allCritters.length; iB++) {
-      const b = allCritters[iB];
-      if (canSee(a, b)) {
-        if (isVisionFacing(a, b)) a.presentOthers.add(b);
-        if (isVisionFacing(b, a)) b.presentOthers.add(a);
-      }
-      if (canHear(a, b)) a.presentOthers.add(b);
-      if (canHear(b, a)) b.presentOthers.add(a);
-    }
-  }
-}
-
-// function signalSnapshots(others) {
-//   // produces snapshots of critters so that the gx, gy of these objects
-//   // will not continue to update
-
-//   // TODO: record actual signal data only, expect and handle nodata
-//   if (!others || !others.size) return [];
-//   return [...others].map(o => {
-//     return {
-//       kind: o.kind,
-//       species: o.species,
-//       gx: o.gx,
-//       gy: o.gy,
-//       speed: o.speed,
-//       currentDirection: o.currentDirection
-//     };
-//   });
-// }
-
-function traverseGrid(aX, aY, bX, bY, fullTrace = false) {
-  // For simplicity we are tracing from tile center to tile center,
-  // not from exact point to point
-  const [sI, sJ] = [aX, aY].map(v => Math.floor(v));
-  const [eI, eJ] = [bX, bY].map(v => Math.floor(v));
-  
-  let [crossI, crossJ] = [eI - sI, eJ - sJ];
-  if (crossI === 0 && crossJ === 0) return fullTrace? [[sI, sJ]] : [sI, sJ];
-
-  const [xSign, ySign] = [crossI, crossJ].map(v => Math.sign(v));
-  [crossI, crossJ] = [crossI, crossJ].map(v => Math.abs(v));
-
-  // Imagine the 'time' of the tracing === 1,
-  // then recipCx is the time it takes between each X boundary
-  // and recipCy is the time between each Y boundary.
-  const [recipCx, recipCy] = [crossI, crossJ].map(v => {
-    return v === 0 ? Infinity : 1 / v
-  });
-  
-  // start at center i.e. halfway between boundaries
-  let [timeToX, timeToY] = [recipCx, recipCy].map(v => v / 2);
-
-  const shifts = [];
-  let [i, j] = [0, 0];
-
-  function shiftToGrid(s) { return [sI + xSign * s[0], sJ + ySign * s[1]]; }
-
-  while (i < crossI || j < crossJ) {
-    if (i > crossI || j > crossJ)
-      return alert("axis crossing error in traverseGrid");
-    if (timeToX === timeToY) {
-      i++;
-      j++;
-      timeToX = recipCx;
-      timeToY = recipCy;
-    } else if (timeToX < timeToY) {
-      i++;
-      timeToY -= timeToX;
-      timeToX = recipCx;
-    } else {
-      j++;
-      timeToX -= timeToY;
-      timeToY = recipCy;
-    }
-    if (fullTrace) {
-      shifts.push([i, j]);
-    } else {
-      if (blocksSight(...shiftToGrid([i, j]))) break;
-    }
-  }
-
-  return fullTrace ? shifts.map(s => shiftToGrid(s)) : shiftToGrid([i, j]);
-}
+// (Perception - seeing and hearing - is senses.js.)
 
 function updateAllCritters() {
-  setPresentOthersIneffMethod();
-
   allCritters.forEach(a => {
     // Wind and stamina change every tick for every critter's current pose, including
     // idle (recovery) and blocked movers.
     applyExertion(a);
-
-    // todo: combine this better with setPresentOthers() so that a wolf
-    // which spots a deer or vice versa will respond on a predictable delay
-    // e.g. a realistic reaction time of 120 ms (7 ticks)
-    a.redecideCd--;
-    if (a.redecideCd <= 0) updateCritterAction(a);
-    if (a.returnToLand) steerToLand(a);
 
     if (a.speed === 0) {
       a.nextGX = a.gx;
@@ -692,16 +562,17 @@ function updateAllCritters() {
     if (nextGX >= critterBoxRad && nextGX < (gridWidthN - critterBoxRad)
       && nextGY >= critterBoxRad && nextGY < (gridHeightN - critterBoxRad)) {
       if (Math.abs(heightAt(nextGX, nextGY) - heightAt(a.gx, a.gy)) > maxStepLevels) {
-        // a cliff in the way: stay put and decide what to do instead, as at a boulder
+        // a cliff in the way: stay put, as at a boulder
         a.nextGX = a.gx;
         a.nextGY = a.gy;
-        updateCritterAction(a);
+        a.blockedTick = g_tick;
         return;
       }
       a.nextGX = nextGX;
       a.nextGY = nextGY;
     } else {
-      setCritterIdle(a);
+      setCritterIdle(a); // the map's edge
+      a.blockedTick = g_tick;
     }
   });
 
@@ -777,19 +648,18 @@ function moveAllTogether(movers, statics = []) {
     if (thing.nextGX === thing.gx && thing.nextGY === thing.gy) return;
 
     if (didCollide[idx]) {
-      // this thing's gx and gy do NOT get updated this tick
-      // and it should decide on a new movement to try for next tick
+      // this thing's gx and gy do NOT get updated this tick: it was blocked (whoever
+      // decides for it can see that, and choose what to do next)
 
       // TODO: allow a rear-ended collider to continue moving when space in front is open
       // this 'should' already be the behavior since creatures move all together, investigate
-      updateCritterAction(thing);
+      thing.blockedTick = g_tick;
     } else {
       // this is the ONLY PLACE ANYWHERE that thing gx and gy should change!
       thing.gx = thing.nextGX;
       thing.gy = thing.nextGY;
       // all-water check for this position, worked out by findCollidingPairs above
       thing.waterState = { gx: thing.gx, gy: thing.gy, allWater: thing.nextAllWater };
-      if (thing.returnToLand) thing.returnToLand.blockedTicks = 0;
       updateTerrainPose(thing); // swim <-> land pose when crossing a shoreline
     }
   });
@@ -864,7 +734,8 @@ let tickDebtS = 0;        // real time elapsed but not yet simulated
 // LISTENERS: how the outside world keeps up with the simulation without the simulation
 // knowing who is listening. Each is a plain function with no arguments.
 //   tick listeners  run at the start of every tick, before the world changes (e.g.
-//                   controls.js turning held keys into this tick's input)
+//                   mind.js deciding what every critter will do this tick, controls.js
+//                   panning the camera with held keys)
 //   frame listeners run after each real-time frame's ticks, and after a single step
 //                   (e.g. animat.js drawing the world as it now is)
 const tickListeners = [];
@@ -881,7 +752,7 @@ function tick() {
   }
   tickListeners.forEach(fn => fn());
 
-  applyPlayerIntent();
+  applyIntents();
 
   deqCurrentDelayed();
 
@@ -987,7 +858,6 @@ function updateTerrainPose(a) {
     setPose(a, "swim");
     a.speed = a.speed > 0 ? travelSpeedBySpeciesAndPose[a.species].swim : 0;
   } else if (!inWater && a.pose === "swim") {
-    endReturnToLand(a); // arrived, if it was heading for land
     const resume = a.landPose || "walk";
     if (a.speed > 0 && resume !== "idle") {
       setPose(a, null); // no current pose, so setCritterMoving applies the change and its checks
@@ -998,115 +868,60 @@ function updateTerrainPose(a) {
   }
 }
 
-// RETURNING TO LAND
-// At each decision, a swimming critter may decide to head back to land, with a chance
-// that grows with its distance from the nearest land: distance / returnToLandSureDist,
-// so certain at returnToLandSureDist tiles or more. Once decided it swims straight for
-// the closest land tile and makes no other decisions until it is ashore. (If it stays
-// blocked for returnToLandGiveUpTicks, e.g. by a boulder in the way, it gives up and
-// decides normally again, so it can't be stuck forever.)
-const returnToLandSureDist = 4;
-const returnToLandGiveUpTicks = 60;
-
-// Land = a tile a critter can stand on and climb onto from the water: not water, not
-// impassable, and low enough somewhere to step up onto from the water (level 0).
+// Land a critter can get onto from the water: not water, not blocked, and low enough
+// somewhere to step up onto from the water (level 0). (A question for minds: a swimmer
+// heading ashore looks for one.)
 function isLandTile(i, j) {
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return false;
   const t = getTerrainAt(i, j);
   return t !== "water" && !isBlockedTile(i, j) && Math.min(...tileCorners(i, j)) <= maxStepLevels;
 }
 
-// Nearest land tile to a critter: { tile: [i, j], distL2 } where distL2 is the SQUARED
-// distance from the critter to the closest point of that tile (squared, so no square
-// root is needed); null if there is no land on the map.
-function findNearestLand(a) {
-  const ci = Math.floor(a.gx), cj = Math.floor(a.gy);
-  const distToTileL2 = (i, j) => sqr(Math.max(i - a.gx, 0, a.gx - (i + 1)))
-    + sqr(Math.max(j - a.gy, 0, a.gy - (j + 1)));
-  let best = null;
-  const maxR = Math.max(gridWidthN, gridHeightN);
-  // search square rings outward; a ring at radius r can't beat a find closer than r - 1
-  for (let r = 0; r <= maxR; r++) {
-    if (best && r >= 1 && best.distL2 <= sqr(r - 1)) break;
-    for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
-      if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue; // ring only
-      if (!isLandTile(i, j)) continue;
-      const d = distToTileL2(i, j);
-      if (!best || d < best.distL2) best = { tile: [i, j], distL2: d };
-    }
+// Whether critter a could go straight to (gx, gy): all the way there it stays inside the
+// map, its body touches no blocked tile, and it meets no cliff - checked in short steps
+// (canStepSampleTiles), the way a move is checked tick by tick, so a walkable run of
+// slopes isn't mistaken for a cliff. (A question for minds, asked many times a tick; the
+// move itself is still checked when it happens.)
+const canStepSampleTiles = 0.25;
+// What canStepTo has looked up this tick, by tile: whether it's blocked, and its corner
+// heights. (The terrain functions keep nothing and are slow to ask the same thing over and
+// over; minds ask about the same few tiles around each critter many times a tick.)
+const stepTileCache = { tick: -1, blocked: new Map(), corners: new Map() };
+function stepTileFacts() {
+  if (stepTileCache.tick !== g_tick) {
+    stepTileCache.tick = g_tick; stepTileCache.blocked.clear(); stepTileCache.corners.clear();
   }
-  return best;
+  return stepTileCache;
 }
-
-// Called at a swimming critter's decision time. Returns true if it decided to go ashore.
-function maybeDecideReturnToLand(a) {
-  const land = findNearestLand(a);
-  // chance min(1, distance / returnToLandSureDist), compared squared:
-  // random * sureDist >= distance  <=>  (random * sureDist)^2 >= distance^2
-  const roll = Math.random() * returnToLandSureDist;
-  if (!land || sqr(roll) >= land.distL2) return false;
-  a.returnToLand = { gx: land.tile[0] + 0.5, gy: land.tile[1] + 0.5, blockedTicks: 0 };
-  a.redecideCd = Infinity; // no other decisions until ashore (see endReturnToLand)
-  steerToLand(a);
+function canStepTo(a, gx, gy) {
+  const facts = stepTileFacts();
+  const blocked = (i, j) => {
+    const key = i * gridHeightN + j;
+    let b = facts.blocked.get(key);
+    if (b === undefined) { b = isBlockedTile(i, j); facts.blocked.set(key, b); }
+    return b;
+  };
+  const height = (x, y) => {
+    const i = Math.floor(x), j = Math.floor(y), key = i * gridHeightN + j;
+    let c = facts.corners.get(key);
+    if (c === undefined) { c = tileCorners(i, j); facts.corners.set(key, c); }
+    const u = x - i, v = y - j;
+    return c[0] * (1 - u) * (1 - v) + c[1] * u * (1 - v) + c[2] * (1 - u) * v + c[3] * u * v;
+  };
+  const n = Math.max(1, Math.ceil(Math.max(Math.abs(gx - a.gx), Math.abs(gy - a.gy)) / canStepSampleTiles));
+  let h = height(a.gx, a.gy);
+  for (let s = 1; s <= n; s++) {
+    const x = a.gx + (gx - a.gx) * s / n, y = a.gy + (gy - a.gy) * s / n;
+    if (x < critterBoxRad || y < critterBoxRad
+      || x >= gridWidthN - critterBoxRad || y >= gridHeightN - critterBoxRad) return false;
+    const i0 = Math.floor(x - critterBoxRad), i1 = Math.floor(x + critterBoxRad);
+    const j0 = Math.floor(y - critterBoxRad), j1 = Math.floor(y + critterBoxRad);
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (blocked(i, j)) return false;
+    const hNext = height(x, y);
+    if (Math.abs(hNext - h) > maxStepLevels) return false;
+    h = hNext;
+  }
   return true;
-}
-
-// Each tick while returning: head straight for the target land tile's center.
-function steerToLand(a) {
-  const t = a.returnToLand;
-  if (!t) return;
-  if (a === pcWolf && playerHasControl()) return endReturnToLand(a); // the player took over
-  setCritterMoving(a, getDir(t.gx - a.gx, t.gy - a.gy), "walk"); // swims while in water
-}
-
-function endReturnToLand(a) {
-  if (!a.returnToLand) return;
-  delete a.returnToLand;
-  a.redecideCd = 0; // free to decide again on the next tick
-}
-
-const wolfAudibleToDeerL2ByTerrainAndSpeed = {
-  grass:   { walk: sqr(3),  trot: sqr(11), gallop: sqr(30) },
-  dirt:    { walk: sqr(4),  trot: sqr(15), gallop: sqr(40) },
-  leaves:  { walk: sqr(6),  trot: sqr(22), gallop: sqr(60) },
-  stone:   { walk: sqr(8),  trot: sqr(30), gallop: sqr(80) },
-  gravel:  { walk: sqr(9),  trot: sqr(37), gallop: sqr(95) },
-  water:   { walk: sqr(9),  trot: sqr(37), gallop: sqr(95), swim: sqr(12) }, // placeholder
-  bush:    { walk: sqr(3),  trot: sqr(11), gallop: sqr(30) }, // placeholder
-};
-
-function vecTo(a, b) { return [b[0] - a[0], b[1] - a[1]]; }
-
-function vecToObj(a, b) { return vecTo([a.gx, a.gy], [b.gx, b.gy]); }
-
-function pairL2(pair) { return pair[0] * pair[0] + pair[1] * pair[1]; }
-
-// distBetweenL2 returns the SQUARED distance (L2) between points
-// which assumes we only need to sort or compare against another L2
-function distBetweenL2(a, b) {
-  if (!a || !b || !a.hasOwnProperty('gx') || !b.hasOwnProperty('gx')) return alert("Invalid arg to distBetween");
-  return pairL2(vecToObj(a, b));
-}
-
-function canHear(a, b) {
-  // a is the listener, and b is the potential sound origin
-  if (!_can(a, "hear")) return false;
-
-  // movement is currently the only source of sound
-  // for now we use one table based on moving wolf and listening deer
-  // revise in future to account for actual origin and listener species
-  if (b.hasOwnProperty('speed') && b.speed === 0) return false;
-
-  const terrain = getTerrainAt(...getOnTileXY(b));
-  if (!wolfAudibleToDeerL2ByTerrainAndSpeed.hasOwnProperty(terrain))
-    return alert("Unknown terrain type for canHear origin");
-
-  const rangeByPoseL2 = wolfAudibleToDeerL2ByTerrainAndSpeed[terrain];
-
-  if (!rangeByPoseL2.hasOwnProperty(b.pose))
-    return alert("Uknown pose for canHear origin");
-
-  return distBetweenL2(a, b) <= rangeByPoseL2[b.pose];
 }
 
 const kphToTpTk = 0.277777 * tempo; // kilometers-per-hour to tiles-per-tick
@@ -1194,44 +1009,6 @@ function setCritterMoving(a, dir, newPose = "walk") {
   setPose(a, newPose);
   a.currentDirection = dir;
   a.speed = travelSpeedBySpeciesAndPose[a.species][a.pose];
-
-  // prevent critters from bumping directly into walls
-  // TODO: improve blocking for on-edge or to-corner motion
-  const moveVec = moveVecByDir[dir];
-  const [nextX, nextY] = [a.gx + moveVec[0], a.gy + moveVec[1]];
-  // (not while heading for land: that makes no new decisions until ashore)
-  if (isBlockedTile(nextX, nextY) && !a.returnToLand) {
-    a.redecideCd = Math.min(a.redecideCd, 5);
-  }
-}
-
-function enactDecision(a, decision) {
-  if (!decision) return alert("falsy decision to enactDecision");
-  const [act, options] = decision;
-  switch (act) {
-    case "flee":
-      // while fleeing a critter should make frequent redecisions
-      // so that it always flees from the closest predator
-      a.redecideCd = Math.min(a.redecideCd, 10);
-
-      if (options.from.length === 1) {
-        const dir = getDir(...vecToObj(options.from[0], a));
-        setCritterMoving(a, dir);
-        return;
-      }
-
-      let [fleeX, fleeY] = [0, 0];
-      options.from.forEach(b => {
-        const fleeVec = vecToObj(b, a);
-        const wt = 1 / Math.max(distBetweenL2(a, b), 1);
-        fleeX += fleeVec[0] * wt;
-        fleeY += fleeVec[1] * wt;
-      });
-      setCritterMoving(a, getDir(fleeX, fleeY));
-      break;
-    default:
-      return alert("unknown decision to enactDecision");
-  }
 }
 
 // TODO: array is currently used for simplicity, but
@@ -1288,38 +1065,6 @@ function startCritterDeath(a, killer) {
   enqDelayed("decontrol", deathDurationSBySpecies[a.species], { a: a, killer: killer });
 }
 
-function updateCritterAction(a) {
-  // a dying critter must not pick a new action, or it would come back to life
-  if (!isLiveCritter(a)) return;
-  if (a === pcWolf && playerHasControl()) return;
-  if (a.isHaltedUntil) {
-    if (a.isHaltedUntil <= g_tick) delete a.isHaltedUntil;
-    return;
-  }
-  if (a.returnToLand) {
-    // Heading for land makes no new decisions; the only way here is a collision.
-    if (++a.returnToLand.blockedTicks < returnToLandGiveUpTicks) return;
-    endReturnToLand(a); // blocked too long: give up and decide normally below
-  }
-  a.redecideCd = 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
-  // note this is only the default time, decisions may override
-
-  if (isInWater(a) && maybeDecideReturnToLand(a)) return;
-
-  const decision = null; // makeDecision(a); // Not Yet Implemented
-  if (decision) { 
-    enactDecision(a, decision); 
-    return;
-  }
-
-  // no decision, update action at random
-  if (Math.random() < 0.1) { setCritterIdle(a); return; }
-
-  const dir = Math.floor(Math.random() * 4) * 2;
-  // any gait; setCritterMoving downgrades it if wind/stamina (or water) don't allow it
-  setCritterMoving(a, dir, sample(["walk", "trot", "gallop"]));
-}
-
 const critterBoxRad = 0.4;
 
 function getOccupiedTiles(gx, gy, boxRad = critterBoxRad) {
@@ -1345,6 +1090,20 @@ function doNextBoundingBoxesOverlap(a, b) {
   // TODO: individual-specific box sizes
   const span = 2 * critterBoxRad;
   return Math.abs(a.nextGX - b.nextGX) < span && Math.abs(a.nextGY - b.nextGY) < span;
+}
+
+// Whether two things' next moves bump into each other: their next boxes overlap, unless
+// they already overlap and are moving apart. (Two that already overlap - a wolf on top of
+// the corpse of a deer it just killed, say - may move apart; otherwise neither could ever
+// move again.)
+function doNextMovesCollide(a, b) {
+  if (!doNextBoundingBoxesOverlap(a, b)) return false;
+  const span = 2 * critterBoxRad;
+  const overlapNow = Math.abs(a.gx - b.gx) < span && Math.abs(a.gy - b.gy) < span;
+  if (!overlapNow) return true;
+  const nowL2 = (a.gx - b.gx) ** 2 + (a.gy - b.gy) ** 2;
+  const nextL2 = (a.nextGX - b.nextGX) ** 2 + (a.nextGY - b.nextGY) ** 2;
+  return nextL2 <= nowL2;
 }
 
 // Terrain no critter can enter. (Water is passable: critters swim, see
@@ -1418,7 +1177,7 @@ function findCollidingPairs(creatures) {
   for (const pairKey of potentialPairs) {
     const [i, j] = pairKey.split('|').map(Number);
     // i == -1 for a blocked tile (impassable terrain or an obstacle)
-    if (i === -1 || doNextBoundingBoxesOverlap(creatures[i], creatures[j])) {
+    if (i === -1 || doNextMovesCollide(creatures[i], creatures[j])) {
       collisions.push([i, j]);
     }
   }
@@ -1516,20 +1275,21 @@ return {
   get tempo() { return tempo; },      // game seconds per tick
   onTick, onFrame,
 
-  // the world
+  // the world, and questions about it
   gridWidthN, gridHeightN, getTerrainAt, obstacleAt,
   tileCorners, heightAt, get maxLevel() { return maxLevel; },
+  isBlockedTile, isLandTile, canStepTo, blocksSight, isLiveCritter,
   allCritters, allCorpses, pcWolf, deathDurationSBySpecies,
 
-  // the player
-  setPlayerIntent, playerHasControl,
-  getDir, DIR_E, DIR_SE, DIR_S, DIR_SW, DIR_W, DIR_NW, DIR_N, DIR_NE,
+  // telling critters what to do (intents), from a mind and from the player
+  setIntent, setPlayerIntent, playerHasControl,
+  getDir, moveVecByDir, DIR_E, DIR_SE, DIR_S, DIR_SW, DIR_W, DIR_NW, DIR_N, DIR_NE,
 
   // Everything else, for tests and debugging from the console only: views and
   // controllers must not use these.
   internals: {
     tick, wolves, deer, allLandTiles,
-    setCritterIdle, setCritterMoving, isInWater, isImpassable, isBlockedTile, getOccupiedTiles,
+    setCritterIdle, setCritterMoving, isInWater, isImpassable, getOccupiedTiles,
     forbidOverlapsOnStart, critterBoxRad, travelSpeedBySpeciesAndPose,
     windRefillHalfLifeSByPose, staminaFullRefillSByPose, maxStepLevels,
     get loopHandle() { return loopHandle; },

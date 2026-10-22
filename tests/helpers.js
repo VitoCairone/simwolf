@@ -40,7 +40,7 @@ async function openGame(browser, { viewport, initScript, initArg } = {}) {
 async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = false } = {}) {
   return page.evaluate(({ who, radius, clearOthers }) => {
     const a = who === "pcWolf" ? sim.pcWolf : eval(who);
-    const dry = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.internals.isBlockedTile(i, j);
+    const dry = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.isBlockedTile(i, j);
     const tile = sim.internals.allLandTiles.find(([i, j]) => {
       if (i < radius || j < radius || i >= sim.gridWidthN - radius || j >= sim.gridHeightN - radius) return false;
       for (let di = -radius; di <= radius; di++)
@@ -49,7 +49,7 @@ async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = 
     });
     if (!tile) return null;
     if (clearOthers) sim.allCritters.filter(c => c !== a).forEach(c => {
-      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
+      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
     });
     a.gx = a.nextGX = tile[0] + 0.5; a.gy = a.nextGY = tile[1] + 0.5;
     sim.internals.setCritterIdle(a);

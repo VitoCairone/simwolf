@@ -72,9 +72,9 @@ async function main(browser, r) {
   // dry, passable tiles, and walk a wolf straight at each from the tile beside it.
   const walk = await p.evaluate(() => {
     const T = (i, j) => sim.getTerrainAt(i, j);
-    const dry = (i, j) => T(i, j) !== "water" && !sim.internals.isBlockedTile(i, j);
+    const dry = (i, j) => T(i, j) !== "water" && !sim.isBlockedTile(i, j);
     sim.allCritters.filter(c => c !== sim.pcWolf).forEach(c => {
-      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; c.redecideCd = 1e9;
+      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
     });
     // edge between (i, j) and (i + 1, j): its step (drop going east) at both ends
     const edgeStep = (i, j) => {
