@@ -67,7 +67,7 @@ async function main(browser, r) {
     const tryWalk = tile => {
       if (!tile) return null;
       const w = sim.pcWolf;
-      w.gx = w.nextGX = tile[0] + 0.5; w.gy = w.nextGY = tile[1] + 0.5;
+      w.gx = w.nextGX = tile[0] + 0.5; w.gy = w.nextGY = tile[1] + 0.5; w.stunnedUntil = 0;
       sim.internals.setCritterIdle(w);
       sim.setPlayerIntent({ dir: sim.DIR_E, gait: "walk" });
       for (let n = 0; n < 60; n++) sim.internals.tick();

@@ -52,6 +52,7 @@ async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = 
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
     });
     a.gx = a.nextGX = tile[0] + 0.5; a.gy = a.nextGY = tile[1] + 0.5;
+    a.stunnedUntil = 0; // not stunned from before it was moved
     sim.internals.setCritterIdle(a);
     if (a === sim.pcWolf) animat.followWolf();
     animat.render();

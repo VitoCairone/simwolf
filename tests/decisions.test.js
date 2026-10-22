@@ -22,8 +22,10 @@ const { openGame, runStandalone } = require("./helpers");
 // in the page: put a wolf and a deer on open dry ground, everyone else away
 function setup({ deerAt, deer2At = null, wolfThinks = true, deerThinks = true }) {
   sim.pause();
-  const w = sim.internals.wolves[1], d = sim.internals.deer[0];
-  const d2 = deer2At ? sim.internals.deer[1] : null;
+  // (live ones: one may have been killed in the moment of play before the test paused)
+  const w = sim.internals.wolves.find(c => c !== sim.pcWolf && sim.isLiveCritter(c));
+  const liveDeer = sim.internals.deer.filter(c => sim.isLiveCritter(c));
+  const d = liveDeer[0], d2 = deer2At ? liveDeer[1] : null;
   sim.allCritters.filter(c => c !== w && c !== d && c !== d2).forEach(c => {
     c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
   });
@@ -35,11 +37,11 @@ function setup({ deerAt, deer2At = null, wolfThinks = true, deerThinks = true })
     return true;
   });
   if (!t) return null;
-  w.gx = w.nextGX = t[0] + 0.5; w.gy = w.nextGY = t[1] + 0.5;
-  d.gx = d.nextGX = w.gx + deerAt[0]; d.gy = d.nextGY = w.gy + deerAt[1];
-  if (d2) { d2.gx = d2.nextGX = w.gx + deer2At[0]; d2.gy = d2.nextGY = w.gy + deer2At[1]; }
+  w.gx = w.nextGX = t[0] + 0.5; w.gy = w.nextGY = t[1] + 0.5; w.stunnedUntil = 0;
+  d.gx = d.nextGX = w.gx + deerAt[0]; d.gy = d.nextGY = w.gy + deerAt[1]; d.stunnedUntil = 0;
+  if (d2) { d2.gx = d2.nextGX = w.gx + deer2At[0]; d2.gy = d2.nextGY = w.gy + deer2At[1]; d2.stunnedUntil = 0; }
   for (const c of [w, d, d2].filter(Boolean)) {
-    c.wind = 1; c.stamina = 1; sim.internals.setCritterIdle(c);
+    c.wind = 1; c.stamina = 1; c.stunnedUntil = 0; sim.internals.setCritterIdle(c); // (not stunned)
     mind.ignore(c, c === w ? !wolfThinks : !deerThinks);
     mind.forget(c); // nothing remembered from before the test
   }

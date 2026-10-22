@@ -30,7 +30,7 @@ async function main(browser, r) {
   // 1. a wolf walks east off the shore into the water and swims
   const w1 = await p.evaluate(([i, j]) => {
     const w = sim.pcWolf;
-    w.gx = w.nextGX = i - 1 + 0.5; w.gy = w.nextGY = j + 0.5; w.wind = 0.4; w.stamina = 0.7;
+    w.gx = w.nextGX = i - 1 + 0.5; w.gy = w.nextGY = j + 0.5; w.wind = 0.4; w.stamina = 0.7; w.stunnedUntil = 0;
     sim.internals.setCritterIdle(w); mind.ignore(w);
     sim.internals.setCritterMoving(w, sim.DIR_E, "walk");
     let enteredAt = null;
@@ -91,7 +91,7 @@ async function main(browser, r) {
   const d = await p.evaluate(([i, j]) => {
     sim.pcWolf.gx = sim.pcWolf.gy = sim.pcWolf.nextGX = sim.pcWolf.nextGY = -80; sim.internals.setCritterIdle(sim.pcWolf);
     const a = sim.internals.deer[0];
-    a.gx = a.nextGX = i - 1 + 0.5; a.gy = a.nextGY = j + 0.5; mind.ignore(a);
+    a.gx = a.nextGX = i - 1 + 0.5; a.gy = a.nextGY = j + 0.5; mind.ignore(a); a.stunnedUntil = 0;
     sim.internals.setCritterIdle(a); sim.internals.setCritterMoving(a, sim.DIR_E, "walk");
     for (let n = 0; n < 600 && a.pose !== "swim"; n++) sim.internals.tick();
     const startGX = a.gx;

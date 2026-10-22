@@ -12,7 +12,8 @@
 // sightRangeTiles (in any direction, through anything), and of nothing further away.
 // A more realistic hearing and vision (sight blocked by boulders, a field of view,
 // hearing that depends on the ground and the gait) is kept below, commented out, for
-// later.
+// later. A line of sight over the terrain's heights, tried out as an overlay for the
+// player, is shelved in experiments/sight-overlay/ (not loaded).
 
 const senses = (() => {
 

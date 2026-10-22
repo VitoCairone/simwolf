@@ -38,7 +38,7 @@ async function main(browser, r) {
   for (const [keys, [ex, ey]] of CASES) {
     await p.evaluate(() => {
       const [i, j] = window.__openTile;
-      sim.pcWolf.gx = sim.pcWolf.nextGX = i + 0.5; sim.pcWolf.gy = sim.pcWolf.nextGY = j + 0.5;
+      sim.pcWolf.gx = sim.pcWolf.nextGX = i + 0.5; sim.pcWolf.gy = sim.pcWolf.nextGY = j + 0.5; sim.pcWolf.stunnedUntil = 0;
       sim.internals.setCritterIdle(sim.pcWolf); animat.render();
     });
     const before = await p.evaluate(() => animat.isoProject(sim.pcWolf.gx, sim.pcWolf.gy));

@@ -58,6 +58,7 @@ async function main(browser, r) {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
     });
     w.gx = t[0] + 0.5; w.gy = t[1] + 0.5; d.gx = t[0] + 1.6; d.gy = t[1] + 0.5;
+    w.stunnedUntil = d.stunnedUntil = 0; // not stunned from before they were moved
     sim.internals.setCritterIdle(d); mind.ignore(d); mind.ignore(w); w.wind = 1; w.stamina = 1;
     sim.internals.setCritterMoving(w, sim.DIR_E, "walk");
     let diedAt = null; const poses = [], bgs = [];

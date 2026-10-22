@@ -57,7 +57,7 @@ async function main(browser, r) {
       if (Math.min(...c) >= 1 && Math.max(...c) > Math.min(...c)) { tile = [i, j]; break; }
     }
     if (!tile) return null;
-    w.gx = w.nextGX = tile[0] + 0.5; w.gy = w.nextGY = tile[1] + 0.5;
+    w.gx = w.nextGX = tile[0] + 0.5; w.gy = w.nextGY = tile[1] + 0.5; w.stunnedUntil = 0;
     sim.internals.setCritterIdle(w); animat.render();
     const el = animat.spriteEl(w);
     const fd = animat.frameDataBySpeciesAndPose.wolf[w.pose];
@@ -92,7 +92,7 @@ async function main(browser, r) {
     const tryCross = tile => {
       if (!tile) return null;
       const w = sim.pcWolf;
-      w.gx = w.nextGX = tile[0] + 0.5; w.gy = w.nextGY = tile[1] + 0.5;
+      w.gx = w.nextGX = tile[0] + 0.5; w.gy = w.nextGY = tile[1] + 0.5; w.stunnedUntil = 0;
       sim.internals.setCritterIdle(w);
       // the player's intent keeps the wolf pushing east (decisions can't turn it)
       sim.setPlayerIntent({ dir: sim.DIR_E, gait: "walk" });
