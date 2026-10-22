@@ -21,8 +21,8 @@ let g_next_uid = 0;
 let isPaused = false;
 
 // parameters
-const gridWidthN = 900; //3533088 = c * 1/60 sec / root2
-const gridHeightN = 900;
+const gridWidthN = 128; //3533088 = c * 1/60 sec / root2
+const gridHeightN = 128;
 
 // NOTE: tileMap and terrainTypes below are not used by anything (kept as reference).
 // when source becomes multiple files, read this sort of fixed data from its own file
@@ -477,7 +477,7 @@ function isBlockedTile(gx, gy) {
 // floor(maxElevation) (14); a given map's highest is usually lower (maxLevel: 11 on the
 // 900 x 900 map). Raise it for taller hills and deeper valleys, lower it for gentler
 // land: every elevation scales with it.
-const maxElevation = 90;
+const maxElevation = 14;
 const levelsPerReliefUnit = maxElevation / (reliefHighest - lakeBelow); // 20
 const maxStepLevels = 1.5; // a one-level ledge can be stepped; two levels or more can't
 
