@@ -1,6 +1,7 @@
 // THE CONTROLS: the player's input. Keys, the movement pad, the sidebar buttons and the
 // pointer become the player's wolf's intent, pause and step (through sim's interface),
-// and zoom and camera moves (through animat). It draws nothing itself.
+// and zoom and camera moves (through animat). It draws nothing itself. With a mind
+// attached, switching to camera mode hands the wolf to it at once.
 //
 // Everything it offers is on the one global it defines, `controls`. Connect it with
 // controls.attach(sim, animat).
@@ -9,6 +10,7 @@ const controls = (() => {
 
 let sim = null;    // set by attach()
 let animat = null;
+let mind = null;   // optional
 
 const arrowKeyNames = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
 const keysPressed = {};
@@ -66,6 +68,7 @@ function toggleArrowMode() {
   animat.showArrowMode(arrowsMoveWolf);
   if (arrowsMoveWolf) animat.followWolf();
   updatePlayerIntent();
+  if (!arrowsMoveWolf && !pad && mind) mind.takeOver(sim.pcWolf);
 }
 
 // MOVEMENT PAD (#move-pad in index.html): the pointer's offset from the pad's center
@@ -99,7 +102,7 @@ function releaseMovePad() {
   updatePlayerIntent();
 }
 
-function attach(theSim, theAnimat) {
+function attach(theSim, theAnimat, theMind = null) {
   if (sim) return alert("controls.attach called twice");
   if (!theSim || typeof theSim.setPlayerIntent !== "function")
     return alert("controls.attach needs the simulation (load sim.js)");
@@ -107,6 +110,7 @@ function attach(theSim, theAnimat) {
     return alert("controls.attach needs the view (load animat.js)");
   sim = theSim;
   animat = theAnimat;
+  mind = theMind;
 
   document.addEventListener("keydown", onKeyDown);
   document.addEventListener("keyup", onKeyUp);

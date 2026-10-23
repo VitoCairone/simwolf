@@ -81,7 +81,8 @@
          senses    what each critter perceives (senses.js)
          mind      what each critter decides, as intents for sim (mind.js)
          animat    draws the world (animat.js)
-         controls  the player's input, as intents for sim and changes to animat (controls.js)
+         controls  the player's input, as intents for sim and changes to animat, handing
+                   the wolf to mind on request (controls.js)
        To run without drawing (in a browser console or Node), load the first three and run:
          sim.init(); senses.attach(sim); mind.attach(sim, senses); sim.start({ consoleOnly: true }); -->
   <script src="sim.js"></script>
@@ -95,7 +96,7 @@
       senses.attach(sim);
       mind.attach(sim, senses);
       animat.attach(sim);
-      controls.attach(sim, animat);
+      controls.attach(sim, animat, mind);
       sim.start();
     });
   </script>

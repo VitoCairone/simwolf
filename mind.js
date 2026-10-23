@@ -545,6 +545,13 @@ function ignore(a, on = true) {
   else ignored.delete(a);
 }
 
+// The player has handed critter a over: it decides on its next turn, without the usual
+// wait after the player lets go (playerHandoverS).
+function takeOver(a) {
+  const m = memories.get(a);
+  if (m) m.playerTick = -Infinity;
+}
+
 // For tests and debugging: wipe a critter's memory and last decision.
 function forget(a) {
   dropMemory(a);
@@ -574,7 +581,7 @@ function attach(theSim, theSenses) {
   sim.onTick(think);
 }
 
-return { attach, ignore, forget, stateOf, get turnTicks() { return turnTicks; }, wolfHuntBelow };
+return { attach, takeOver, ignore, forget, stateOf, get turnTicks() { return turnTicks; }, wolfHuntBelow };
 
 })();
 

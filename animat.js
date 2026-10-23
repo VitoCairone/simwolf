@@ -206,7 +206,7 @@ function setStyle(node, cache, prop, value) {
 // TODO: the pan limits assume zoom 1, so zoomed in you can't pan to the map's edges.
 const zoomMin = 1;
 const zoomMax = 8;
-const camera = { shiftPX: 0, shiftPY: 0, zoom: 1, followsWolf: true };
+const camera = { shiftPX: 0, shiftPY: 0, zoom: 2, followsWolf: true }; // starts a step in from the widest
 let viewportWidth = 0;
 let viewportHeight = 0;
 let drawnCameraKey = null; // the camera the tiles were last drawn for
