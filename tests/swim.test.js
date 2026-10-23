@@ -1,5 +1,9 @@
-// Swimming: water is passable, critters switch to the swim pose (own sprite sheet,
-// one speed per species, no effect on wind or stamina) in water and back to land poses on shore.
+// Swimming: water is passable, critters switch to the swim pose (own sprite sheet) in water
+// and back to land poses on shore. In water a critter swims at its species' swim speed,
+// or sprints (swimBurst) when asked to gallop with the wind for it; it never stands still
+// in water (told to stand or eat, or after a stun, it swims on); swimming uses stamina (a
+// full reserve lasts swimTimeS: GAMIFIED 12 minutes for a wolf, 6 for a deer), a sprint
+// also wind; out of wind a sprint drops to swimming, out of stamina a swimmer can't move.
 
 const path = require("path");
 const { openGame, runStandalone, ensureOutputDir } = require("./helpers");
@@ -48,9 +52,15 @@ async function main(browser, r) {
   }, setup.shore);
   r.check(w1.enteredAt !== null && w1.inWater && w1.pose === "swim",
     `wolf walks into water and swims (pose ${w1.pose}, entered after ${w1.enteredAt} ticks)`);
-  r.check(Math.abs(w1.kmh - 5) < 0.1, `wolf swims at ${w1.kmh.toFixed(2)} km/h (expected 5)`);
-  r.check(w1.reserves.join() === w1.reservesAtEntry.join(),
-    `swimming changes neither wind nor stamina (${w1.reservesAtEntry.map(v => v.toFixed(4))} on entering, ${w1.reserves.map(v => v.toFixed(4))} after 2 s)`);
+  const sp = await p.evaluate(() => ({ kph: sim.internals.SPEEDS.travelKph, ex: sim.internals.SPEEDS.exertion,
+    name: sim.speeds }));
+  r.check(Math.abs(w1.kmh - sp.kph.wolf.swim) < 0.1, `wolf swims at ${w1.kmh.toFixed(2)} km/h (expected ${sp.kph.wolf.swim})`);
+  const used = w1.reservesAtEntry[1] - w1.reserves[1], expectUsed = 2 / sp.ex.wolf.swimTimeS;
+  r.check(w1.reserves[0] === w1.reservesAtEntry[0] && Math.abs(used / expectUsed - 1) < 0.02,
+    `swimming uses stamina, not wind: ${(used * 100).toFixed(3)}% of it in 2 s ` +
+    `(a full reserve lasts ${(sp.ex.wolf.swimTimeS / 60).toFixed(0)} minutes)`);
+  r.check(sp.name !== "gamified" || (sp.ex.wolf.swimTimeS === 12 * 60 && sp.ex.deer.swimTimeS === 6 * 60),
+    `gamified, a full stamina swims a wolf 12 minutes and a deer 6 (${sp.ex.wolf.swimTimeS / 60}, ${sp.ex.deer.swimTimeS / 60})`);
   r.check(w1.cls === "critter wolf-swim" && w1.sheet.includes("wolf-swim.png") && w1.size.join() === "64px,64px",
     `wolf uses its swim sheet (class "${w1.cls}", ${w1.size.join(" x ")})`);
 
@@ -63,16 +73,55 @@ async function main(browser, r) {
   });
   await p.screenshot({ path: path.join(outDir, "wolf-swimming.png"), clip });
 
-  // 2. stopping in water: treads water (swim pose, speed 0), not "idle"
-  const tread = await p.evaluate(() => { sim.internals.setCritterIdle(sim.pcWolf); sim.internals.tick(); return [sim.pcWolf.pose, sim.pcWolf.speed]; });
-  r.check(tread[0] === "swim" && tread[1] === 0, `stopping in water treads water (pose ${tread[0]}, speed ${tread[1]})`);
-
-  // 3. asking to gallop in water still swims at swim speed
-  const spr = await p.evaluate(() => {
-    sim.internals.setCritterMoving(sim.pcWolf, sim.DIR_W, "gallop");
-    return [sim.pcWolf.pose, sim.pcWolf.speed === sim.internals.travelSpeedBySpeciesAndPose.wolf.swim, sim.pcWolf.landPose];
+  // 2. no standing still in water: told to stand, or eat, or after a stun, it swims on
+  const still = await p.evaluate(() => {
+    const w = sim.pcWolf, S = sim.internals, swim = S.travelSpeedBySpeciesAndPose.wolf.swim;
+    const out = {};
+    for (const gait of ["idle", "eat"]) {
+      sim.setPlayerIntent({ gait }); S.tick();
+      const at = [w.gx, w.gy]; S.tick();
+      out[gait] = w.pose === "swim" && w.speed === swim && (w.gx !== at[0] || w.gy !== at[1]);
+    }
+    sim.setPlayerIntent(null); S.tick();
+    // a stun halts it; once over, it swims on
+    S.stun(w);
+    const stunned = w.speed === 0;
+    for (let n = 0; n < 40; n++) S.tick();
+    out.afterStun = stunned && w.speed === swim && w.pose === "swim";
+    return out;
   });
-  r.check(spr[0] === "swim" && spr[1], `gallop request in water = swim at swim speed (pose ${spr[0]})`);
+  r.check(still.idle && still.eat && still.afterStun,
+    `no standing still in water: told to stand (${still.idle}) or eat (${still.eat}), or after a stun (${still.afterStun}), it swims on the way it faces`);
+
+  // 3. asking to gallop in water sprints (swimBurst), using wind; out of wind it swims;
+  //    out of stamina it can't move at all
+  const spr = await p.evaluate(() => {
+    const w = sim.pcWolf, S = sim.internals, v = S.travelSpeedBySpeciesAndPose.wolf;
+    w.wind = 1; w.stamina = 1;
+    S.setCritterMoving(w, sim.DIR_N, "gallop");
+    const sprint = { pose: w.pose, burst: w.targetSpeed === v.swimBurst, wind: w.wind };
+    S.tick(); sprint.windUsed = sprint.wind - w.wind;
+    w.wind = 1e-9; S.tick();
+    const outOfWind = { swim: w.targetSpeed === v.swim, burst: w.swimBurst };
+    S.setCritterMoving(w, sim.DIR_N, "gallop"); // can't start a sprint without wind
+    const noRestart = w.targetSpeed === v.swim;
+    w.stamina = 1e-9; S.tick();
+    for (let n = 0; n < 200 && w.speed > 0; n++) S.tick(); // (slowing to a stop)
+    const exhausted = { speed: w.speed, pose: w.pose };
+    const at = [w.gx, w.gy];
+    S.setCritterMoving(w, sim.DIR_W, "walk"); // asked to move, it can't
+    for (let n = 0; n < 60; n++) S.tick();
+    exhausted.stayed = w.gx === at[0] && w.gy === at[1] && w.speed === 0 && w.pose === "swim";
+    w.wind = 1; w.stamina = 1; // rested again: gallop back west, for what follows
+    S.setCritterMoving(w, sim.DIR_W, "gallop");
+    return { sprint, outOfWind, noRestart, exhausted };
+  });
+  r.check(spr.sprint.pose === "swim" && spr.sprint.burst && spr.sprint.windUsed > 0,
+    `gallop request in water = a sprint at swimBurst speed, using wind (pose ${spr.sprint.pose})`);
+  r.check(spr.outOfWind.swim && !spr.outOfWind.burst && spr.noRestart,
+    `out of wind, a sprint drops to swimming, and can't start again without wind`);
+  r.check(spr.exhausted.speed === 0 && spr.exhausted.stayed,
+    `out of stamina, a swimmer can't move: it treads water where it is (stuck, for now)`);
 
   // 4. swimming back west onto land resumes the requested land pose and the land sheet
   const back = await p.evaluate(() => {
@@ -101,8 +150,8 @@ async function main(browser, r) {
     return { pose: a.pose, kmh: (a.gx - startGX) / (120 * sim.tempo) * 3.6,
       cls: el.className, size: [getComputedStyle(el).width, getComputedStyle(el).height] };
   }, setup.shore);
-  r.check(d.pose === "swim" && Math.abs(d.kmh - 8) < 0.1,
-    `deer swims at ${d.kmh.toFixed(2)} km/h (expected 8)`);
+  r.check(d.pose === "swim" && Math.abs(d.kmh - sp.kph.deer.swim) < 0.1,
+    `deer swims at ${d.kmh.toFixed(2)} km/h (expected ${sp.kph.deer.swim})`);
   r.check(d.cls === "critter deer-swim" && d.size.join() === "40px,48px",
     `deer uses its swim sheet (class "${d.cls}", ${d.size.join(" x ")} frames)`);
   await p.evaluate(() => { const a = sim.internals.deer[0]; animat.setZoom(4);

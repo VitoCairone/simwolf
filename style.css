@@ -1,4 +1,4 @@
-/* SimWolf page styles. Image paths are relative to this file (the project root). */
+/* SimWolf's page. Image paths are relative to the project root. */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body, html { height: 100%; overflow: hidden; background-color: #222; }
@@ -41,9 +41,8 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   justify-content: center;
   padding: 10px;
 }
-/* Exertion meters for the player's wolf: the wind bar (burst reserve, limits
-   galloping) sits directly on top of the stamina bar (endurance reserve, limits
-   trotting). Full bar = full reserve. No labels: no words or numbers in gameplay UI. */
+/* The player's wolf's meters: wind, stamina and food, a full bar when full. No labels:
+   the game shows no words or numbers. */
 .exertion-meter {
   height: 6px;
   width: 100%;
@@ -55,6 +54,7 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
 }
 #wind-meter-fill { background-color: #7fe6ff; }
 #stamina-meter-fill { background-color: yellow; }
+#food-meter-fill { background-color: #e03c3c; }
 #field-wrapper {
   flex: 1;
   position: relative;
@@ -81,10 +81,9 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   background-size: auto;
   image-rendering: pixelated;
 }
-/* Critter sprites: every critter element has .critter plus ONE sprite-sheet class.
-   Each sheet class sets that sheet's image and frame size. A pose's `sheet` in
-   frameDataBySpeciesAndPose (animat.js) names its class; frameW/frameH there must
-   match the width/height here. */
+/* Critter sprites: .critter plus one sheet class, which sets the sheet's image and frame
+   size. frameDataBySpeciesAndPose in animat.js names these classes; its frameW and frameH
+   must match the sizes here. */
 .critter {
   position: absolute;
   background-repeat: no-repeat;
@@ -103,7 +102,7 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
 .deer {
   width: 32px;
   height: 41px;
-  background-image: url('./images/stag-walk-idle-run.png');
+  background-image: url('./images/deer-land.png');
 }
 .deer-swim {
   width: 40px;
@@ -115,9 +114,13 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   height: 48px;
   background-image: url('./images/stag-death.png');
 }
-/* Land tiles: a .ground-column per tile, holding its .ground pieces (the shape sprite and
-   any cliff risers below it) and any obstacle on it (a boulder, .tile.boulder). See "GROUND" in
-   animat.js; the sheet is made by spritecraft/make_slope_tiles.py. */
+/* Its background layers are set by animat.js (see CARCASSES there). */
+.deer-carcass {
+  width: 48px;
+  height: 48px;
+}
+/* Land tiles: a .ground-column per tile holding its .ground pieces (its shape's sprite and
+   any cliff risers below) and any boulder (.tile.boulder). See GROUND in animat.js. */
 .ground-column { position: absolute; }
 .ground {
   position: absolute;
@@ -141,13 +144,13 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   top: 0;
   left: 0;
 }
-/* Tiles and critter sprites share ONE stacking order so land tiles can be drawn over
-   swimmers in front of them: these two layers must NOT set a z-index of their own
-   (see "DRAWING ORDER" in animat.js). The debug layer stays above everything. */
+/* Tiles and sprites share one stacking order, so land can be drawn over swimmers behind
+   it: these two layers must not set a z-index of their own (see DRAWING ORDER in
+   animat.js). */
 #tile-layer { z-index: auto; }
 #sprite-layer { z-index: auto; }
 #debug-layer { z-index: 1000000; }
-/* On-screen movement pad: lives in #field-wrapper (NOT #field) so it never scrolls or zooms. */
+/* In #field-wrapper, not #field, so it doesn't pan or zoom with the world. */
 #move-pad {
   position: absolute;
   right: 24px;
@@ -176,16 +179,9 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   visibility: hidden;
 }
 #move-pad-knob.visible { visibility: visible; }
-.tile.dirt      { background-position: -288px    0px; }
-.tile.grass     { background-position: -64px   -64px; }
-.tile.bush      { background-position: -96px   -96px; }
-.tile.tallgrass { background-position: -160px  -96px; }
-.tile.flower    { background-position: -256px  -96px; }
 .tile.boulder   { background-position: -288px -128px; }
-.tile.stone     { background-position: -192px -160px; }
 .tile.water     { background-position: -192px -288px; }
-.tile.ice       { background-position:   0px  -320px; }
-/* Debug readout of the grid coordinates under the pointer (developer debug values only). */
+/* Debug readout: the grid coordinates under the pointer. */
 #cursor-coords {
   margin-top: auto;
   font-size: 12px;

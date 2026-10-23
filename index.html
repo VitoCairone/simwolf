@@ -22,7 +22,7 @@
           <path d="M22 12 L18 9 V11 H14 V13 H18 V15 Z" />
         </svg>
         <svg id="arrow-mode-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <!-- SVG set by script on page load -->
+          <!-- set by animat.showArrowMode -->
         </svg>
       </button>
 
@@ -47,6 +47,7 @@
       <div id="exertion-meters">
         <div class="exertion-meter"><div id="wind-meter-fill" class="exertion-meter-fill"></div></div>
         <div class="exertion-meter"><div id="stamina-meter-fill" class="exertion-meter-fill"></div></div>
+        <div class="exertion-meter"><div id="food-meter-fill" class="exertion-meter-fill"></div></div>
       </div>
 
       <div id="cursor-coords">
@@ -61,9 +62,8 @@
           <div id="dbel-pc-wolf"></div>
         </div>
       </div>
-      <!-- Movement pad. Rings (outer to inner): gallop, trot, walk, deadzone (stop).
-           Radii are in a 100-unit viewBox and are read by controls.js, so the drawing is the
-           single source of truth for the ring sizes. -->
+      <!-- Movement pad: rings for gallop, trot, walk and stop. controls.js reads their
+           radii from here. -->
       <div id="move-pad" aria-label="Movement pad">
         <svg viewBox="-100 -100 200 200" xmlns="http://www.w3.org/2000/svg">
           <circle class="ring" data-pose="gallop" r="100" />
@@ -76,14 +76,13 @@
     </div>
   </div>
 
-  <!-- The game is five parts, each defining ONE global object with an explicit interface:
-         sim       the world and its rules (sim.js; never touches the page, decides nothing)
-         senses    what each critter perceives (senses.js; only reads sim)
-         mind      what each critter decides to do, as intents for sim (mind.js)
-         animat    draws the world (animat.js; only reads sim)
-         controls  the player's input, turned into intents for sim and animat (controls.js)
-       They are connected here and nowhere else. For a console-only run with nothing drawn,
-       load sim.js, senses.js and mind.js, then run:
+  <!-- Five parts, each one global object, connected here and nowhere else:
+         sim       the world and its rules (sim.js)
+         senses    what each critter perceives (senses.js)
+         mind      what each critter decides, as intents for sim (mind.js)
+         animat    draws the world (animat.js)
+         controls  the player's input, as intents for sim and changes to animat (controls.js)
+       To run without drawing (in a browser console or Node), load the first three and run:
          sim.init(); senses.attach(sim); mind.attach(sim, senses); sim.start({ consoleOnly: true }); -->
   <script src="sim.js"></script>
   <script src="senses.js"></script>

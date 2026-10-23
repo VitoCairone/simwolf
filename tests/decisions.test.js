@@ -1,12 +1,12 @@
 // Senses and decisions (senses.js, mind.js):
-//  - sight: every creature within 10 tiles, nothing further
+//  - sight: every creature within senses.sightRangeTiles (20), nothing further
 //  - a deer flees a wolf it sees; a wolf chases a deer it sees
 //  - memory: a deer keeps fleeing a wolf it can no longer see, and a wolf keeps after a
 //    deer it can no longer see, toward where the deer was heading
 //  - forgetting: both give up once the sighting is old enough
 //  - no dithering: a wolf with two deer about as near in opposite directions picks the
 //    one ahead of it and keeps to it, without flipping between them
-//  - a chase ends in a kill: a wolf runs down a tired deer
+//  - a chase ends in a kill: a hungry wolf runs down a tired deer, and eats it straight away
 //  - galloping is only for chasing and fleeing: over a minute of play, no calm critter
 //    gallops
 //  - any heading: a critter moves along whatever grid vector it is told, facing the
@@ -42,6 +42,8 @@ function setup({ deerAt, deer2At = null, wolfThinks = true, deerThinks = true })
   if (d2) { d2.gx = d2.nextGX = w.gx + deer2At[0]; d2.gy = d2.nextGY = w.gy + deer2At[1]; d2.stunnedUntil = 0; }
   for (const c of [w, d, d2].filter(Boolean)) {
     c.wind = 1; c.stamina = 1; c.stunnedUntil = 0; sim.internals.setCritterIdle(c); // (not stunned)
+    c.speed = 0; // placed: standing, not slowing from how it moved before
+    c.food = c.species === "wolf" ? 0.3 : 1; // a hungry wolf (it hunts), a fed deer (it doesn't graze)
     mind.ignore(c, c === w ? !wolfThinks : !deerThinks);
     mind.forget(c); // nothing remembered from before the test
   }
@@ -56,16 +58,17 @@ async function main(browser, r) {
     await p.evaluate(`window.setup = ${setup.toString()}`);
   };
 
-  // 1. sight: within 10 tiles only
+  // 1. sight: within sightRangeTiles only
   const sight = await p.evaluate(() => {
     sim.pause();
-    const w = sim.internals.wolves[1], [d1, d2] = sim.internals.deer;
-    d1.gx = w.gx + 6; d1.gy = w.gy + 7.9;     // 9.98 tiles away
-    d2.gx = w.gx - 7; d2.gy = w.gy + 7.2;     // 10.04 tiles away
+    const w = sim.internals.wolves[1], [d1, d2] = sim.internals.deer, k = senses.sightRangeTiles / 10;
+    d1.gx = w.gx + 6 * k; d1.gy = w.gy + 7.9 * k;     // 0.998 of the range away
+    d2.gx = w.gx - 7 * k; d2.gy = w.gy + 7.2 * k;     // 1.004 of it
     const seen = senses.perceive(w).map(o => o.uid);
-    return { near: seen.includes(d1.uid), far: seen.includes(d2.uid) };
+    return { range: senses.sightRangeTiles, near: seen.includes(d1.uid), far: seen.includes(d2.uid) };
   });
-  r.check(sight.near && !sight.far, `sight reaches 10 tiles and no further (9.98: ${sight.near}, 10.04: ${sight.far})`);
+  r.check(sight.range === 20 && sight.near && !sight.far,
+    `sight reaches ${sight.range} tiles and no further (${(0.998 * sight.range).toFixed(2)}: ${sight.near}, ${(1.004 * sight.range).toFixed(2)}: ${sight.far})`);
 
   // 2. a deer flees a wolf in sight
   await fresh();
@@ -73,11 +76,11 @@ async function main(browser, r) {
     if (!setup({ deerAt: [4, 4], wolfThinks: false })) return null;
     const [w, d] = [__w, __d];
     const d0 = Math.hypot(d.gx - w.gx, d.gy - w.gy);
-    for (let n = 0; n < 30; n++) sim.internals.tick();
+    for (let n = 0; n < 60; n++) sim.internals.tick(); // (picking up speed from a standstill)
     return { d0, d1: Math.hypot(d.gx - w.gx, d.gy - w.gy), mode: mind.stateOf(d).mode, pose: d.pose };
   })()`);
   r.check(flee && flee.mode === "flee" && flee.d1 > flee.d0 + 3,
-    `a deer flees a wolf it sees (${flee && flee.d0.toFixed(1)} -> ${flee && flee.d1.toFixed(1)} tiles in 0.5 s, ${flee && flee.pose})`);
+    `a deer flees a wolf it sees (${flee && flee.d0.toFixed(1)} -> ${flee && flee.d1.toFixed(1)} tiles in 1 s, ${flee && flee.pose})`);
 
   // 3. a wolf chases a deer in sight
   await fresh();
@@ -85,11 +88,11 @@ async function main(browser, r) {
     if (!setup({ deerAt: [5, 5], deerThinks: false })) return null;
     const [w, d] = [__w, __d];
     const d0 = Math.hypot(d.gx - w.gx, d.gy - w.gy);
-    for (let n = 0; n < 15; n++) sim.internals.tick();
+    for (let n = 0; n < 60; n++) sim.internals.tick(); // (picking up speed from a standstill)
     return { d0, d1: Math.hypot(d.gx - w.gx, d.gy - w.gy), mode: mind.stateOf(w).mode, pose: w.pose };
   })()`);
   r.check(chase && chase.mode === "chase" && chase.d1 < chase.d0 - 1,
-    `a wolf chases a deer it sees (${chase && chase.d0.toFixed(1)} -> ${chase && chase.d1.toFixed(1)} tiles in 0.25 s, ${chase && chase.pose})`);
+    `a wolf chases a deer it sees (${chase && chase.d0.toFixed(1)} -> ${chase && chase.d1.toFixed(1)} tiles in 1 s, ${chase && chase.pose})`);
 
   // 4. a deer remembers a wolf it can no longer see
   await fresh();
@@ -129,7 +132,7 @@ async function main(browser, r) {
     return { seen, w0, w1, mode: s.mode, seesDeer, modeLater: mind.stateOf(w).mode };
   })()`);
   const east = wolfMem && wolfMem.w1[0] - wolfMem.w0[0];
-  r.check(wolfMem && !wolfMem.seesDeer && wolfMem.mode === "chase" && east > 2,
+  r.check(wolfMem && !wolfMem.seesDeer && wolfMem.mode === "chase" && east > 1,
     `out of sight, a wolf keeps after a deer, the way it was heading (moved ${east && east.toFixed(1)} tiles east in 1 s, ${wolfMem && wolfMem.mode})`);
   r.check(wolfMem && wolfMem.modeLater === "calm", `...and gives up later (22 s on: ${wolfMem && wolfMem.modeLater})`);
 
@@ -167,11 +170,17 @@ async function main(browser, r) {
     d.wind = 0; d.stamina = 0;
     let n = 0;
     for (; n < 30 * 60 && d.pose !== "death" && d.pose !== "dead"; n++) sim.internals.tick();
-    for (let k = 0; k < 120; k++) sim.internals.tick();
-    return { s: n / 60, pose: d.pose, wolfMode: mind.stateOf(w).mode };
+    const foodAtKill = w.food;
+    const modes = new Set();
+    for (let k = 0; k < 120; k++) { sim.internals.tick(); modes.add(mind.stateOf(w).mode); }
+    return { s: n / 60, pose: d.pose, wolfMode: mind.stateOf(w).mode, modes: [...modes].join(","),
+      ate: w.food - foodAtKill, meatLeft: d.carcass ? sim.carcassMeatKg(d) / sim.deerMeatKg : null };
   })()`);
   r.check(kill && (kill.pose === "death" || kill.pose === "dead"),
-    `a wolf runs down a tired deer (killed after ${kill && kill.s.toFixed(1)} s; the wolf then ${kill && kill.wolfMode}s)`);
+    `a hungry wolf runs down a tired deer (killed after ${kill && kill.s.toFixed(1)} s)`);
+  r.check(kill && kill.ate > 0.1 && kill.meatLeft < 1 && kill.modes.includes("feed") && !kill.modes.includes("rest"),
+    `...and eats it straight away, no resting (its meter +${kill && kill.ate.toFixed(2)}, ` +
+    `${kill && (kill.meatLeft * 100).toFixed(0)}% of the meat left; ${kill && kill.modes})`);
 
   // 8. any heading, and square roots only for new headings
   await fresh();
@@ -182,6 +191,7 @@ async function main(browser, r) {
     Math.sqrt = x => { roots++; return sqrt(x); };
     try {
       const from = [w.gx, w.gy];
+      w.currentDirection = sim.DIR_N; // facing well away (a facing within 30 degrees is kept)
       sim.setIntent(w, { dx: 3, dy: 1, gait: "walk" });
       for (let n = 0; n < 60; n++) {
         if (n % 6 === 0) sim.setIntent(w, { dx: 3, dy: 1, gait: "walk" }); // the same, again

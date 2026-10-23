@@ -94,8 +94,11 @@ async function main(browser, r) {
         if (w.gx !== at[0] || w.gy !== at[1]) stayed = false;
         if (w.speed !== 0 || w.pose !== "idle") still = false;
       }
-      sim.internals.tick(); // recovered: its intent applies again, into the boulder again
-      stun = { blocked: n < 120, ticks, stayed, still, again: w.blockedTick === sim.tickCount - 1 };
+      // recovered: its intent applies again, into the boulder again (picking up speed
+      // from a standstill, so it may take a few ticks to reach it)
+      const after = w.blockedTick;
+      for (let k = 0; k < 30 && w.blockedTick === after; k++) sim.internals.tick();
+      stun = { blocked: n < 120, ticks, stayed, still, again: w.blockedTick !== after };
       sim.setPlayerIntent(null); sim.internals.tick();
     }
     return { stone, boulder, stun };

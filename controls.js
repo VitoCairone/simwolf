@@ -1,10 +1,6 @@
-// THE CONTROLS: the player's input, and nothing else.
-//
-// controls listens to the keyboard, the movement pad, the sidebar buttons and the
-// pointer, and turns them into intents: for the simulation (where the player's wolf
-// should go, pause, step) through sim.setPlayerIntent etc., and for the view (zoom,
-// camera) through animat. It draws nothing itself and changes the world only through
-// sim's interface.
+// THE CONTROLS: the player's input. Keys, the movement pad, the sidebar buttons and the
+// pointer become the player's wolf's intent, pause and step (through sim's interface),
+// and zoom and camera moves (through animat). It draws nothing itself.
 //
 // Everything it offers is on the one global it defines, `controls`. Connect it with
 // controls.attach(sim, animat).
@@ -18,33 +14,34 @@ const arrowKeyNames = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
 const keysPressed = {};
 const cameraSpeed = 50; // screen px per tick while panning with the arrow keys
 
-// Arrow mode (sidebar toggle): the arrow keys move the wolf (true) or pan the camera.
+// The sidebar toggle: the arrow keys move the wolf (true) or pan the camera.
 let arrowsMoveWolf = false;
-// The movement pad while the pointer is in one of its rings: { pose, dx, dy } (the grid
-// vector to move along: any heading), else null.
+// While the pointer is in one of the movement pad's rings: { pose, dx, dy }, the gait and
+// grid vector to move along; else null.
 let pad = null;
 
-// THE PLAYER'S INTENT for the wolf, from everything currently held:
-//   the movement pad, while in use, has priority (the arrow keys are ignored)
-//   otherwise in wolf mode, the arrow keys: Up = straight up on screen, two keys
-//     combine into a screen diagonal, opposite keys cancel; none held = stand still
-//   otherwise no intent: the wolf decides for itself
+// Standing still, the player's wolf eats any carcass in reach.
+const STAND = { gait: "eat" };
+
+// The player's intent, from what is held: the movement pad while in use; else in wolf
+// mode the arrow keys (as screen directions, two combining into a diagonal, opposites
+// cancelling; none held: stand); else none, and the mind steers the wolf.
+
 function updatePlayerIntent() {
   let intent = null;
   if (pad) {
-    intent = pad.pose === "idle" ? { gait: "idle" } : { dx: pad.dx, dy: pad.dy, gait: pad.pose };
+    intent = pad.pose === "idle" ? STAND : { dx: pad.dx, dy: pad.dy, gait: pad.pose };
   } else if (arrowsMoveWolf) {
     const screenX = (keysPressed["ArrowRight"] ? 1 : 0) - (keysPressed["ArrowLeft"] ? 1 : 0);
     const screenY = (keysPressed["ArrowDown"] ? 1 : 0) - (keysPressed["ArrowUp"] ? 1 : 0);
     intent = (screenX !== 0 || screenY !== 0)
       ? { dir: animat.screenDirToGridDir(sim.getDir(screenX, screenY)), gait: "walk" }
-      : { gait: "idle" };
+      : STAND;
   }
   sim.setPlayerIntent(intent);
 }
 
-// Camera mode: held arrow keys pan the camera, once per tick (even while the pad is in
-// use). Panning detaches the camera from the wolf.
+// Camera mode: held arrow keys pan the camera every tick, even while the pad is in use.
 function panWithArrowKeys() {
   if (arrowsMoveWolf) return;
   const dx = (keysPressed["ArrowRight"] ? cameraSpeed : 0) - (keysPressed["ArrowLeft"] ? cameraSpeed : 0);
@@ -71,27 +68,24 @@ function toggleArrowMode() {
   updatePlayerIntent();
 }
 
-// MOVEMENT PAD
-// Fixed on-screen joystick (see #move-pad in index.html). The pointer's offset from the
-// pad center gives the direction (any heading, not just 8: exactly where it points); which concentric ring it is in gives the gait.
-// Ring radii are read from the SVG (viewBox radius 100) so drawing and logic can't drift.
+// MOVEMENT PAD (#move-pad in index.html): the pointer's offset from the pad's center
+// is the heading, exactly as drawn on screen, and the ring it is in the gait. The rings'
+// radii are read from the SVG, so the drawing and the logic can't disagree.
 let movePadEl = null;
 let movePadRings = [];
 
 function onMovePadPointer(e) {
   const rect = movePadEl.getBoundingClientRect();
   const radPX = rect.width / 2;
-  // normalized vector from pad center; |v| = 1 at the outer ring
+  // the pointer's offset from the center, 1 at the outer ring
   const vx = (e.clientX - (rect.left + radPX)) / radPX;
   const vy = (e.clientY - (rect.top + rect.height / 2)) / radPX;
-  const radiusL2 = vx * vx + vy * vy; // squared, compared with each ring's squared radius
+  const radiusL2 = vx * vx + vy * vy;
   const ring = movePadRings.find(r => radiusL2 <= r.frac * r.frac);
 
-  // the pad element is square; its corners are outside the circles
-  if (!ring) return releaseMovePad();
+  if (!ring) return releaseMovePad(); // in the square element's corners, outside the rings
 
-  if (!pad) animat.followWolf(); // taking the wolf: bring the camera back to it
-  // any heading: the way the pointer is from the pad's center, on screen, as a grid vector
+  if (!pad) animat.followWolf(); // taking the wolf: the camera goes back to it
   const [dx, dy] = animat.screenVecToGridVec(vx, vy);
   pad = { pose: ring.pose, dx, dy };
   animat.showMovePad(vx, vy, ring.pose);
@@ -105,7 +99,6 @@ function releaseMovePad() {
   updatePlayerIntent();
 }
 
-// CONNECTING
 function attach(theSim, theAnimat) {
   if (sim) return alert("controls.attach called twice");
   if (!theSim || typeof theSim.setPlayerIntent !== "function")
@@ -139,7 +132,6 @@ function attach(theSim, theAnimat) {
   fieldWrapper.addEventListener("mouseleave", () => animat.showCursorCoords(null));
 }
 
-// THE INTERFACE
 return {
   attach,
   // for tests and debugging

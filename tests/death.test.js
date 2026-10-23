@@ -1,5 +1,6 @@
 // A deer's death animation (images/stag-death.png, see spritecraft/make_deer_death.py):
-//  - a killed deer plays the 5 death frames in order, then its corpse holds the last one
+//  - a killed deer plays the 5 death frames in order, then its corpse is the whole
+//    carcass (skeleton and all 8 pieces: the same picture as the last frame)
 //  - it faces the right way in every direction: two drawn facings (N, E) plus their
 //    mirrors (W, S); between two diagonals it uses the next one clockwise
 // Saves the fall, frame by frame, to tests/output/death/.
@@ -48,7 +49,8 @@ async function main(browser, r) {
       animat.render();
       const el = animat.spriteEl(d);
       const [x, y] = el.style.backgroundPosition.split(" ").map(v => -parseInt(v));
-      return { pose: d.pose, col: x / 48, row: y / 48, cls: el.className };
+      return { pose: d.pose, col: x / 48, row: y / 48, cls: el.className,
+        layers: (el.style.backgroundImage.match(/url\(/g) || []).length };
     });
     seq.push(s);
     if (s.pose === "death" && n % fd.holdTks === 0 || (s.pose === "dead" && seq[seq.length - 2]?.pose === "death")) {
@@ -67,8 +69,10 @@ async function main(browser, r) {
     `the 5 death frames play in order, ${fd.holdTks} ticks each (${dying.length} ticks: ${[...new Set(cols)].join(" ")})`);
   r.check(dying.every(s => s.cls === "critter deer-death"), "dying uses its own sheet (class deer-death)");
   const dead = seq.filter(s => s.pose === "dead");
-  r.check(dead.length > 0 && dead.every(s => s.col === fd.nFrames - 1 && s.cls === "critter deer-death"),
-    `the corpse holds the last frame (${dead.length} ticks at frame ${dead[0]?.col})`);
+  // the corpse: the carcass (see CARCASSES in animat.js), its skeleton with all 8 pieces
+  // of meat on top - exactly the last frame of the fall
+  r.check(dead.length > 0 && dead.every(s => s.cls === "critter deer-carcass" && s.layers === 9),
+    `the corpse is the whole carcass: skeleton and all 8 pieces (${dead.length} ticks, ${dead[0]?.layers} layers)`);
 
   // facings, on the corpse
   const facings = await p.evaluate(() => {

@@ -1,68 +1,52 @@
 // THE SIMULATION: the world, its critters and its rules, advanced one tick at a time.
 //
-// This file has no idea how (or whether) the world is drawn or controlled, and it makes
-// no decisions for anyone: it never touches the DOM, and it runs as is without a browser
-// (see tests/separation.test.js). Everything it offers is on the one global it defines,
-// `sim` (the interface at the end of this file). Drawing is animat.js, which reads sim's
-// state; input is controls.js, which turns the player's input into an intent for the
-// player's wolf; deciding is mind.js (with senses.js), which sets every critter's intent.
-// None is required: without a mind, critters simply stand still unless told to move.
+// It never touches the DOM and makes no decisions for anyone, so it runs without a
+// browser (tests/separation.test.js checks this). Critters do what their INTENTS say:
+// the mind (mind.js) sets them for every critter, and the controls (controls.js) for the
+// player's wolf. The view (animat.js) only reads the simulation's state.
 //
-// Positions are grid coordinates: tile (i, j) covers [i, i+1) x [j, j+1).
+// Everything it offers is on the one global it defines, `sim` (see THE INTERFACE at the
+// end). Positions are grid coordinates: tile (i, j) covers [i, i+1) x [j, j+1), 1 m a side.
 
 const sim = (() => {
 
-let consoleOnlyMode = false; // set by start(): run as fast as possible, log each tick
-let tempo = 1/60;
-// TODO: change speed convert so it responds when tempo is changed at runtime
-let g_tick = 0; // updates ONE PLACE ONLY in tick()
-let g_now = 0; // also updates ONLY ONE PLACE in tick()
-// g_now is elapsed seconds; IFF tempo stays constant, g_now = g_tick * tempo
+const tempo = 1 / 60;          // game seconds per tick
+let consoleOnlyMode = false;   // set by start(): run as fast as possible, logging each tick
+let g_tick = 0;                // ticks run so far; changed only by tick()
+let g_now = 0;                 // game seconds so far; changed only by tick()
 let g_next_uid = 0;
 let isPaused = false;
 
-// parameters
-const gridWidthN = 128; //3533088 = c * 1/60 sec / root2
-const gridHeightN = 128;
+// The map is square, sized for its grass to feed 50 deer: a deer eats ~639 kg of grass a
+// year and a tile grows back 0.4 kg a year (see FOOD), so 50 deer need ~79,850 grass
+// tiles; 414 x 414 has 80,169. The sea's rings scale with the map; land features are
+// sized in tiles.
+const gridWidthN = 414;
+const gridHeightN = 414;
 
-// NOTE: tileMap and terrainTypes below are not used by anything (kept as reference).
-// when source becomes multiple files, read this sort of fixed data from its own file
-const tileMap = [
-  ["dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt"],
-  ["dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt", "dirt"],
-  ["grass", "grass", "grass", "dirt", "dirt", "grass", "grass", "plant", "plant", "plant", "plant"],
-  ["bush", "bush", "bush", "bush", "grass", "tallgrass", "tallgrass", "grass", "+ flower", "+ flower", "+ bush"],
-  ["+ flower", "+ bush", "+ flower", "+ flower", "+ log", "+ log", "+ log", "+ log", "+ log", "+ rock", "+ rock"],
-  ["+ rock", "+ rock", "+ rock", "+ rock", "+ rock", "+ rock", "stone", "+ stone", "stone", "rock", "rock"],
-  ["+ rock", "+ rock", "w-stone", "w-stone", "w-rock", "w-rock", "w-rock", "w-rock", "w-rock", "w-rock", "w-rock"],
-  ["w-rock", "w-rock", "w-rock", "w-rock", "w-rock", "splash", "splash", "splash", "splash", null, null],
-  ["water", "water", "water", "water", "water", "water", "water", "water", "water", null, null],
-  ["water", "water", "water", "water", "water", "water", "water", "water", "water", null, null],
-  ["ice", "ice", "ice", "ice", "ice", "ice", "ice", "ice", "ice", "ice", "ice"]
-];
-
-const terrainTypes = [
-  "dirt", "grass", "bush", "tallgrass", "flower", "rock", "stone", "water", "ice"
-];
-
-function sqr(x) { return x * x; }
-
-function sample(list) {
-  return list.length ? list[Math.floor(Math.random() * list.length)] : null;
-}
-
-// How long a dying critter is in the "death" pose before it becomes a corpse ("dead").
-// (animat times the death animation to play through exactly once in this time, and
-// checks that it does.)
-const deathDurationSBySpecies = { deer: 2 / 3 }; // deer: 5 frames of 8 ticks
-
+// GAME SPEEDS
+// Every constant that sets how fast things happen is in one of two datasets: REALISTIC
+// (real animals' figures, with their sources) and GAMIFIED (sped up for play and
+// testing). Both list every key; SPEEDS picks the one the game runs at.
+//   travelKph              speed by species and pose, km/h (1 tile = 1 m); swimBurst is
+//                          a swimmer's sprint (see SWIMMING)
+//   exertion               how long a full reserve lasts, by species (see EXERTION)
+//   windRefillHalfLifeSByPose, staminaFullRefillSByPose, gallopStaminaCostFactor,
+//   windStartFrac, staminaStartFrac   refilling the reserves, and starting a gait
+//   swimMinStaminaFrac     stamina needed to go into the water (see SWIMMING)
+//   accelToGallopS         from standing to a full gallop, and back (see SPEED CHANGES)
+//   stunMinS, stunMaxS     how long a blocked move stuns a critter (see INTENTS)
+//   deathDurationSBySpecies   the death pose's length (animat.js fits its animation to it)
+//   lifeStageAgesS         ages a young critter can see, hear, walk, eat, run and mate
+//   forcedMortalityMaxS, mortalityRatio   how long critters live (see FORCED MORTALITY)
+//   foodFullS, foodCapacityKg, eatKgPerS, deerMeatKg, grassMaxKg, grassRegrowKgPerS
+//                          food meters, eating and grass (see FOOD)
 const hourS = 60 * 60;
 const dayS = 24 * hourS;
 const yearS = dayS * 365;
 const monthS = yearS / 12;
 
-// full table here fo reference is simplified for MVP use to one value each
-const canAtAgeBySpecies =  {
+const realLifeStageAgesS = {
   wolf: {
     see:    { min: 9 * dayS,  avg: 12 * dayS,  max: 15 * dayS },
     hear:   { min: 10 * dayS, avg: 14 * dayS,  max: 18 * dayS },
@@ -70,7 +54,6 @@ const canAtAgeBySpecies =  {
     eat:    { min: 19 * dayS, avg: 25 * dayS,  max: 35 * dayS },
     run:    { min: 25 * dayS, avg: 28 * dayS,  max: 35 * dayS },
     mate:   { min: 18 * monthS, avg: 24 * monthS,  max: 36 * monthS },
-    liveTo: { min: 6 * yearS, avg: 8 * yearS, max: 16 * yearS }
   },
   deer: {
     see:    { min: 0, avg: 0, max: 0 },
@@ -79,110 +62,419 @@ const canAtAgeBySpecies =  {
     eat:    { min: 10 * dayS, avg: 20 * dayS, max: 30 * dayS },
     run:    { min: 1 * dayS, avg: 2 * dayS, max: 3 * dayS },
     mate:   { min: 16 * monthS, avg: 24 * monthS,  max: 36 * monthS },
-    liveTo: { min: 8 * yearS, avg: 12 * yearS, max: 25 * yearS }
   }
 };
+// The greatest ages recorded in captivity, where hunger, predators and disease (modelled
+// separately, or not at all) don't cut lives short. AnAge (genomics.senescence.info):
+// grey wolf 20.6 years, red deer 31.5 years.
+const realForcedMortalityMaxS = { wolf: 20.6 * yearS, deer: 31.5 * yearS };
+// Each lifespan as a share of that greatest age: about normal, within [min, max].
+// Estimates (no clean published distribution exists): captive wolves mostly die of age
+// at 12-17 years; red deer age from about 9-10 and few pass 20-25.
+const mortalityRatio = {
+  wolf: { mean: 0.70, sd: 0.10, min: 0.45, max: 1 },
+  deer: { mean: 0.55, sd: 0.10, min: 0.30, max: 1 },
+};
+// Food, as real animals eat:
+//   Wolf: a full meter is one deer's ~60 kg of edible meat and lasts 14 days (an adult
+//   wolf can go almost two weeks without food: New York Wolf Center); it eats ~0.5 kg a
+//   minute.
+//   Deer: red deer eat ~1.75 kg of dry grass a day (Forestry and Land Scotland), so a
+//   14-day meter holds 24.5 kg; they graze ~0.2 kg an hour.
+//   Grass: an ungrazed field holds ~0.2-0.4 kg of dry matter a square metre (0.3 here)
+//   and unfertilized grassland regrows ~0.4 kg a square metre a year.
+const realFoodFullS = { wolf: 14 * dayS, deer: 14 * dayS };
+const realEatKgPerS = { wolf: 0.5 / 60, deer: 0.2 / hourS };
+const realGrassRegrowKgPerS = 0.4 / yearS;
 
-['wolf', 'deer'].forEach(species => {
-  ['see', 'hear', 'walk', 'eat', 'run', 'mate'].forEach(cap => {
-    canAtAgeBySpecies[species][cap] = canAtAgeBySpecies[species][cap].avg;
-  });
-  canAtAgeBySpecies[species].liveTo = canAtAgeBySpecies[species].liveTo.max;
-});
+const REALISTIC = {
+  name: "realistic",
+  travelKph: {
+    wolf: {
+      walk: 5,        // estimate; no direct figure found
+      trot: 9,        // the travel gait, kept up for hours (Mech & Boitani: 8-9 km/h)
+      gallop: 55,     // chasing prey: 50-64 km/h for 1-8 km
+      swim: 3.5,      // ~3 mph; reported figures are sparse
+      swimBurst: 6,
+    },
+    deer: {
+      walk: 5,
+      trot: 15,       // estimate from the elk's sustained "dogtrot"
+      gallop: 65,     // an escape burst of about 1 km (top reported 72 km/h)
+      swim: 5,        // ~5 mph: deer outswim wolves
+      swimBurst: 10,
+    },
+  },
+  exertion: {
+    wolf: {
+      gallopFullWindS: 240,     // chases of several km
+      trotFullStaminaS: 30000,  // ~8.3 hours
+      swimTimeS: 7200,
+    },
+    deer: {
+      gallopFullWindS: 60,      // a burst of about 1 km
+      trotFullStaminaS: 10800,  // 3 hours
+      swimTimeS: 3600,
+    },
+  },
+  // Wind: half of what's missing comes back every this many seconds, by pose.
+  windRefillHalfLifeSByPose: { idle: 45, walk: 60, trot: 180 },
+  // Stamina: seconds from empty to full, by pose.
+  staminaFullRefillSByPose: { idle: 30000, walk: 120000 },
+  gallopStaminaCostFactor: 2, // galloping uses stamina twice as fast as trotting
+  windStartFrac: 0.25,        // wind needed to start a gallop
+  staminaStartFrac: 0.1,      // stamina needed to start a trot or gallop
+  swimMinStaminaFrac: 0.25,
+  accelToGallopS: { wolf: 2.5, deer: 1.5 },
+  stunMinS: 0.1,
+  stunMaxS: 0.5,
+  deathDurationSBySpecies: { deer: 2 / 3 },
+  lifeStageAgesS: realLifeStageAgesS,
+  forcedMortalityMaxS: realForcedMortalityMaxS,
+  mortalityRatio,
+  foodFullS: realFoodFullS,
+  foodCapacityKg: { wolf: 60, deer: 24.5 },
+  eatKgPerS: realEatKgPerS,
+  deerMeatKg: 60,
+  grassMaxKg: 0.3,
+  grassRegrowKgPerS: realGrassRegrowKgPerS,
+};
 
-function _can(a, capability) {
-  if (a.isHaltedUntil) return false;
-  return g_now - a.birthTime >= canAtAgeBySpecies[a.species][capability];
-}
+// GAMIFIED shrinks real times by one factor per area: lives so the wolf's greatest age
+// is 90 minutes, food so a wolf's full meter lasts 20 minutes, and exertion (draining
+// and refilling) 10 times as fast.
+const gameLifeScale = (90 * 60) / Math.min(...Object.values(realForcedMortalityMaxS));
+const gameFoodScale = (20 * 60) / realFoodFullS.wolf;
+const gameExertionSpeedup = 10;
+const scaledAges = (table, k) => Object.fromEntries(Object.entries(table).map(([sp, caps]) =>
+  [sp, Object.fromEntries(Object.entries(caps).map(([cap, t]) =>
+    [cap, { min: t.min * k, avg: t.avg * k, max: t.max * k }]))]));
+const scaledTimes = (table, k) => Object.fromEntries(Object.entries(table).map(([key, v]) =>
+  [key, typeof v === "object" ? scaledTimes(v, k) : v * k]));
 
-//  wolf
-//  halfWeight:  { min: 5 * monthS, avg: 6.5 * monthS, max: 7 * monthS },
-//  fullWeight:  { min: 18 * monthS, avg: 21 * monthS,  max: 24 * monthS},
-//  gestation:   { min: 61 * dayS, avg: 62 * dayS,  max: 63 * dayS }
+const GAMIFIED = {
+  name: "gamified",
+  travelKph: {
+    wolf: { walk: 5, trot: 9, gallop: 55, swim: 3.5, swimBurst: 6 },
+    deer: { walk: 5, trot: 15, gallop: 65, swim: 5, swimBurst: 10 },
+  },
+  exertion: scaledTimes(REALISTIC.exertion, 1 / gameExertionSpeedup),
+  windRefillHalfLifeSByPose: scaledTimes(REALISTIC.windRefillHalfLifeSByPose, 1 / gameExertionSpeedup),
+  staminaFullRefillSByPose: scaledTimes(REALISTIC.staminaFullRefillSByPose, 1 / gameExertionSpeedup),
+  gallopStaminaCostFactor: 2,
+  windStartFrac: 0.25,
+  staminaStartFrac: 0.1,
+  swimMinStaminaFrac: 0.25,
+  accelToGallopS: { wolf: 2.5, deer: 1.5 },
+  stunMinS: 0.1,
+  stunMaxS: 0.5,
+  deathDurationSBySpecies: { deer: 2 / 3 },
+  lifeStageAgesS: scaledAges(realLifeStageAgesS, gameLifeScale),
+  forcedMortalityMaxS: {
+    wolf: realForcedMortalityMaxS.wolf * gameLifeScale,
+    deer: realForcedMortalityMaxS.deer * gameLifeScale,
+  },
+  mortalityRatio,
+  foodFullS: { wolf: realFoodFullS.wolf * gameFoodScale, deer: realFoodFullS.deer * gameFoodScale },
+  foodCapacityKg: { wolf: 60, deer: 24.5 },
+  eatKgPerS: { wolf: realEatKgPerS.wolf / gameFoodScale, deer: realEatKgPerS.deer / gameFoodScale },
+  deerMeatKg: 60,
+  grassMaxKg: 0.3,
+  grassRegrowKgPerS: realGrassRegrowKgPerS / gameFoodScale,
+};
 
-// redDeer: {
-//    halfWeight:   { min: 10, avg: 12, max: 14 },  // months
-//    fullWeight:   { min: 48, avg: 54, max: 60 },  // months
-//    gestation:    { min: 230, avg: 233, max: 240 } // days
-//  }
+const SPEEDS = GAMIFIED;
 
-
-// Every change of a critter's pose goes through here. a.poseTick records the tick it
-// started, which is all a viewer needs to animate the pose (the simulation itself has no
-// notion of animation frames).
-function setPose(a, pose) {
-  if (a.pose === pose) return;
-  a.pose = pose;
-  a.poseTick = g_tick;
-}
-
-// Wolf setup
-const nWolves = 10;
-const wolves = Array.from({length: nWolves}, () => ({}));
-const pcWolf = wolves[0];
-
-const nDeer = 30;
-const deer = Array.from({length: nDeer}, () => ({}));
-
-const allLandTiles = [];
-
-function randomlyPlaceCritter(a) {
-  if (!allLandTiles.length) {
-    if (gridHeightN * gridWidthN > 1000000) {
-      alert("ERORR: randomlyPlaceCritter not implemented yet for maps > 1M tiles");
-    }
-    // collect all land tiles once
-    for (var i = 0; i < gridWidthN; i++) {
-      for (var j = 0; j < gridHeightN; j++) {
-        if (getTerrainAt(i, j) !== "water" && !isBlockedTile(i, j)) allLandTiles.push([i, j]);
-      }
-    }
-  }
-
-  const [randLandX, randLandY] = sample(allLandTiles);
-
-  // used for initial assignment of [gx, gy] -- should update ONLY in moveAllTogether()
-  // position tile centered (on half-integer vals) for simple initial overlap check
-  a.gx = randLandX + 0.5;
-  a.gy = randLandY + 0.5;
-  a.currentDirection = Math.floor(Math.random() * 4) * 2;
-  [a.hx, a.hy] = moveVecByDir[a.currentDirection];
-  setCritterIdle(a);
-}
+// Values the code reads often, taken from SPEEDS once.
+const deathDurationSBySpecies = SPEEDS.deathDurationSBySpecies;
+const exertionBySpecies = SPEEDS.exertion;
+const windRefillHalfLifeSByPose = SPEEDS.windRefillHalfLifeSByPose;
+const staminaFullRefillSByPose = SPEEDS.staminaFullRefillSByPose;
+const gallopStaminaCostFactor = SPEEDS.gallopStaminaCostFactor;
+const windStartFrac = SPEEDS.windStartFrac;
+const staminaStartFrac = SPEEDS.staminaStartFrac;
+const stunMinS = SPEEDS.stunMinS;
+const stunMaxS = SPEEDS.stunMaxS;
+// The age at which a critter can do each thing (the average of its range).
+const canAtAgeBySpecies = Object.fromEntries(Object.entries(SPEEDS.lifeStageAgesS).map(([sp, caps]) =>
+  [sp, Object.fromEntries(Object.entries(caps).map(([cap, t]) => [cap, t.avg]))]));
+// Speeds in tiles per tick, by species and pose.
+const kphToTpTk = 0.277777 * tempo;
+const travelSpeedBySpeciesAndPose = Object.fromEntries(Object.entries(SPEEDS.travelKph).map(([sp, kph]) =>
+  [sp, { ...Object.fromEntries(Object.entries(kph).map(([pose, v]) => [pose, v * kphToTpTk])), idle: 0, death: 0 }]));
+// How much a critter's speed may change in one tick (see SPEED CHANGES).
+const accelBySpecies = Object.fromEntries(Object.keys(travelSpeedBySpeciesAndPose).map(sp =>
+  [sp, travelSpeedBySpeciesAndPose[sp].gallop / (SPEEDS.accelToGallopS[sp] / tempo)]));
 
 function randBetween(a, b) {
   return a + Math.random() * (b - a);
 }
 
-// searchmeta makeCritter createCritter makeWolf createWolf makeWisp createWisp
-function initCritter(a, species, isNewborn = false) {
-  if (!a) return alert("Falsy ref to initCritter");
-  if (a.kind) return alert("Already-kind ref to initCritter");
-  a.kind = 'critter';
-  a.species = species;
-  a.birthTime = g_now - (isNewborn ? 0 : randBetween(
-    canAtAgeBySpecies[species].mate, canAtAgeBySpecies[species].liveTo * 0.5
-  ));
-  
-  // UIDs are unique across all kind objects and permanent
-  a.uid = g_next_uid++;
-  a.isMale = Math.random() < 0.5;
-
-  a.speed = 0;
-  a.wind = 1;    // burst reserve, 0..1 (see EXERTION)
-  a.stamina = 1; // endurance reserve, 0..1
-
-  randomlyPlaceCritter(a);
-
-  return a;
+function sample(list) {
+  return list.length ? list[Math.floor(Math.random() * list.length)] : null;
 }
+
+// TERRAIN
+// Everything about the ground is a pure function of the tile (no stored map, no random
+// numbers), built from independent fields:
+//   SEA           seaFieldAt     where the sea is
+//   RELIEF        reliefAt       where the lakes are, and how high the land is
+//   GROUND COVER  groundCoverAt  grass, dirt or stone
+//   OBSTACLES     obstacleAt     boulders
+// getTerrainAt is the one place that decides what is water. Because the sea and relief
+// are independent, the coast cuts across land at any height (making sea cliffs), while
+// lakes, being the lowest relief, always have gentle shores.
+
+// Triangle wave: 0 at whole numbers, 1 halfway between.
+function jag(x) {
+  return 2 * Math.abs(x - Math.floor(x + 0.5));
+}
+
+// jag eased by smoothstep, so thresholds on sums of these give rounded regions.
+function wave(x) {
+  const t = jag(x);
+  return t * t * (3 - 2 * t);
+}
+
+// SEA: rings around the map's center (sea in the middle, a ring of land, a ring of sea,
+// land in the corners) from a triangle wave of the squared distance from the center, q.
+// Four slow waves in four directions push the coasts in and out so the rings aren't
+// circles. Inside the land ring's crest (q < 1/2), q is remapped to shrink the inner sea
+// without moving anything from the crest outward; innerSeaShrink must stay within 0..1
+// for the field to stay continuous.
+const seaBelow = 0.2;
+const innerSeaShrink = 0.5;
+const mapCenterX = gridWidthN / 2;
+const mapCenterY = gridHeightN / 2;
+const mapCornerDist = Math.sqrt(mapCenterX * mapCenterX + mapCenterY * mapCenterY);
+
+function seaFieldAt(x, y) {
+  const [rx, ry] = [x - mapCenterX, y - mapCenterY].map(v => v * 1.25 / mapCornerDist);
+  let q = rx * rx + ry * ry;
+  if (q < 0.5) {
+    const t = 2 * q;
+    q = 0.5 * t * (1 + innerSeaShrink * (1 - t));
+  }
+  return jag(q) - 0.7 + (
+    jag(x / 103) + jag(y / 109) + jag ((x + y) / 127) + jag((x - y) / 199)
+  ) * 0.25
+}
+
+// RELIEF, about 0..1. Below lakeBelow is a lake; above it, the land's elevation is how
+// far above lakeBelow it is. It sums:
+//   regions (hundreds of tiles across): hilliness, 0 in plains to 1 in hill country, and
+//     upland, -1 to 1, how high the land lies overall
+//   detail (tens of tiles across): hills and hollows scaled by hilliness, on warped
+//     coordinates so they don't repeat regularly
+const lakeBelow = 0.44;
+const reliefBase = 0.52;           // relief of the average plain
+const reliefUplandRange = 0.08;    // how much higher uplands are, and lowlands lower
+const reliefHillsLift = 0.06;      // hill country also lies a little higher
+const reliefPlainsDetail = 0.1;    // share of the full detail left in plains
+const hillinessFrom = 0.35;        // the hilliness field's plains (below) ...
+const hillinessTo = 0.65;          // ... and hill country (above)
+
+function reliefAt(x, y) {
+  const h = (wave(x / 311 + 0.6 * wave(y / 263)) + wave(y / 337 + 0.6 * wave(x / 229))) / 2;
+  const t = Math.min(1, Math.max(0, (h - hillinessFrom) / (hillinessTo - hillinessFrom)));
+  const hilliness = t * t * (3 - 2 * t);
+  const upland = wave(x / 401 + 0.3) + wave(y / 367 + 0.7) - 1;
+
+  const wx = x + 22 * (wave(y / 97 + 0.5 * wave(x / 71)) - 0.5) + 12 * (wave((x + y) / 53) - 0.5);
+  const wy = y + 22 * (wave(x / 89 + 0.5 * wave(y / 83)) - 0.5) + 12 * (wave((x - y) / 59) - 0.5);
+  const sum = wx + wy;
+  const dif = wx - wy;
+  const fastNoise = wave(wx / 19) + wave(wy / 23) + wave(sum / 29) + wave(dif / 31); // 0..4
+  const slowNoise = (jag(wx / 37) + jag(wy / 41) + jag(sum / 43) + jag(dif / 47)) * 0.3
+    + (jag(wx / 53) + jag(wy / 59) + jag(sum / 61) + jag(dif / 67)) * 0.2; // 0..2
+  const detail = (fastNoise + slowNoise) / 6 - 0.5; // -0.5..0.5
+
+  return reliefBase + reliefUplandRange * upland + reliefHillsLift * hilliness
+    + detail * (reliefPlainsDetail + (1 - reliefPlainsDetail) * hilliness);
+}
+
+// The highest relief reliefAt can return. Keep in step with reliefAt.
+const reliefHighest = reliefBase + reliefUplandRange + reliefHillsLift + 0.5;
+
+// Elevation above the lakes' level, in relief units (negative: a lake).
+function landElevationAt(x, y) {
+  return reliefAt(x, y) - lakeBelow;
+}
+
+// The terrain of the tile containing (gx, gy): "water", "grass", "dirt" or "stone".
+function getTerrainAt(gx, gy) {
+  const [x, y] = [gx, gy].map(v => Math.floor(v));
+  if (seaFieldAt(x, y) < seaBelow) return "water";
+  if (landElevationAt(x, y) < 0) return "water";
+  return groundCoverAt(x, y);
+}
+
+// GROUND COVER of land, independent of height and all passable: a patch value from four
+// smooth waves sampled at a twice-warped position (so region edges meander), plus a
+// little tile-scale fringe (so edges are ragged). The highest values are stone, inside
+// a band of dirt, among grass.
+const coverPatchTiles = 23;   // patch size: the waves' base period, in tiles
+const coverWarpTiles = 14;    // how far the broad warp moves a point, at most
+const coverFineWarpTiles = 5; // how far the finer warp moves it
+const coverFringe = 0.08;     // weight of the tile-scale raggedness
+const coverDirtAbove = 0.6;   // patch value above which ground is dirt...
+const coverStoneAbove = 0.8;  // ...and stone
+
+function groundCoverAt(x, y) {
+  const ox = coverWarpTiles * (wave(y / 37 + 0.5 * wave(x / 53)) + wave((x - y) / 47) - 1);
+  const oy = coverWarpTiles * (wave(x / 41 + 0.5 * wave(y / 59)) + wave((x + y) / 61) - 1);
+  const wx = x + ox, wy = y + oy;
+  const vx = wx + coverFineWarpTiles * (wave(wy / 13) - 0.5);
+  const vy = wy + coverFineWarpTiles * (wave(wx / 11) - 0.5);
+
+  const s = coverPatchTiles;
+  const patch = (wave(vx / s) + wave(vy / (s * 1.13))
+    + wave((vx + vy) / (s * 1.41)) + wave((vx - vy) / (s * 1.73))) / 4;
+  const fringe = (jag(x / 3.7) + jag(y / 4.3) + jag((x + y) / 5.9)) / 3;
+  const v = patch + coverFringe * (fringe - 0.5);
+
+  if (v > coverStoneAbove) return "stone";
+  if (v > coverDirtAbove) return "dirt";
+  return "grass";
+}
+
+// OBSTACLES: boulders, on land only. They block movement and sight, in two forms:
+//   walls, one or two boulders thick, meandering in roughly parallel lines in some
+//     regions and broken by gaps. A wall is where jag(u) = 1/2 for a warped coordinate
+//     u; jag's slope is constant, so walls keep an even width without measuring it.
+//   lone boulders, scattered in some areas, leaving open expanses elsewhere.
+// Most tiles are decided by the first test or two.
+const wallHalfWidth = 0.085;  // of jag's 0..1 range: about 1.5 tiles thick
+const wallRag = 0.03;         // how much the walls' edges wander
+const wallWarpTiles = 9;      // how far the walls bend from straight lines
+const wallSpacingTiles = 23;  // distance between neighbouring walls in a region
+const wallRegionAbove = 0.8;  // walls running one way where the region field is above this...
+const wallRegionBelow = 0.2;  // ...and the other way where it is below this
+const wallGapTiles = 7;       // spacing of the gaps along walls
+const wallGapAbove = 0.75;    // larger: fewer, shorter gaps
+const loneBoulderAreaAbove = 0.55; // lone boulders only where this area field is above...
+const loneBoulderAbove = 0.8;      // ...and there, larger: fewer of them
+
+// "boulder" if one stands on the tile containing (gx, gy), else null.
+function obstacleAt(gx, gy) {
+  const x = Math.floor(gx), y = Math.floor(gy);
+  return isBoulderSite(x, y) && getTerrainAt(x, y) !== "water" ? "boulder" : null;
+}
+
+function isBoulderSite(x, y) {
+  const region = (jag(x / 71 + 0.3) + jag(y / 61 + 0.6)) / 2;
+  let u = null;
+  if (region > wallRegionAbove) {
+    u = (x + wallWarpTiles * (wave(y / 17) + 0.6 * wave((x + y) / 29))) / wallSpacingTiles;
+  } else if (region < wallRegionBelow) {
+    u = (x + y + wallWarpTiles * (wave((x - y) / 19) + 0.6 * wave(y / 31))) / (wallSpacingTiles * 1.3);
+  }
+  if (u !== null) {
+    const rag = jag(x / 2.9) + jag(y / 3.3) - 1;
+    if (Math.abs(jag(u) - 0.5) < wallHalfWidth + wallRag * rag
+      && jag(x / wallGapTiles) + jag(y / (wallGapTiles * 1.21)) < 2 * wallGapAbove) return true;
+  }
+  if (jag(x / 43 + 0.2) + jag(y / 37 + 0.7) < 2 * loneBoulderAreaAbove) return false;
+  return jag(x / 2.9) + jag(y / 3.3) + jag((x + y) / 4.7) + jag((x - y) / 5.3) > 4 * loneBoulderAbove;
+}
+
+// Whether no critter can enter the tile containing (gx, gy).
+function isBlockedTile(gx, gy) {
+  return obstacleAt(gx, gy) !== null;
+}
+
+// Whether the tile blocks the line of sight.
+function blocksSight(i, j) {
+  return obstacleAt(i, j) !== null;
+}
+
+// TERRAIN HEIGHT, in whole levels at tile corners; a tile's surface blends its four
+// corners bilinearly. Land rises with its elevation; water, and every corner touching
+// water, is level 0. A tile whose corners would differ by 2 levels or more becomes a
+// cliff tile: its corners are squeezed into [m, m + 1] (m: the floor of their average),
+// so a cliff face stands between it and its neighbours. A critter can step up or down
+// at most maxStepLevels. (One level is drawn one block riser high: see animat.js.)
+const maxElevation = 14;  // the highest level any terrain could reach; scales all heights
+const levelsPerReliefUnit = maxElevation / (reliefHighest - lakeBelow);
+const maxStepLevels = 1.5;
+
+function isWaterTile(i, j) {
+  return i >= 0 && j >= 0 && i < gridWidthN && j < gridHeightN && getTerrainAt(i, j) === "water";
+}
+
+// Corner levels, 4 per tile: NW, NE, SW, SE (NW is the tile's top corner on screen).
+const tileCornerLevels = new Int16Array(gridWidthN * gridHeightN * 4);
+let maxLevel = 0;
+(function computeTerrainHeights() {
+  const W = gridWidthN, H = gridHeightN;
+  const vertex = new Int16Array((W + 1) * (H + 1)); // level of vertex (i, j) at i * (H + 1) + j
+  for (let i = 0; i <= W; i++) for (let j = 0; j <= H; j++) {
+    const touchesWater = isWaterTile(i, j) || isWaterTile(i - 1, j)
+      || isWaterTile(i, j - 1) || isWaterTile(i - 1, j - 1);
+    vertex[i * (H + 1) + j] = touchesWater ? 0
+      : Math.max(0, Math.floor(landElevationAt(i, j) * levelsPerReliefUnit));
+  }
+  for (let i = 0; i < W; i++) for (let j = 0; j < H; j++) {
+    let c = [vertex[i * (H + 1) + j], vertex[(i + 1) * (H + 1) + j],
+             vertex[i * (H + 1) + j + 1], vertex[(i + 1) * (H + 1) + j + 1]];
+    if (isWaterTile(i, j)) c = [0, 0, 0, 0];
+    if (Math.max(...c) - Math.min(...c) >= 2) {
+      const m = Math.floor((c[0] + c[1] + c[2] + c[3]) / 4);
+      c = c.map(l => Math.min(m + 1, Math.max(m, l)));
+    }
+    tileCornerLevels.set(c, (i * H + j) * 4);
+    maxLevel = Math.max(maxLevel, ...c);
+  }
+})();
+
+// The corner levels [NW, NE, SW, SE] of tile (i, j), read only; all 0 off the map.
+const offMapCorners = new Int16Array(4);
+function tileCorners(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return offMapCorners;
+  const k = (i * gridHeightN + j) * 4;
+  return tileCornerLevels.subarray(k, k + 4);
+}
+
+// The ground's height, in levels, at any grid point.
+function heightAt(gx, gy) {
+  const i = Math.floor(gx), j = Math.floor(gy);
+  const [nw, ne, sw, se] = tileCorners(i, j);
+  const u = gx - i, v = gy - j;
+  return nw * (1 - u) * (1 - v) + ne * u * (1 - v) + sw * (1 - u) * v + se * u * v;
+}
+
+// Land a swimmer can climb onto: dry, unblocked, and low enough somewhere to step up
+// onto from the water.
+function isLandTile(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return false;
+  const t = getTerrainAt(i, j);
+  return t !== "water" && !isBlockedTile(i, j) && Math.min(...tileCorners(i, j)) <= maxStepLevels;
+}
+
+// CRITTERS
+// Each is a plain object; critter 0 is the player's wolf. Directions are indices into
+// moveVecByDir, clockwise from grid E.
+const nWolves = 10;
+const wolves = Array.from({length: nWolves}, () => ({}));
+const pcWolf = wolves[0];
+const nDeer = 50;
+const deer = Array.from({length: nDeer}, () => ({}));
 
 const allCritters = [];
 const allCorpses = [];
+const allLandTiles = [];  // every dry, unblocked tile: where critters are placed
 
-const ROOT2 = Math.sqrt(2);
-const INVROOT2 = 1 / ROOT2;
+const critterBoxRad = 0.4; // half the side of every critter's square collision box
 
+const DIR_E  = 0;
+const DIR_SE = 1;
+const DIR_S  = 2;
+const DIR_SW = 3;
+const DIR_W  = 4;
+const DIR_NW = 5;
+const DIR_N  = 6;
+const DIR_NE = 7;
+const INVROOT2 = 1 / Math.sqrt(2);
 const moveVecByDir = [
   [ 1, 0 ],
   [ INVROOT2, INVROOT2 ],
@@ -194,41 +486,335 @@ const moveVecByDir = [
   [ INVROOT2, -INVROOT2 ],
 ];
 
-// INTENTS: how critters are told what to do. The simulation makes no decisions: each
-// critter does what its intent says, applied at the start of every tick (so the world
-// never changes while paused), within what the world allows (wind, stamina, water,
-// cliffs, other critters). Intents come from outside: a mind (mind.js) sets one for any
-// critter; the player sets one for the player's wolf (pcWolf), which wins while the
-// player is in control. How they are produced, and how often, is not the simulation's
-// business.
-//   null / none           no intent: the critter carries on as it is
-//   { gait: "idle" }      stand still (tread water, in water)
-//   { dx, dy, gait }      move along grid vector (dx, dy), any heading and any length,
-//                         at gait walk/trot/gallop, or the best gait wind and stamina allow
-//   { dir, gait }         the same along one of the 8 grid directions (DIR_*)
-// HEADINGS: a moving critter goes along its heading (a.hx, a.hy), a unit vector. An
-// intent's vector is scaled to unit length here, once, when the intent is set (the only
-// square root it takes); setting the same vector again reuses it. Its sprite faces one
-// of 8 ways (a.currentDirection): the nearest to its heading, but it keeps its facing
-// while the heading is within facingKeepCos of it, so a heading near the boundary
-// between two facings doesn't flip the sprite back and forth.
-// STUNNED: when a move fails (another critter, a corpse, a boulder, a cliff, the map's
-// edge) the critter stays at its last legal position, stopped, and is stunned for a
-// moment (stunMinS - stunMaxS): it does nothing, and its intent waits until it recovers.
-// a.blockedTick records the tick it was blocked, and a.stunnedUntil the tick it recovers:
-// facts for whoever decides.
-const intents = new Map(); // critter -> its intent, from a mind
+// The nearest of the 8 directions to (x, y), without trig; defaultDir for (0, 0).
+function getDir(x, y, defaultDir = 0) {
+  if (x === 0) return y === 0 ? defaultDir : (y > 0 ? DIR_S : DIR_N );
+  if (y === 0) return (x > 0 ? DIR_E : DIR_W)
+  const absX = Math.abs(x);
+  const absY = Math.abs(y);
+  // tan(22.5 degrees) ~= 0.414 and tan(67.5 degrees) ~= 2.414
+  if (absX >= absY * 2.414) return x > 0 ? DIR_E : DIR_W;
+  if (absY >= absX * 2.414) return y > 0 ? DIR_S : DIR_N;
+  return x > 0 ? (y > 0 ? DIR_SE : DIR_NE) : (y > 0 ? DIR_SW : DIR_NW);
+}
+
+function isLiveCritter(c) {
+  return c.kind === "critter" && c.pose !== "death" && c.pose !== "dead";
+}
+
+// Every change of pose goes through here: a.poseTick, the tick it started, is all a
+// view needs to animate it.
+function setPose(a, pose) {
+  if (a.pose === pose) return;
+  a.pose = pose;
+  a.poseTick = g_tick;
+}
+
+function initCritter(a, species, isNewborn = false) {
+  if (!a) return alert("Falsy ref to initCritter");
+  if (a.kind) return alert("Already-kind ref to initCritter");
+  a.kind = 'critter';
+  a.species = species;
+  a.lifespanS = drawLifespanS(species);
+  // not newborn: an adult, somewhere between its mating age and half its lifespan
+  const adultS = Math.min(canAtAgeBySpecies[species].mate, a.lifespanS / 2);
+  a.birthTime = g_now - (isNewborn ? 0 : randBetween(adultS, a.lifespanS / 2));
+  a.uid = g_next_uid++;
+  a.isMale = Math.random() < 0.5;
+  a.speed = 0;
+  a.targetSpeed = 0;
+  a.wind = 1;
+  a.stamina = 1;
+  a.food = species === "wolf" ? wolfStartFood : randBetween(0.5, 1);
+  randomlyPlaceCritter(a);
+  return a;
+}
+
+// On a random land tile's center, facing one of the 4 diagonals, standing.
+function randomlyPlaceCritter(a) {
+  if (!allLandTiles.length) {
+    // TODO: for maps over 1M tiles, sample tiles at random instead of listing them all.
+    if (gridHeightN * gridWidthN > 1000000) {
+      alert("ERORR: randomlyPlaceCritter not implemented yet for maps > 1M tiles");
+    }
+    for (var i = 0; i < gridWidthN; i++) {
+      for (var j = 0; j < gridHeightN; j++) {
+        if (getTerrainAt(i, j) !== "water" && !isBlockedTile(i, j)) allLandTiles.push([i, j]);
+      }
+    }
+  }
+  const [randLandX, randLandY] = sample(allLandTiles);
+  a.gx = randLandX + 0.5;
+  a.gy = randLandY + 0.5;
+  a.currentDirection = Math.floor(Math.random() * 4) * 2;
+  [a.hx, a.hy] = moveVecByDir[a.currentDirection];
+  setCritterIdle(a);
+}
+
+// Moves any critter placed on top of another, a few times; then removes those still
+// overlapping (never the player's wolf).
+function forbidOverlapsOnStart() {
+  allCritters.forEach(m => {
+    m.nextGX = m.gx;
+    m.nextGY = m.gy;
+  });
+  let overlapPairs = findCollidingPairs(allCritters);
+  for (let tries = 0; overlapPairs.length && tries < 10; tries++) {
+    overlapPairs.forEach(pair =>  {
+      const a = allCritters[pair[1]];
+      randomlyPlaceCritter(a);
+      a.nextGX = a.gx;
+      a.nextGY = a.gy;
+    });
+    overlapPairs = findCollidingPairs(allCritters);
+  }
+  if (overlapPairs.length) {
+    // Indices to objects first: deleting shifts the indices of later pairs.
+    const toDelete = new Set();
+    overlapPairs.forEach(pair => {
+      const idx = pair[1] !== 0 ? pair[1] : pair[0];
+      if (idx > 0) toDelete.add(allCritters[idx]);
+    });
+    toDelete.forEach(c => deleteCritter(c));
+    console.log("Initial density too high, reduced start population.");
+  }
+}
+
+// Removes a critter from play; toCorpse keeps it as a corpse.
+function deleteCritter(critter, toCorpse = false) {
+  if (!critter) return;
+  if (typeof critter !== "object") return alert("invalid arg type to deleteCritter");
+  const idx = allCritters.indexOf(critter);
+  if (idx === -1) return alert("arg object to deleteCritter not in list");
+  // TODO: allow removing the player's wolf (critter 0) once the game can end.
+  if (idx === 0) return alert("cannot delete critter 0 in this version");
+  if (toCorpse) {
+    critter.kind = "corpse";
+    setPose(critter, "dead");
+    allCorpses.push(critter);
+  }
+  allCritters.splice(idx, 1);
+}
+
+// Old enough to do a capability (a key of lifeStageAgesS).
+function _can(a, capability) {
+  return g_now - a.birthTime >= canAtAgeBySpecies[a.species][capability];
+}
+
+// FORCED MORTALITY: each critter dies of age at a.lifespanS old, a share of its
+// species' greatest age drawn about normally when it is made. A deer dies as if killed
+// (death animation, then a corpse); a wolf, with no death animation, is removed. The
+// player's wolf doesn't die of age.
+function drawLifespanS(species) {
+  const m = SPEEDS.mortalityRatio[species];
+  // the sum of 12 uniform draws, less 6, is about normal with mean 0 and spread 1
+  let z = -6;
+  for (let k = 0; k < 12; k++) z += Math.random();
+  const ratio = Math.min(m.max, Math.max(m.min, m.mean + m.sd * z));
+  return ratio * SPEEDS.forcedMortalityMaxS[species];
+}
+
+function isPastLifespan(a) {
+  return a !== pcWolf && isLiveCritter(a) && g_now - a.birthTime >= a.lifespanS;
+}
+
+// Death from age or hunger.
+function dieNaturally(a) {
+  if (a.species === "deer") startCritterDeath(a);
+  else deleteCritter(a); // TODO: a wolf death animation and corpse
+}
+
+function startCritterDeath(a) {
+  if (!a || a.species !== "deer") return alert("Invalid arg to startCritterDeath");
+  if (a.pose === "death") return;
+  a.speed = a.targetSpeed = 0;
+  a.nextGX = a.gx;
+  a.nextGY = a.gy;
+  a.eating = false;
+  a.carcass = newCarcass();
+  setPose(a, "death");
+  enqDelayed("decontrol", deathDurationSBySpecies[a.species], { a: a });
+}
+
+// FOOD
+// Every critter has a food meter, a.food, 0 (empty) to 1 (full). It empties over
+// SPEEDS.foodFullS and fills by eating: a deer the grass on its tile, a wolf a carcass in
+// reach. A full meter holds SPEEDS.foodCapacityKg (meat for a wolf, dry grass for a deer).
+// A critter whose meter empties dies of hunger, except the player's wolf.
+//
+// GRASS: every grass tile holds grass, in kg: at most SPEEDS.grassMaxKg, starting at
+// grassStartShare of that, regrowing at SPEEDS.grassRegrowKgPerS. Its HEIGHT (bare,
+// short, medium, tall) is for the view; tiles whose height changes are logged
+// (grassChangesSince) so the view redraws only those.
+//
+// CARCASSES: a dead deer's meat is in 8 pieces. Wolves eat one piece until it is gone,
+// then another picked at random from those left (c.eatingPiece is shared by every wolf
+// at the carcass). The view shows each piece as meat until all of it is eaten.
+const carcassPieces = [ // name, share of the meat
+  ["hips", 0.20],
+  ["midback", 0.14],
+  ["chest", 0.16],
+  ["head", 0.10],
+  ["skyHind", 0.12], ["groundHind", 0.12], // the legs on top ("sky") and underneath
+  ["skyFore", 0.08], ["groundFore", 0.08],
+];
+// Just below mind.js's wolfHuntBelow (keep in step), so every wolf hunts from the start.
+const wolfStartFood = 0.74;
+const eatReachTiles = 1.3;      // center to center
+const grassGrowEveryTicks = 60;
+const grassStartShare = 1 / 10; // the least that is still drawn short
+const grassTallFrom = 2 / 3, grassMediumFrom = 1 / 3, grassShortFrom = 1 / 10; // shares of the most
+
+function newCarcass() {
+  return Object.fromEntries(carcassPieces.map(([name, share]) => [name, share * SPEEDS.deerMeatKg]));
+}
+
+function carcassMeatKg(c) {
+  return c.carcass ? carcassPieces.reduce((sum, [name]) => sum + c.carcass[name], 0) : 0;
+}
+
+// By tile index (i * gridHeightN + j): grass in kg, NaN where the terrain isn't grass;
+// and its height, 0 bare to 3 tall, 255 where not grass.
+let grassKg = null, grassHeight = null;
+const grassChanges = [];   // tile indices whose height changed, oldest first
+let grassChangesBase = 0;  // the serial number of grassChanges[0]
+
+function heightOfGrass(kg) {
+  const share = kg / SPEEDS.grassMaxKg;
+  return share >= grassTallFrom ? 3 : share >= grassMediumFrom ? 2 : share >= grassShortFrom ? 1 : 0;
+}
+
+function initGrass() {
+  grassKg = new Float32Array(gridWidthN * gridHeightN).fill(NaN);
+  grassHeight = new Uint8Array(gridWidthN * gridHeightN).fill(255);
+  for (let i = 0; i < gridWidthN; i++) for (let j = 0; j < gridHeightN; j++) {
+    if (getTerrainAt(i, j) !== "grass") continue;
+    const k = i * gridHeightN + j;
+    grassKg[k] = grassStartShare * SPEEDS.grassMaxKg;
+    grassHeight[k] = heightOfGrass(grassKg[k]);
+  }
+}
+
+function setGrassKg(k, kg) {
+  grassKg[k] = kg;
+  const h = heightOfGrass(kg);
+  if (h !== grassHeight[k]) {
+    grassHeight[k] = h;
+    grassChanges.push(k);
+    if (grassChanges.length > 50000) { // drop the older half
+      grassChanges.splice(0, 25000);
+      grassChangesBase += 25000;
+    }
+  }
+}
+
+function growGrass(dtS) {
+  const add = SPEEDS.grassRegrowKgPerS * dtS, most = SPEEDS.grassMaxKg;
+  for (let k = 0; k < grassKg.length; k++) {
+    const kg = grassKg[k];
+    if (kg < most) setGrassKg(k, Math.min(most, kg + add)); // (false for NaN: not grass)
+  }
+}
+
+// The grass on tile (i, j), in kg; 0 where it isn't grass.
+function grassFoodAt(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 0;
+  const kg = grassKg[i * gridHeightN + j];
+  return kg === kg ? kg : 0;
+}
+
+// The height of the grass on tile (i, j): 0 bare, 1 short, 2 medium, 3 tall; -1 if not grass.
+function grassHeightAt(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return -1;
+  const h = grassHeight[i * gridHeightN + j];
+  return h === 255 ? -1 : h;
+}
+
+// The tiles whose grass height changed since `serial` (0 at first, then the serial the
+// last call returned): { serial, tiles: [[i, j], ...] }. tiles is null when the log no
+// longer reaches back that far: then every tile may have changed.
+function grassChangesSince(serial) {
+  const end = grassChangesBase + grassChanges.length;
+  if (serial < grassChangesBase) return { serial: end, tiles: null };
+  const tiles = grassChanges.slice(serial - grassChangesBase)
+    .map(k => [Math.floor(k / gridHeightN), k % gridHeightN]);
+  return { serial: end, tiles };
+}
+
+// The nearest corpse within a's reach with meat left, or null.
+function carcassInReach(a) {
+  let best = null, bestL2 = eatReachTiles * eatReachTiles;
+  for (const c of allCorpses) {
+    if (!c.carcass) continue;
+    const l2 = (c.gx - a.gx) ** 2 + (c.gy - a.gy) ** 2;
+    if (l2 <= bestL2 && carcassMeatKg(c) > 0) { best = c; bestL2 = l2; }
+  }
+  return best;
+}
+
+// One tick of a's meter: it empties a little, and fills if a is eating. True if a starved.
+function updateFood(a) {
+  if (!isLiveCritter(a)) return false;
+  a.food = Math.max(0, a.food - tempo / SPEEDS.foodFullS[a.species]);
+  if (a.eating) {
+    const capacity = SPEEDS.foodCapacityKg[a.species];
+    let room = (1 - a.food) * capacity, bite = SPEEDS.eatKgPerS[a.species] * tempo;
+    if (a.species === "deer") {
+      const i = Math.floor(a.gx), j = Math.floor(a.gy), k = i * gridHeightN + j;
+      const kg = grassFoodAt(i, j);
+      const take = Math.min(bite, kg, room);
+      if (take > 0 && !isInWater(a)) {
+        setGrassKg(k, kg - take);
+        a.food += take / capacity;
+      }
+    } else {
+      const c = carcassInReach(a);
+      while (c && bite > 0 && room > 0) {
+        if (!(c.carcass[c.eatingPiece] > 0)) {
+          const left = carcassPieces.filter(([name]) => c.carcass[name] > 0);
+          if (!left.length) break;
+          c.eatingPiece = left[Math.floor(Math.random() * left.length)][0];
+        }
+        const name = c.eatingPiece, take = Math.min(bite, c.carcass[name], room);
+        c.carcass[name] -= take;
+        if (c.carcass[name] < 1e-9) c.carcass[name] = 0;
+        a.food += take / capacity;
+        bite -= take; room -= take;
+      }
+    }
+    a.food = Math.min(1, a.food);
+  }
+  return a.food <= 0 && a !== pcWolf;
+}
+
+// INTENTS
+// The simulation decides nothing: each critter does what its intent says, applied at the
+// start of every tick (so nothing changes while paused), within what the world allows.
+// A mind sets intents for any critter; the player's intent for the player's wolf wins
+// while the player has control.
+//   null                   carry on as it is
+//   { gait: "idle" }       stand still (in water: swim on; see SWIMMING)
+//   { gait: "eat" }        stand still and eat what is there (see FOOD)
+//   { dx, dy, gait }       move along grid vector (dx, dy), any length, at walk, trot or
+//                          gallop, or the best gait wind and stamina allow
+//   { dir, gait }          the same along one of the 8 directions
+// HEADINGS: a moving critter goes along (a.hx, a.hy), a unit vector. An intent's vector
+// is scaled to unit length when it is set (the only square root), and setting the same
+// vector again reuses it. The sprite faces the nearest of 8 directions
+// (a.currentDirection) but keeps its facing while the heading is within facingKeepCos of
+// it, so a heading near a boundary doesn't flip the sprite.
+// STUNNED: a move that fails (another critter, a corpse, a boulder, a cliff, the map's
+// edge, or water for a tired critter) leaves the critter at its last legal position,
+// stopped, for stunMinS to stunMaxS; its intent waits. a.blockedTick and a.stunnedUntil
+// record when, for whoever decides.
+const intents = new Map(); // critter -> its prepared intent
 let playerIntent = null;
-let playerIntentApplied = false; // whether the player was in control at the last tick
+let playerIntentApplied = false; // whether the player was in control last tick
+const facingKeepCos = 0.866;     // cos 30 degrees
 
-const facingKeepCos = 0.866;  // keep facing while the heading is within 30 degrees of it
-const stunMinS = 0.1;         // stunned this long at least after a failed move
-const stunMaxS = 0.5;         // ...and at most
-
-// An intent as applied: with its heading (hx, hy) at unit length. The scaling (a square
-// root) is done only for a new vector; the same vector as before reuses the old heading.
+// The intent with its heading (hx, hy) at unit length, reusing prev's for the same vector.
 function prepareIntent(intent, prev) {
-  if (!intent || intent.gait === "idle") return intent || null;
+  if (!intent || intent.gait === "idle" || intent.gait === "eat") return intent || null;
   if (intent.dir !== undefined) {
     const [hx, hy] = moveVecByDir[intent.dir];
     return { dir: intent.dir, gait: intent.gait, hx, hy };
@@ -256,646 +842,222 @@ function playerHasControl() {
 }
 
 function applyIntent(a, intent) {
-  if (a.stunnedUntil > g_tick) return; // stunned: it waits
-  if (intent.gait === "idle") setCritterIdle(a);
+  if (a.stunnedUntil > g_tick) return;
+  a.eating = intent.gait === "eat";
+  if (intent.gait === "idle" || intent.gait === "eat") setCritterIdle(a);
   else setCritterHeading(a, intent.hx, intent.hy, intent.gait, intent.dir);
-}
-
-// A failed move: stop where it is (its last legal position), stunned for a moment.
-function stun(a) {
-  a.blockedTick = g_tick;
-  setCritterIdle(a);
-  a.stunnedUntil = g_tick + Math.max(1, Math.round(randBetween(stunMinS, stunMaxS) / tempo));
 }
 
 function applyIntents() {
   for (const [a, intent] of intents) {
-    if (!isLiveCritter(a)) { intents.delete(a); continue; } // the dead take no orders
-    if (a === pcWolf && playerIntent) continue;             // the player's wins
+    if (!isLiveCritter(a)) { intents.delete(a); continue; }
+    if (a === pcWolf && playerIntent) continue;
     applyIntent(a, intent);
   }
   if (playerIntent) {
     playerIntentApplied = true;
     applyIntent(pcWolf, playerIntent);
-  } else if (playerIntentApplied) {
-    playerIntentApplied = false; // the player let go: stop
+  } else if (playerIntentApplied) { // the player let go: stop
+    playerIntentApplied = false;
+    pcWolf.eating = false;
     setCritterIdle(pcWolf);
   }
 }
 
-// TERRAIN
-// Everything about the ground is a pure function of the tile: no memory, no random
-// numbers, cheap to evaluate anywhere, built from the two waves below. Each question has
-// its own field, and the fields are independent of each other:
-//   1. SEA           seaFieldAt     where the sea is: draws the coastline
-//   2. RELIEF        reliefAt       where the lakes are, and how high the land is
-//   3. GROUND COVER  groundCoverAt  grass, dirt or stone on land
-//   4. OBSTACLES     obstacleAt     boulders standing on land
-// getTerrainAt combines 1-3 into a tile's terrain type, and is the ONE place that decides
-// what is water (sea or lake): everything else asks it. TERRAIN HEIGHT (below) uses 2
-// for the land's height, and flattens whatever getTerrainAt calls water.
-//
-// Because 1 and 2 are independent, the sea's coastline cuts across the land at whatever
-// height the land has there (giving sea cliffs), while lakes, being the lowest relief,
-// always have gentle shores.
-
-// Triangle wave: 0 at whole numbers, 1 halfway between, straight lines in between.
-function jag(x) {
-  return 2 * Math.abs(x - Math.floor(x + 0.5));
+function stun(a) {
+  a.blockedTick = g_tick;
+  a.eating = false;
+  setCritterIdle(a);
+  a.speed = a.targetSpeed = 0; // stopped dead, a swimmer too until the stun ends
+  if (a.pose !== "swim") setPose(a, "idle");
+  a.stunnedUntil = g_tick + Math.max(1, Math.round(randBetween(stunMinS, stunMaxS) / tempo));
 }
 
-// Smooth wave: like jag, but eased (smoothstep) so it rounds off at 0 and 1 instead of
-// turning sharply. Thresholds on sums of these give rounded regions, not polygons.
-function wave(x) {
-  const t = jag(x);
-  return t * t * (3 - 2 * t);
+// MOVING
+// Gaits: walk, trot and gallop on land, swim in water. A gait (a.pose) changes at once;
+// the speed follows it (SPEED CHANGES).
+
+// Move along one of the 8 directions (for tests and debugging; intents use
+// setCritterHeading).
+function setCritterMoving(a, dir, newPose = "walk") {
+  const [hx, hy] = moveVecByDir[dir];
+  setCritterHeading(a, hx, hy, newPose, dir);
 }
 
-// 1. SEA: a ring pattern around the map's center, made irregular by jitter. Below
-// seaBelow is sea: the map is a sea in the middle, a ring of land, a ring of sea, and
-// land again in the corners. The rings come from a triangle wave of the squared distance
-// from the center (q): the inner sea is the wave's first rise, the land ring is around
-// its first crest (q = 1/2), the outer sea its next trough, and so on. The field is that
-// wave minus 0.7, plus jitter: four very slow triangle waves (periods 103 to 199 tiles,
-// in four directions) weighted 0.25 between them, which push the coasts in and out by
-// different amounts in different places, so the rings' edges aren't circles.
-//
-// innerSeaShrink pulls the inner sea's coast out toward the crest, shrinking the inner
-// sea while leaving everything from the crest outward - the ring's outer coast, the
-// outer sea, the corners - exactly as it was. (At 0.5 that was about 25% less sea with
-// the gentler jitter it was tuned with; with the jitter at 0.25 the inner water is about
-// 12% smaller than without it, lakes included.) Inside the crest q is remapped by
-// t -> t * (1 + innerSeaShrink * (1 - t)), with t = 2q: 0 stays 0 and the crest stays
-// the crest, so the field stays continuous. (Keep it within 0..1.)
-const seaBelow = 0.2;
-const innerSeaShrink = 0.5;
-const mapCenterX = gridWidthN / 2;
-const mapCenterY = gridHeightN / 2;
-const mapCornerDist = Math.sqrt(mapCenterX * mapCenterX + mapCenterY * mapCenterY);
-
-function seaFieldAt(x, y) {
-  // For desmos.com/3d:
-  // 2*abs((x*x+y*y)-floor(x*x+y*y+0.5)) - 0.7  (the ring wave, before jitter)
-  // for x,y in range [-1.25, 1.25]
-  const [rx, ry] = [x - mapCenterX, y - mapCenterY].map(v => v * 1.25 / mapCornerDist);
-  let q = rx * rx + ry * ry;
-  if (q < 0.5) { // inside the land ring's crest: shrink the inner sea
-    const t = 2 * q;
-    q = 0.5 * t * (1 + innerSeaShrink * (1 - t));
+// The facing for heading (hx, hy): the current one while within facingKeepCos, else the
+// nearest of the 8.
+function facingFor(a, hx, hy) {
+  const cur = a.currentDirection;
+  if (cur !== undefined) {
+    const [ux, uy] = moveVecByDir[cur];
+    if (hx * ux + hy * uy >= facingKeepCos) return cur;
   }
-  return jag(q) - 0.7 + (
-    jag(x / 103) + jag(y / 109) + jag ((x + y) / 127) + jag((x - y) / 199)
-  ) * 0.25
+  return getDir(hx, hy, cur || 0);
 }
 
-// 2. RELIEF, about 0..1: the lie of the land. Below lakeBelow is a lake; above it, the
-// land's elevation is how far above lakeBelow it is (landElevationAt), so the land rises
-// from the lakes' shores. lakeBelow is used for both: change it in one place only.
-// It is made of three parts, on two scales:
-//   - REGIONS, hundreds of tiles across, give large areas their own character:
-//       hilliness  0 in plains .. 1 in hill country (with soft borders between)
-//       upland     -1 in lowlands .. 1 in uplands: how high the land lies overall, so
-//                  plains may be low (where shallow lakes gather) or raised plateaus
-//   - DETAIL, tens of tiles across: hills and hollows, scaled by the hilliness. Flat
-//     in plains (gentle undulation only), full height in hill country, where lakes lie in
-//     the valleys. It uses smooth waves for rounded tops and floors, and is sampled on
-//     warped coordinates so it doesn't repeat in a regular pattern.
-// (Region sizes are in tiles, not fractions of the map: a small map may lie within one
-// or two regions.)
-const lakeBelow = 0.44;
-const reliefBase = 0.52;           // relief of the average plain
-const reliefUplandRange = 0.08;    // how much higher uplands are, and lowlands lower
-const reliefHillsLift = 0.06;      // hill country also lies a little higher
-const reliefPlainsDetail = 0.1;    // share of the full detail left in plains
-const hillinessFrom = 0.35;        // the hilliness field's plains (below) ...
-const hillinessTo = 0.65;          // ... and hill country (above)
+// Move along unit heading (hx, hy) at newPose, or the best gait the critter can manage;
+// face `facing` if given, else the heading.
+function setCritterHeading(a, hx, hy, newPose = "walk", facing = undefined) {
+  if (!isLiveCritter(a)) return;
+  if (a.stunnedUntil > g_tick) return;
+  const same = a.hx === hx && a.hy === hy && (facing === undefined || facing === a.currentDirection);
+  if (newPose === a.pose && same) return;
 
-function reliefAt(x, y) {
-  // regions: how hilly...
-  const h = (wave(x / 311 + 0.6 * wave(y / 263)) + wave(y / 337 + 0.6 * wave(x / 229))) / 2;
-  const t = Math.min(1, Math.max(0, (h - hillinessFrom) / (hillinessTo - hillinessFrom)));
-  const hilliness = t * t * (3 - 2 * t);
-  // ...and how high the land lies
-  const upland = wave(x / 401 + 0.3) + wave(y / 367 + 0.7) - 1;
-
-  // detail, on warped coordinates
-  const wx = x + 22 * (wave(y / 97 + 0.5 * wave(x / 71)) - 0.5) + 12 * (wave((x + y) / 53) - 0.5);
-  const wy = y + 22 * (wave(x / 89 + 0.5 * wave(y / 83)) - 0.5) + 12 * (wave((x - y) / 59) - 0.5);
-  const sum = wx + wy;
-  const dif = wx - wy;
-  const fastNoise = wave(wx / 19) + wave(wy / 23) + wave(sum / 29) + wave(dif / 31); // => [0, 4]
-  const slowNoise = (jag(wx / 37) + jag(wy / 41) + jag(sum / 43) + jag(dif / 47)) * 0.3
-    + (jag(wx / 53) + jag(wy / 59) + jag(sum / 61) + jag(dif / 67)) * 0.2; // => [0, 2]
-  const detail = (fastNoise + slowNoise) / 6 - 0.5; // -0.5..0.5
-
-  return reliefBase + reliefUplandRange * upland + reliefHillsLift * hilliness
-    + detail * (reliefPlainsDetail + (1 - reliefPlainsDetail) * hilliness);
-}
-
-// The highest relief reliefAt can give: uplands (upland 1), full hill country (hilliness
-// 1) and the detail at its top (0.5). Keep in step with reliefAt.
-const reliefHighest = reliefBase + reliefUplandRange + reliefHillsLift + 0.5;
-
-// Elevation of land above the lakes' level, in relief units (negative = a lake).
-function landElevationAt(x, y) {
-  return reliefAt(x, y) - lakeBelow;
-}
-
-// The terrain type of the tile containing (gx, gy): "water" (sea or lake), or the land's
-// ground cover ("grass", "dirt", "stone").
-function getTerrainAt(gx, gy) {
-  // ensure the same result for any point in the tile
-  const [x, y] = [gx, gy].map(v => Math.floor(v));
-
-  const seaField = seaFieldAt(x, y);
-  if (seaField < seaBelow) return "water"; // sea
-  if (landElevationAt(x, y) < 0) return "water"; // lake
-
-  return groundCoverAt(x, y);
-}
-
-// (Earlier experiments, not used. Note they rely on pseudorandom hashing, which the
-// terrain functions above avoid.)
-//   const hash = Math.sin((x * 374761393 + y * 668265263) % 1000000) * 43758.5453;
-//   const pseudoRandom = hash - Math.floor(hash); // [0, 1)
-//   if (pseudoRandom < 0.75 * Math.pow(1 - (unitVariant * 2 - 0.5), 3)) return "bush";
-//
-//   const typePseudorandInt = (x * 73856093) ^ (y * 19349663);
-//   const types = ["dirt", "grass", "bush"];
-//   return types[Math.abs(typePseudorandInt) % types.length];
-
-// 3. GROUND COVER of land: grass, dirt or stone, independent of height (all passable;
-// boulders are separate, see OBSTACLES). It makes continuous regions:
-//   1. warp: the tile's position is shifted by amounts that themselves vary slowly over
-//      the map (twice: broad and finer), so region edges meander instead of running
-//      along the straight lines and regular spacing of the waves below
-//   2. patch: four smooth waves of incommensurate periods, in four directions, sampled
-//      at the warped position; their average (0..1, mostly near 0.5) sets the region
-//   3. fringe: a little fast variation, so edges are ragged at the scale of single tiles
-// Highest patch values are stone, set inside the next band, dirt: stony ground in bare
-// patches, among grass. (About 71% grass, 25% dirt, 4% stone on the current map.)
-const coverPatchTiles = 23;   // patch size: the waves' base period, in tiles
-const coverWarpTiles = 14;    // how far the broad warp moves a point, at most
-const coverFineWarpTiles = 5; // how far the finer warp moves it
-const coverFringe = 0.08;     // weight of the tile-scale raggedness
-const coverDirtAbove = 0.6;   // patch value above which ground is dirt...
-const coverStoneAbove = 0.8;  // ...and stone
-
-function groundCoverAt(x, y) {
-  const ox = coverWarpTiles * (wave(y / 37 + 0.5 * wave(x / 53)) + wave((x - y) / 47) - 1);
-  const oy = coverWarpTiles * (wave(x / 41 + 0.5 * wave(y / 59)) + wave((x + y) / 61) - 1);
-  const wx = x + ox, wy = y + oy;
-  const vx = wx + coverFineWarpTiles * (wave(wy / 13) - 0.5);
-  const vy = wy + coverFineWarpTiles * (wave(wx / 11) - 0.5);
-
-  const s = coverPatchTiles;
-  const patch = (wave(vx / s) + wave(vy / (s * 1.13))
-    + wave((vx + vy) / (s * 1.41)) + wave((vx - vy) / (s * 1.73))) / 4;
-  const fringe = (jag(x / 3.7) + jag(y / 4.3) + jag((x + y) / 5.9)) / 3;
-  const v = patch + coverFringe * (fringe - 0.5);
-
-  if (v > coverStoneAbove) return "stone";
-  if (v > coverDirtAbove) return "dirt";
-  return "grass";
-}
-
-// 4. OBSTACLES: impassable objects standing on a tile, separate from what the ground is.
-// For now the only one is the boulder, on any land tile (none on water: it asks
-// getTerrainAt). It is kept cheap: a few triangle and smooth waves, no square roots or
-// trig, and most tiles are decided after the first test or two. Boulders cover about 4% of land, in two forms:
-//   - WALLS one or two boulders thick, meandering in roughly parallel lines, only in some
-//     regions (running one way in some, another way in others) and broken by gaps. A
-//     wall is where jag(u) = 1/2 for a smoothly warped coordinate u: jag's slope is the
-//     same everywhere, so the walls keep an even width without measuring it. They can
-//     still cut off small patches of land here and there.
-//   - lone boulders, scattered in some areas, so that elsewhere there are open expanses.
-// Boulders block movement and sight.
-const wallHalfWidth = 0.085;  // of jag's 0..1 range; with wallSpacingTiles about 1.5 tiles thick
-const wallRag = 0.03;         // how much the walls' edges wander
-const wallWarpTiles = 9;      // how far the walls bend from straight lines
-const wallSpacingTiles = 23;  // distance between neighbouring walls in a region
-const wallRegionAbove = 0.8;  // walls running one way where the region field is above this...
-const wallRegionBelow = 0.2;  // ...and the other way where it is below this
-const wallGapTiles = 7;       // spacing of the gaps along walls
-const wallGapAbove = 0.75;    // larger = fewer, shorter gaps
-const loneBoulderAreaAbove = 0.55; // lone boulders only where this area field is above...
-const loneBoulderAbove = 0.8;      // ...and there, larger = fewer of them
-
-// The obstacle on tile (i, j) ("boulder"), or null.
-function obstacleAt(gx, gy) {
-  const x = Math.floor(gx), y = Math.floor(gy);
-  return isBoulderSite(x, y) && getTerrainAt(x, y) !== "water" ? "boulder" : null;
-}
-
-function isBoulderSite(x, y) {
-  const region = (jag(x / 71 + 0.3) + jag(y / 61 + 0.6)) / 2; // 0..1
-  let u = null;
-  if (region > wallRegionAbove) {
-    u = (x + wallWarpTiles * (wave(y / 17) + 0.6 * wave((x + y) / 29))) / wallSpacingTiles;
-  } else if (region < wallRegionBelow) {
-    u = (x + y + wallWarpTiles * (wave((x - y) / 19) + 0.6 * wave(y / 31))) / (wallSpacingTiles * 1.3);
+  if (isInWater(a)) {
+    a.landPose = newPose;
+    a.swimBurst = newPose === "gallop" && canUseGait(a, "gallop", a.pose === "swim" && a.swimBurst);
+    newPose = "swim";
+  } else {
+    if (newPose === "gallop" && !canUseGait(a, "gallop", a.pose === "gallop"))
+      newPose = "trot";
+    if (newPose === "trot" && !canUseGait(a, "trot", a.pose === "trot"))
+      newPose = "walk";
+    a.landPose = newPose;
   }
-  if (u !== null) {
-    const rag = jag(x / 2.9) + jag(y / 3.3) - 1; // -1..1
-    if (Math.abs(jag(u) - 0.5) < wallHalfWidth + wallRag * rag
-      && jag(x / wallGapTiles) + jag(y / (wallGapTiles * 1.21)) < 2 * wallGapAbove) return true;
+  const speed = newPose === "swim" ? swimSpeed(a) : travelSpeedBySpeciesAndPose[a.species][newPose];
+  // A swimmer can change speed (sprinting or not) in the same pose, and a stunned one
+  // has speed 0, so compare speeds too.
+  if (newPose === a.pose && same && a.targetSpeed > 0 && a.targetSpeed === speed) return;
+
+  setPose(a, newPose);
+  a.currentDirection = facing !== undefined ? facing : facingFor(a, hx, hy);
+  a.hx = hx;
+  a.hy = hy;
+  a.targetSpeed = speed;
+}
+
+function setCritterIdle(a) {
+  if (a.pose === "death" || a.pose === "dead") return;
+  a.landPose = "idle";
+  a.swimBurst = false;
+  if (isInWater(a)) { // nothing stands still in water: it swims on the way it faces
+    setPose(a, "swim");
+    a.targetSpeed = swimSpeed(a);
+    return;
   }
-  // lone boulders: only in some areas (leaving others open), scattered there
-  if (jag(x / 43 + 0.2) + jag(y / 37 + 0.7) < 2 * loneBoulderAreaAbove) return false;
-  return jag(x / 2.9) + jag(y / 3.3) + jag((x + y) / 4.7) + jag((x - y) / 5.3) > 4 * loneBoulderAbove;
+  a.targetSpeed = 0;
+  if (a.speed > 0) return; // still slowing in its gait; changeSpeed idles it once stopped
+  a.nextGX = a.gx;
+  a.nextGY = a.gy;
+  setPose(a, "idle");
 }
 
-// Whether a critter can't enter tile (i, j): impassable terrain or an obstacle on it.
-function isBlockedTile(gx, gy) {
-  return isImpassable(getTerrainAt(gx, gy)) || obstacleAt(gx, gy) !== null;
-}
-
-// TERRAIN HEIGHT
-// Heights are in whole LEVELS, set at the grid's vertices (tile corners); between them a
-// tile's surface is the bilinear blend of its four corners. A tile's corners are all at
-// its base level m or m + 1, so a tile is flat or one of 14 slope shapes. (One level is
-// drawn as one block riser high; see animat.js.)
-//   - Land rises with its elevation (landElevationAt, from RELIEF), scaled so that the
-//     highest relief possible (reliefHighest) would be at maxElevation levels.
-//   - All water (whatever getTerrainAt calls water: sea or lake) is flat at level 0, and
-//     so is every vertex touching water: lakes and the sea share one water level, and
-//     shores meet it. Where the sea cuts across high land, that makes a sea cliff.
-//   - Where a tile's corners would differ by 2 or more levels the ground is too steep
-//     for a slope: the tile becomes a CLIFF tile. It keeps its tilt with its corners
-//     squeezed into [m, m + 1] (m = the floor of their average), so its edges no longer
-//     meet its neighbours' and a cliff face stands between them.
-// Moving, a critter can step up or down a ledge of up to maxStepLevels; anything higher
-// blocks it, like a boulder does.
-// maxElevation: the elevation, in levels, of the highest ground the terrain could
-// possibly have. Tiles are whole levels, so no tile can be higher than
-// floor(maxElevation) (14); a given map's highest is usually lower (maxLevel: 11 on the
-// 900 x 900 map). Raise it for taller hills and deeper valleys, lower it for gentler
-// land: every elevation scales with it.
-const maxElevation = 14;
-const levelsPerReliefUnit = maxElevation / (reliefHighest - lakeBelow); // 20
-const maxStepLevels = 1.5; // a one-level ledge can be stepped; two levels or more can't
-
-function isWaterTile(i, j) {
-  return i >= 0 && j >= 0 && i < gridWidthN && j < gridHeightN && getTerrainAt(i, j) === "water";
-}
-
-// Corner levels of every tile, 4 per tile in the order NW, NE, SW, SE (NW = (i, j), the
-// tile's top corner on screen). Computed once: the terrain never changes.
-const tileCornerLevels = new Int16Array(gridWidthN * gridHeightN * 4);
-let maxLevel = 0;
-(function computeTerrainHeights() {
-  const W = gridWidthN, H = gridHeightN;
-  const vertex = new Int16Array((W + 1) * (H + 1)); // level of vertex (i, j) at i * (H + 1) + j
-  for (let i = 0; i <= W; i++) for (let j = 0; j <= H; j++) {
-    const touchesWater = isWaterTile(i, j) || isWaterTile(i - 1, j)
-      || isWaterTile(i, j - 1) || isWaterTile(i - 1, j - 1);
-    vertex[i * (H + 1) + j] = touchesWater ? 0
-      : Math.max(0, Math.floor(landElevationAt(i, j) * levelsPerReliefUnit));
+// SPEED CHANGES: a critter's speed (a.speed) moves toward its gait's (a.targetSpeed) at a
+// steady rate, up and down alike, reaching a full gallop from standing in
+// SPEEDS.accelToGallopS. A critter told to stop keeps its moving pose until it has
+// stopped. Stopping dead (a stun, death) is immediate.
+function changeSpeed(a) {
+  const target = a.targetSpeed ?? 0;
+  if (a.speed !== target) {
+    const step = accelBySpecies[a.species];
+    a.speed = a.speed < target ? Math.min(target, a.speed + step) : Math.max(target, a.speed - step);
   }
-  for (let i = 0; i < W; i++) for (let j = 0; j < H; j++) {
-    let c = [vertex[i * (H + 1) + j], vertex[(i + 1) * (H + 1) + j],
-             vertex[i * (H + 1) + j + 1], vertex[(i + 1) * (H + 1) + j + 1]];
-    if (isWaterTile(i, j)) c = [0, 0, 0, 0];
-    if (Math.max(...c) - Math.min(...c) >= 2) { // too steep: a cliff tile
-      const m = Math.floor((c[0] + c[1] + c[2] + c[3]) / 4);
-      c = c.map(l => Math.min(m + 1, Math.max(m, l)));
-    }
-    tileCornerLevels.set(c, (i * H + j) * 4);
-    maxLevel = Math.max(maxLevel, ...c);
+  if (a.speed === 0 && target === 0 && a.pose !== "idle" && a.pose !== "swim" && isLiveCritter(a)) {
+    a.nextGX = a.gx;
+    a.nextGY = a.gy;
+    setPose(a, "idle");
   }
-})();
-
-// The corner levels [NW, NE, SW, SE] of tile (i, j) (read only); all 0 off the map.
-const offMapCorners = new Int16Array(4);
-function tileCorners(i, j) {
-  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return offMapCorners;
-  const k = (i * gridHeightN + j) * 4;
-  return tileCornerLevels.subarray(k, k + 4);
 }
 
-// Height of the ground (in levels, fractional) at any grid point.
-function heightAt(gx, gy) {
-  const i = Math.floor(gx), j = Math.floor(gy);
-  const [nw, ne, sw, se] = tileCorners(i, j);
-  const u = gx - i, v = gy - j;
-  return nw * (1 - u) * (1 - v) + ne * u * (1 - v) + sw * (1 - u) * v + se * u * v;
-}
-
-// (Perception - seeing and hearing - is senses.js.)
-
-function updateAllCritters() {
-  allCritters.forEach(a => {
-    // Wind and stamina change every tick for every critter's current pose, including
-    // idle (recovery) and blocked movers.
-    applyExertion(a);
-
-    if (a.speed === 0) {
-      a.nextGX = a.gx;
-      a.nextGY = a.gy;
-      return;
-    }
-
-    const nextGX = a.gx + a.hx * a.speed;
-    const nextGY = a.gy + a.hy * a.speed;
-    // keep the collision box (radius critterBoxRad) inside the grid
-    if (nextGX >= critterBoxRad && nextGX < (gridWidthN - critterBoxRad)
-      && nextGY >= critterBoxRad && nextGY < (gridHeightN - critterBoxRad)) {
-      if (Math.abs(heightAt(nextGX, nextGY) - heightAt(a.gx, a.gy)) > maxStepLevels) {
-        stun(a); // a cliff in the way: stay put, as at a boulder
-        return;
-      }
-      a.nextGX = nextGX;
-      a.nextGY = nextGY;
-    } else {
-      stun(a); // the map's edge
-    }
-  });
-
-  moveAllTogether(allCritters, allCorpses);
+// EXERTION: two reserves, 0 (empty) to 1 (full).
+//   wind     limits galloping: drains while galloping (or sprinting in water) and refills
+//            otherwise, quickly at first, faster the more restful the gait
+//   stamina  limits trotting: drains while trotting, galloping and swimming, and refills
+//            slowly while idle or walking
+// A gait can only be started with some reserve in hand (windStartFrac,
+// staminaStartFrac), so critters don't flicker in and out of it near empty; once in it,
+// they keep going until the reserve runs out.
+function canUseGait(a, gait, isAlready = false) {
+  if (!_can(a, 'run')) return false;
+  if (gait === "gallop") {
+    return isAlready ? (a.wind > 0 && a.stamina > 0)
+                     : (a.wind >= windStartFrac && a.stamina >= staminaStartFrac);
+  }
+  if (gait === "trot") return isAlready ? a.stamina > 0 : a.stamina >= staminaStartFrac;
+  return true;
 }
 
 function applyExertion(a) {
   const ex = exertionBySpecies[a.species];
-  const dt = tempo; // game seconds per tick
+  const dt = tempo;
   if (a.pose === "gallop") {
     a.wind = Math.max(0, a.wind - dt / ex.gallopFullWindS);
     a.stamina = Math.max(0, a.stamina - gallopStaminaCostFactor * dt / ex.trotFullStaminaS);
   } else if (a.pose === "trot") {
     a.stamina = Math.max(0, a.stamina - dt / ex.trotFullStaminaS);
+  } else if (a.pose === "swim") {
+    if (a.swimBurst) a.wind = Math.max(0, a.wind - dt / ex.gallopFullWindS);
+    a.stamina = Math.max(0, a.stamina - (a.swimBurst ? gallopStaminaCostFactor : 1) * dt / ex.swimTimeS);
   }
   const windHalfLifeS = windRefillHalfLifeSByPose[a.pose];
   if (windHalfLifeS) a.wind += (1 - a.wind) * (1 - Math.pow(0.5, dt / windHalfLifeS));
   const staminaRefillS = staminaFullRefillSByPose[a.pose];
   if (staminaRefillS) a.stamina = Math.min(1, a.stamina + dt / staminaRefillS);
 
-  // out of a reserve: drop to the next gait down (trot falls through to walk if
-  // stamina is too low to start it)
+  // out of a reserve: the next gait down
   if (a.pose === "gallop" && (a.wind <= 0 || a.stamina <= 0)) {
     setCritterHeading(a, a.hx, a.hy, "trot");
   } else if (a.pose === "trot" && a.stamina <= 0) {
     setCritterHeading(a, a.hx, a.hy, "walk");
+  } else if (a.pose === "swim" && a.targetSpeed > 0) {
+    if (a.swimBurst && (a.wind <= 0 || a.stamina <= 0)) a.swimBurst = false;
+    a.targetSpeed = swimSpeed(a);
   }
-}
-
-function moveAllTogether(movers, statics = []) {
-  const allColliders = movers.concat(statics);
-  const collidePairs = findCollidingPairs(allColliders);
-  let didCollide = {};
-  collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
-
-  // RESOLVE COLLISIONS
-
-  // lazy first pass: halt colliders pre-collisions
-
-  const wasKilledBy = {};
-
-  // console.log("collidePairs");
-  // console.log(collidePairs);
-
-  collidePairs.forEach(pair => {
-    // CURRENT: wolf KOs deer on any collide
-    // FUTURE: kill only when wolf is in Bite pose and front-on
-    // console.log(pair[1])
-    // console.log(allColliders[pair[1]]);
-    if (pair[0] === -1) return;
-    const [c0, c1] = [allColliders[pair[0]], allColliders[pair[1]]];
-    // corpses and already-dying critters can't kill or be killed
-    if (!isLiveCritter(c0) || !isLiveCritter(c1) || c0.species === c1.species) return;
-
-    console.log("KILL COLLIDE");
-
-    if (allColliders[pair[1]].species === "deer") {
-      wasKilledBy[pair[1]] = pair[0];
-    } else {
-      wasKilledBy[pair[0]] = pair[1];
-    }
-  });
-
-  allColliders.forEach((thing, idx) => {
-    // Kills must be checked BEFORE the stationary early-return,
-    // otherwise a standing (idle) deer could never be killed.
-    if (idx in wasKilledBy) {
-      startCritterDeath(thing, allColliders[wasKilledBy[idx]]);
-      return;
-    }
-
-    // for a stationary thing, do nothing (??)
-    if (thing.nextGX === thing.gx && thing.nextGY === thing.gy) return;
-
-    if (didCollide[idx]) {
-      // this thing's gx and gy do NOT get updated this tick: it was blocked, and is
-      // stunned (whoever decides for it can see that, and choose what to do next)
-
-      // TODO: allow a rear-ended collider to continue moving when space in front is open
-      // this 'should' already be the behavior since creatures move all together, investigate
-      stun(thing);
-    } else {
-      // this is the ONLY PLACE ANYWHERE that thing gx and gy should change!
-      thing.gx = thing.nextGX;
-      thing.gy = thing.nextGY;
-      // all-water check for this position, worked out by findCollidingPairs above
-      thing.waterState = { gx: thing.gx, gy: thing.gy, allWater: thing.nextAllWater };
-      updateTerrainPose(thing); // swim <-> land pose when crossing a shoreline
-    }
-  });
-}
-
-function isLiveCritter(c) {
-  return c.kind === "critter" && c.pose !== "death" && c.pose !== "dead";
-}
-
-function deleteCritter(critter, toCorpse = false) {
-  if (!critter) return; // return alert("falsy arg to deleteCritter");
-  if (typeof critter !== "object") return alert("invalid arg type to deleteCritter");
-  const idx = allCritters.indexOf(critter);
-  if (idx === -1) return alert("arg object to deleteCritter not in list");
-  if (idx === 0) return alert("cannot delete critter 0 in this version");
-
-  if (toCorpse) {
-    critter.kind = "corpse";
-    setPose(critter, "dead");
-    allCorpses.push(critter);
-  }
-  allCritters.splice(idx, 1);
-
-  // NOTE initial critters remain referenced in their species initialization arrays only
-}
-
-function forbidOverlapsOnStart() {
-  allCritters.forEach(m => {
-    m.nextGX = m.gx;
-    m.nextGY = m.gy;
-  });
-  let overlapPairs = findCollidingPairs(allCritters);
-  for (let tries = 0; overlapPairs.length && tries < 10; tries++) {
-    overlapPairs.forEach(pair =>  {
-      const a = allCritters[pair[1]];
-      randomlyPlaceCritter(a);
-      a.nextGX = a.gx;
-      a.nextGY = a.gy;
-    });
-    // recollect for next cycle
-    overlapPairs = findCollidingPairs(allCritters);
-  }
-  if (overlapPairs.length) {
-    // Resolve indices to objects BEFORE deleting: deleteCritter splices allCritters,
-    // which would shift the indices of every later pair. Never delete critter 0 (pcWolf).
-    const toDelete = new Set();
-    overlapPairs.forEach(pair => {
-      const idx = pair[1] !== 0 ? pair[1] : pair[0];
-      if (idx > 0) toDelete.add(allCritters[idx]);
-    });
-    toDelete.forEach(c => deleteCritter(c));
-    console.log("Initial density too high, reduced start population.");
-  }
-}
-
-// GAME LOOP
-// The simulation advances in fixed ticks of `tempo` seconds of game time. The browser
-// loop (runFrame) runs as many ticks as real time has elapsed, so game speed is the same
-// at any display refresh rate (30, 60, 120, 144 Hz...) instead of one tick per frame.
-//
-// Exactly one loop may be scheduled at a time: loopHandle is non-null while a frame is
-// pending, and startLoop() refuses to schedule a second one.
-
-// Longest real-time gap one frame will catch up on. Longer gaps (tab hidden, debugger
-// stop, slow frame) are dropped rather than simulated in one burst.
-const maxCatchUpS = 0.25;
-
-let loopHandle = null;    // pending requestAnimationFrame / setTimeout id, or null
-let lastFrameMs = null;   // timestamp of the previous frame; null = (re)starting
-let tickDebtS = 0;        // real time elapsed but not yet simulated
-
-// LISTENERS: how the outside world keeps up with the simulation without the simulation
-// knowing who is listening. Each is a plain function with no arguments.
-//   tick listeners  run at the start of every tick, before the world changes (e.g.
-//                   mind.js deciding what every critter will do this tick, controls.js
-//                   panning the camera with held keys)
-//   frame listeners run after each real-time frame's ticks, and after a single step
-//                   (e.g. animat.js drawing the world as it now is)
-const tickListeners = [];
-const frameListeners = [];
-function onTick(fn) { tickListeners.push(fn); }
-function onFrame(fn) { frameListeners.push(fn); }
-function notifyFrame() { frameListeners.forEach(fn => fn()); }
-
-// Advance the simulation by exactly one tick. The only place g_tick and g_now change.
-function tick() {
-  if (consoleOnlyMode) {
-    const tps = g_tick / ((Date.now() - startRealtime) / 1000)
-    console.log("Begin tick=" + g_tick + " + tps=" + tps);
-  }
-  tickListeners.forEach(fn => fn());
-
-  applyIntents();
-
-  deqCurrentDelayed();
-
-  updateAllCritters();
-
-  g_tick++; // nowhere else may update g_tick
-  g_now += tempo; //nowhere else may update g_now
-}
-
-// One browser frame: run the ticks owed for the real time since the last frame.
-function runFrame(nowMs) {
-  loopHandle = null;
-  if (isPaused) return;
-
-  if (lastFrameMs !== null) {
-    tickDebtS += Math.min((nowMs - lastFrameMs) / 1000, maxCatchUpS);
-  }
-  lastFrameMs = nowMs;
-
-  // small epsilon so float drift in the debt can't skip a whole tick
-  while (tickDebtS >= tempo - 1e-9) {
-    tick();
-    tickDebtS -= tempo;
-  }
-  notifyFrame();
-
-  scheduleFrame();
-}
-
-// Console-only mode runs as fast as possible rather than in real time.
-function runConsoleBatch() {
-  loopHandle = null;
-  if (isPaused) return;
-  tick();
-  scheduleFrame();
-  // TODO: recursion achieves a speed on same hardware of 1045 tk/s
-  // vs only 165 tk/s with setTimeout. See about running ticks in
-  // batches per setTimeout to improve runspeed.
-}
-
-function scheduleFrame() {
-  if (isPaused || loopHandle !== null) return; // never more than one pending frame
-  // setTimeout yields between ticks, avoiding unbounded recursion
-  loopHandle = consoleOnlyMode
-    ? setTimeout(runConsoleBatch, 0)
-    : requestAnimationFrame(runFrame);
-}
-
-function startLoop() {
-  // restarting: don't count the time spent stopped/paused as owed ticks
-  lastFrameMs = null;
-  tickDebtS = 0;
-  scheduleFrame();
-}
-
-function stopLoop() {
-  if (loopHandle === null) return;
-  if (consoleOnlyMode) clearTimeout(loopHandle);
-  else cancelAnimationFrame(loopHandle);
-  loopHandle = null;
-}
-
-function setCritterIdle(a) {
-  if (a.pose === "death" || a.pose === "dead") return;
-  // A critter can't stand still in water: it treads water (swim pose, no speed).
-  const stillPose = isInWater(a) ? "swim" : "idle";
-  if (a.pose === stillPose && a.speed === 0) return;
-  a.speed = 0;
-  a.nextGX = a.gx;
-  a.nextGY = a.gy;
-  setPose(a, stillPose);
-  a.landPose = "idle";
 }
 
 // SWIMMING
-// Water is passable. A critter is in water only when ALL the tiles it occupies are water
-// (any land under it means it's on land); then it is always in the "swim" pose, at its
-// species' single swim speed (or 0 when treading water). Swimming changes neither wind
-// nor stamina (see EXERTION).
-// landPose remembers the land pose that was asked for (walk/trot/gallop/idle), so a
-// critter climbing out of the water resumes it.
+// A critter is in water when every tile it occupies is water, and then always in the
+// "swim" pose: at its swim speed, or sprinting (a.swimBurst, at swimBurst speed) when it
+// would gallop and has the wind to. It never stands still in water: told to stand or eat,
+// or after a stun, it swims on the way it faces. Swimming uses stamina (a full reserve
+// lasts swimTimeS; a sprint uses it gallopStaminaCostFactor times as fast, and wind as a
+// gallop does) and nothing refills it in the water. A sprint out of wind drops to a swim;
+// a swimmer out of stamina can't move.
+// A critter below SPEEDS.swimMinStaminaFrac stamina may not enter the water, except the
+// player's wolf while the player steers it: such a move is blocked like a boulder.
+// a.landPose is the land gait last asked for, resumed on climbing out.
+// TODO: rescue (or drown) a swimmer out of stamina; for now it can only starve.
 
-// a.waterState caches the answer for the position it was computed at. In normal play it
-// is set by moveAllTogether from findCollidingPairs, which already checks every tile a
-// critter will occupy, so this costs nothing extra per tick. The lookup below only runs
-// when a critter was placed directly (spawning, or a test or debug teleport).
+// a.waterState caches the answer for one position. moveAllTogether fills it from what
+// findCollidingPairs has already looked up, so the lookup here only runs for critters
+// placed directly (spawning, tests).
 function isInWater(a) {
   const s = a.waterState;
   if (s && s.gx === a.gx && s.gy === a.gy) return s.allWater;
-  const allWater = getOccupiedTiles(a.gx, a.gy).every(tile =>
-    getTerrainAt(...tile.split("_").map(Number)) === "water");
+  const allWater = isWaterAt(a.gx, a.gy);
   a.waterState = { gx: a.gx, gy: a.gy, allWater };
   return allWater;
 }
 
-// Called whenever a critter's position changes: switch between swimming and land poses
-// when it crosses a shoreline.
+// Whether a critter at (gx, gy) would be in water.
+function isWaterAt(gx, gy) {
+  return getOccupiedTiles(gx, gy).every(tile => getTerrainAt(...tile.split("_").map(Number)) === "water");
+}
+
+function mayEnterWater(a) {
+  return a.stamina >= SPEEDS.swimMinStaminaFrac || (a === pcWolf && playerHasControl());
+}
+
+// A swimmer's speed: its sprint, its swim, or 0 out of stamina.
+function swimSpeed(a) {
+  if (a.stamina <= 0) return 0;
+  return travelSpeedBySpeciesAndPose[a.species][a.swimBurst ? "swimBurst" : "swim"];
+}
+
+// Switches between swimming and land gaits when a critter crosses a shoreline.
 function updateTerrainPose(a) {
   if (!isLiveCritter(a)) return;
   const inWater = isInWater(a);
   if (inWater && a.pose !== "swim") {
     a.landPose = a.pose;
+    a.swimBurst = a.pose === "gallop" && canUseGait(a, "gallop", true);
     setPose(a, "swim");
-    a.speed = a.speed > 0 ? travelSpeedBySpeciesAndPose[a.species].swim : 0;
+    a.targetSpeed = swimSpeed(a);
   } else if (!inWater && a.pose === "swim") {
+    a.swimBurst = false;
     const resume = a.landPose || "walk";
-    if (a.speed > 0 && resume !== "idle") {
-      setPose(a, null); // no current pose, so setCritterMoving applies the change and its checks
+    if (a.targetSpeed > 0 && resume !== "idle") {
+      setPose(a, null); // so setCritterHeading applies the gait and its checks
       setCritterHeading(a, a.hx, a.hy, resume);
     } else {
       setCritterIdle(a);
@@ -903,24 +1065,13 @@ function updateTerrainPose(a) {
   }
 }
 
-// Land a critter can get onto from the water: not water, not blocked, and low enough
-// somewhere to step up onto from the water (level 0). (A question for minds: a swimmer
-// heading ashore looks for one.)
-function isLandTile(i, j) {
-  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return false;
-  const t = getTerrainAt(i, j);
-  return t !== "water" && !isBlockedTile(i, j) && Math.min(...tileCorners(i, j)) <= maxStepLevels;
-}
-
-// Whether critter a could go straight to (gx, gy): all the way there it stays inside the
-// map, its body touches no blocked tile, and it meets no cliff - checked in short steps
-// (canStepSampleTiles), the way a move is checked tick by tick, so a walkable run of
-// slopes isn't mistaken for a cliff. (A question for minds, asked many times a tick; the
-// move itself is still checked when it happens.)
+// Whether critter a could go straight to (gx, gy): inside the map, its box touching no
+// blocked tile, meeting no ledge it can't step, and (if it may not enter water) staying
+// dry. Checked in steps of canStepSampleTiles, as moves are checked tick by tick, so a
+// walkable run of slopes isn't mistaken for a cliff. Minds ask this many times a tick.
 const canStepSampleTiles = 0.25;
-// What canStepTo has looked up this tick, by tile: whether it's blocked, and its corner
-// heights. (The terrain functions keep nothing and are slow to ask the same thing over and
-// over; minds ask about the same few tiles around each critter many times a tick.)
+// Tile facts canStepTo has looked up this tick: the terrain functions recompute
+// everything on every call, and minds ask about the same tiles over and over.
 const stepTileCache = { tick: -1, blocked: new Map(), corners: new Map() };
 function stepTileFacts() {
   if (stepTileCache.tick !== g_tick) {
@@ -930,6 +1081,7 @@ function stepTileFacts() {
 }
 function canStepTo(a, gx, gy) {
   const facts = stepTileFacts();
+  const keepDry = a.pose !== "swim" && !mayEnterWater(a);
   const blocked = (i, j) => {
     const key = i * gridHeightN + j;
     let b = facts.blocked.get(key);
@@ -954,206 +1106,123 @@ function canStepTo(a, gx, gy) {
     for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (blocked(i, j)) return false;
     const hNext = height(x, y);
     if (Math.abs(hNext - h) > maxStepLevels) return false;
+    if (keepDry && isWaterAt(x, y)) return false;
     h = hNext;
   }
   return true;
 }
 
-const kphToTpTk = 0.277777 * tempo; // kilometers-per-hour to tiles-per-tick
-const travelSpeedBySpeciesAndPose = {
-  "wolf": {
-    "walk": 5 * kphToTpTk,    // all day (estimate; no direct figure found)
-    "trot": 9 * kphToTpTk,    // the travel gait, kept up for hours (8-9 km/h, Mech & Boitani)
-    "gallop": 55 * kphToTpTk, // chasing prey: 50-64 km/h for 1-8 km, a few minutes
-    "swim": 5 * kphToTpTk, // grey wolf, ~3 mph; reported figures are sparse
-    "idle": 0,
-    "death": 0
-  },
-  "deer": { 
-    "walk": 5 * kphToTpTk,    // all day
-    "trot": 15 * kphToTpTk,   // sustained escape for hours (estimate from elk "dogtrot")
-    "gallop": 65 * kphToTpTk, // escape burst of about 1 km (top reported 72 km/h)
-    "swim": 8 * kphToTpTk, // red deer, ~5 mph; deer outswim wolves
-    "idle": 0,
-    "death": 0
-  }
-}
+// THE TICK'S WORLD UPDATE: food and age; then every critter's reserves, speed and next
+// position; then all moves at once (moveAllTogether), deaths, and grass growth.
+function updateAllCritters() {
+  const pastLifespan = allCritters.filter(isPastLifespan);
+  const starved = [];
+  allCritters.forEach(a => { if (updateFood(a)) starved.push(a); });
 
-// EXERTION
-// Each critter has two reserves, each from 0 (empty) to 1 (full):
-//   wind    - the burst reserve, which limits galloping. It drains while galloping and
-//             refills whenever the critter isn't galloping: quickly at first, then more
-//             slowly (exponentially), faster the more restful the gait.
-//   stamina - the endurance reserve, which limits trotting. It drains slowly while
-//             trotting (and faster while galloping) and refills slowly while idle or
-//             walking. In a realtime session it hardly moves; it matters at longer
-//             timescales (consoleOnlyMode, or a larger tempo).
-// Swimming changes neither reserve (no drowning yet). A gait can only be STARTED with
-// some reserve in hand (windStartFrac / staminaStartFrac), so critters don't flicker in
-// and out of it near empty; once in it, they keep going until the reserve runs out.
-const exertionBySpecies = {
-  wolf: {
-    gallopFullWindS: 240,     // gallop from full wind: 4 minutes (chases of several km)
-    trotFullStaminaS: 30000,  // trot from full stamina: ~8.3 hours (the travel gait)
-  },
-  deer: {
-    gallopFullWindS: 60,      // gallop from full wind: 1 minute (a burst of about 1 km)
-    trotFullStaminaS: 10800,  // trot from full stamina: 3 hours (elk "dogtrot")
-  },
-};
-// Wind refill: half of the missing wind comes back every this many seconds, by pose.
-// Poses not listed (gallop, swim, death, dead) don't refill wind.
-const windRefillHalfLifeSByPose = { idle: 45, walk: 60, trot: 180 };
-// Stamina refill: seconds to go from empty to full, by pose (others don't refill it).
-const staminaFullRefillSByPose = { idle: 30000, walk: 120000 }; // ~8.3 h idle, ~33 h walking
-const gallopStaminaCostFactor = 2; // galloping uses stamina twice as fast as trotting
-const windStartFrac = 0.25;        // wind needed to START a gallop
-const staminaStartFrac = 0.1;      // stamina needed to START a trot or gallop
+  allCritters.forEach(a => {
+    applyExertion(a);
+    if (a.pose === "swim" && a.targetSpeed === 0 && !(a.stunnedUntil > g_tick)) a.targetSpeed = swimSpeed(a);
+    changeSpeed(a);
 
-// TODO: consider rolling canUseGait into _can()
-function canUseGait(a, gait, isAlready = false) {
-  if (!_can(a, 'run')) return false; // age check: old enough to run at all
-  if (gait === "gallop") {
-    return isAlready ? (a.wind > 0 && a.stamina > 0)
-                     : (a.wind >= windStartFrac && a.stamina >= staminaStartFrac);
-  }
-  if (gait === "trot") return isAlready ? a.stamina > 0 : a.stamina >= staminaStartFrac;
-  return true;
-}
-
-// Move along one of the 8 grid directions (for tests and debugging; intents use
-// setCritterHeading).
-function setCritterMoving(a, dir, newPose = "walk") {
-  const [hx, hy] = moveVecByDir[dir];
-  setCritterHeading(a, hx, hy, newPose, dir);
-}
-
-// The sprite's facing for heading (hx, hy): its current facing while the heading is
-// within facingKeepCos of it, otherwise the nearest of the 8.
-function facingFor(a, hx, hy) {
-  const cur = a.currentDirection;
-  if (cur !== undefined) {
-    const [ux, uy] = moveVecByDir[cur];
-    if (hx * ux + hy * uy >= facingKeepCos) return cur;
-  }
-  return getDir(hx, hy, cur || 0);
-}
-
-// Move along heading (hx, hy), a unit vector, at gait newPose (or the best the world
-// allows). facing: one of the 8 directions to face, if given; otherwise from the heading.
-function setCritterHeading(a, hx, hy, newPose = "walk", facing = undefined) {
-  if (!isLiveCritter(a)) return;
-  if (a.stunnedUntil > g_tick) return;
-  const same = a.hx === hx && a.hy === hy && (facing === undefined || facing === a.currentDirection);
-
-  if (newPose === a.pose && same) return;
-
-  if (isInWater(a)) {
-    // in water every movement is swimming; remember what was asked for on land
-    a.landPose = newPose;
-    newPose = "swim";
-  } else {
-    if (newPose === "gallop" && !canUseGait(a, "gallop", a.pose === "gallop"))
-      newPose = "trot";
-    if (newPose === "trot" && !canUseGait(a, "trot", a.pose === "trot"))
-      newPose = "walk";
-    a.landPose = newPose;
-  }
-  // (a swimmer treading water has speed 0, so it still needs to start moving)
-  if (newPose === a.pose && same && a.speed > 0) return;
-
-  setPose(a, newPose);
-  a.currentDirection = facing !== undefined ? facing : facingFor(a, hx, hy);
-  a.hx = hx;
-  a.hy = hy;
-  a.speed = travelSpeedBySpeciesAndPose[a.species][a.pose];
-}
-
-// TODO: array is currently used for simplicity, but
-// it is slow to insert-in-place sorted. Consider using
-// Linked List instead which is both fast insert-in-place and 
-// fast deque.
-// The arr version is stored DESCENDING sorted for fast deque.
-const delayedRxnArr = []
-
-function enqDelayed(rxn, timeS, opts = {}) {
-  const end = g_now + timeS; // same clock that deqCurrentDelayed compares against
-  var iNew = 0;
-  // list is sorted decreasing
-  while (iNew < delayedRxnArr.length && delayedRxnArr[iNew].end > end) iNew++;
-  delayedRxnArr.splice(iNew, 0, {rxn: rxn, opts: opts, end: end});
-  return;
-}
-
-function runRxn(rxn) {
-  const opts = rxn.opts;
-  const a = opts.a;
-  switch (rxn.rxn) {
-    case 'decontrol':
-      if (a.kind !== "critter") {
-        console.log("Err: Non-critter to decontrol rxn");
-        return;
-      }
-      if (a.pose !== "death" && a.pose !== "dead") {
-        console.log("Err: Live-posed critter to decontrol rxn")
-        return;
-      }
-      deleteCritter(a, true);
-    break;
-    default:
-      console.log("Err: Unknown reaction to runRxn");
+    if (a.speed === 0) {
+      a.nextGX = a.gx;
+      a.nextGY = a.gy;
       return;
-  }
+    }
+
+    const nextGX = a.gx + a.hx * a.speed;
+    const nextGY = a.gy + a.hy * a.speed;
+    if (nextGX >= critterBoxRad && nextGX < (gridWidthN - critterBoxRad)
+      && nextGY >= critterBoxRad && nextGY < (gridHeightN - critterBoxRad)) {
+      if (Math.abs(heightAt(nextGX, nextGY) - heightAt(a.gx, a.gy)) > maxStepLevels) {
+        stun(a); // a cliff
+        return;
+      }
+      if (a.pose !== "swim" && !mayEnterWater(a) && isWaterAt(nextGX, nextGY)) {
+        stun(a); // too tired to go into the water
+        return;
+      }
+      a.nextGX = nextGX;
+      a.nextGY = nextGY;
+    } else {
+      stun(a); // the map's edge
+    }
+  });
+
+  moveAllTogether(allCritters, allCorpses);
+  pastLifespan.forEach(dieNaturally);
+  starved.forEach(a => { if (isLiveCritter(a) && allCritters.includes(a)) dieNaturally(a); });
+  if (g_tick % grassGrowEveryTicks === 0) growGrass(grassGrowEveryTicks * tempo);
 }
 
-function deqCurrentDelayed() {
-  // half-tick tolerance so float drift in g_now can't push a reaction one tick late
-  while (delayedRxnArr.length && delayedRxnArr.at(-1).end <= g_now + tempo / 2)
-    runRxn(delayedRxnArr.pop());
+// COLLISIONS: every mover's next position is checked against blocked tiles and every
+// other critter and corpse at once. A wolf touching a live deer on land kills it; any
+// other collider is stunned where it is. This is the only place positions change.
+// TODO: kill only when the wolf bites, front-on; and let a critter bumped from behind
+// carry on when the space ahead is open.
+function moveAllTogether(movers, statics = []) {
+  const allColliders = movers.concat(statics);
+  const collidePairs = findCollidingPairs(allColliders);
+  const didCollide = {};
+  collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
+
+  const wasKilledBy = {};
+  collidePairs.forEach(pair => {
+    if (pair[0] === -1) return;
+    const [c0, c1] = [allColliders[pair[0]], allColliders[pair[1]]];
+    if (!isLiveCritter(c0) || !isLiveCritter(c1) || c0.species === c1.species) return;
+    // no kills in the water: a wolf couldn't eat the carcass there, or drag it ashore
+    if (isInWater(c0.species === "deer" ? c0 : c1)) return;
+    if (allColliders[pair[1]].species === "deer") {
+      wasKilledBy[pair[1]] = pair[0];
+    } else {
+      wasKilledBy[pair[0]] = pair[1];
+    }
+  });
+
+  allColliders.forEach((thing, idx) => {
+    // before the standing-still check, so a standing deer can be killed
+    if (idx in wasKilledBy) {
+      startCritterDeath(thing);
+      return;
+    }
+    if (thing.nextGX === thing.gx && thing.nextGY === thing.gy) return;
+    if (didCollide[idx]) {
+      stun(thing);
+    } else {
+      thing.gx = thing.nextGX;
+      thing.gy = thing.nextGY;
+      thing.waterState = { gx: thing.gx, gy: thing.gy, allWater: thing.nextAllWater };
+      updateTerrainPose(thing);
+    }
+  });
 }
 
-function startCritterDeath(a, killer) {
-  if (!a || a.species !== "deer") return alert("Invalid arg to startCritterDeath");
-
-  if (a.pose === "death") return;
-  a.speed = 0;
-  a.nextGX = a.gx;
-  a.nextGY = a.gy;
-  setPose(a, "death");
-  enqDelayed("decontrol", deathDurationSBySpecies[a.species], { a: a, killer: killer });
-}
-
-const critterBoxRad = 0.4;
-
+// The tiles a box of radius boxRad at (gx, gy) touches, as "x_y" keys.
 function getOccupiedTiles(gx, gy, boxRad = critterBoxRad) {
   const left = Math.floor(gx - boxRad);
   const right = Math.floor(gx + boxRad);
   const top = Math.floor(gy - boxRad);
   const bottom = Math.floor(gy + boxRad);
-
   const tiles = [];
   for (let x = left; x <= right; x++) {
     for (let y = top; y <= bottom; y++) {
-      tiles.push(`${x}_${y}`); // string key
+      tiles.push(`${x}_${y}`);
     }
   }
   return tiles;
 }
 
-
+// Must use the same box as getOccupiedTiles, or near pairs in different tiles are
+// never tested.
+// TODO: a box size per individual, ideally rectangular.
 function doNextBoundingBoxesOverlap(a, b) {
-  // Must use the same box as getOccupiedTiles (the broad phase). Previously this used
-  // 1.0 (i.e. radius 0.5) while the broad phase used radius 0.4, so critters 0.8-1.0
-  // apart in different tiles were never tested and could walk into each other.
-  // TODO: individual-specific box sizes
   const span = 2 * critterBoxRad;
   return Math.abs(a.nextGX - b.nextGX) < span && Math.abs(a.nextGY - b.nextGY) < span;
 }
 
-// Whether two things' next moves bump into each other: their next boxes overlap, unless
-// they already overlap and are moving apart. (Two that already overlap - a wolf on top of
-// the corpse of a deer it just killed, say - may move apart; otherwise neither could ever
-// move again.)
+// Whether two things' next moves bump: their next boxes overlap, unless they already
+// overlap and are moving apart (a wolf on the deer it just killed must be able to leave).
 function doNextMovesCollide(a, b) {
   if (!doNextBoundingBoxesOverlap(a, b)) return false;
   const span = 2 * critterBoxRad;
@@ -1164,43 +1233,19 @@ function doNextMovesCollide(a, b) {
   return nextL2 <= nowL2;
 }
 
-// Terrain no critter can enter. (Water is passable: critters swim, see
-// updateTerrainPose. Boulders are obstacles, not terrain: see isBlockedTile.)
-function isImpassable(terrain) {
-  return terrain === "bush";
-}
-
-// Whether tile (i, j) blocks the line of sight: a boulder does.
-function blocksSight(i, j) {
-  return obstacleAt(i, j) !== null;
-}
-
-// returns a list of pairs of integers e.g. [[1,2], [3,6]]
+// Index pairs [i, j] of things whose next positions collide; i is -1 for a blocked
+// tile. Things are grouped by the tiles they will occupy, so only neighbours are
+// compared. Also records each thing's nextAllWater, since its tiles' terrain is at hand.
+// TODO: keep occupancy between ticks and update it only for things that move.
 function findCollidingPairs(creatures) {
-  // Note that this is a grid-based method which is O(n) for the list
-  // creatures, when creatures are close in size to tiles.
-
-  // If necessary, further runtime improvement is likely attainable.
-  // For example it is likely that the sizable majority of creatures don't
-  // change occupancy at all on any given tick, so we could set occupancy
-  // only when it changes and not have to collect it for everything every tick.
-
-  const tileMap = new Map();  // key: tile "x_y", value: critter indexes
-  const potentialPairs = new Set();  // store "i|j" where i < j
-  // terrain of each tile looked at this call, and whether it's blocked, so each is
-  // computed once
+  const tileMap = new Map();         // "x_y" -> indexes of things on that tile
+  const potentialPairs = new Set();  // "i|j", i < j
   const terrainByTile = new Map();
   const blockedByTile = new Map();
 
   for (let i = 0; i < creatures.length; i++) {
     const creature = creatures[i];
-    // TODO: individual-specific bounding boxes, ideally rectangular rather than square
-
-    // tiles is array of strings in x_y format
     const tiles = getOccupiedTiles(creature.nextGX, creature.nextGY);
-    // Whether every tile under the creature's next position is water. Recorded here,
-    // where occupancy and terrain are already worked out, for the swim check
-    // (isInWater) once the creature actually moves there.
     let allWater = true;
 
     for (const tile of tiles) {
@@ -1230,56 +1275,139 @@ function findCollidingPairs(creatures) {
     creature.nextAllWater = allWater;
   }
 
-  // Now check actual bounding box overlap
   const collisions = [];
   for (const pairKey of potentialPairs) {
     const [i, j] = pairKey.split('|').map(Number);
-    // i == -1 for a blocked tile (impassable terrain or an obstacle)
     if (i === -1 || doNextMovesCollide(creatures[i], creatures[j])) {
       collisions.push([i, j]);
     }
   }
-
   return collisions;
 }
 
+// DELAYED REACTIONS: things that happen a set game time later. The only one so far is
+// "decontrol": a dying critter becomes a corpse.
+// Kept sorted by end time, latest first, so the next one due pops off the end.
+// TODO: a priority queue, if many reactions are ever pending at once.
+const delayedRxnArr = []
 
-const DIR_E  = 0;
-const DIR_SE = 1;
-const DIR_S  = 2;
-const DIR_SW = 3;
-const DIR_W  = 4;
-const DIR_NW = 5;
-const DIR_N  = 6;
-const DIR_NE = 7;
-
-const DIR_NAME = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"]
-
-// produces a random distribution in [0, 1) with a parabolic curve
-function randomPara() {
-  const x = Math.random();
-  return 4 * x * (1 - x);
+function enqDelayed(rxn, timeS, opts = {}) {
+  const end = g_now + timeS;
+  let iNew = 0;
+  while (iNew < delayedRxnArr.length && delayedRxnArr[iNew].end > end) iNew++;
+  delayedRxnArr.splice(iNew, 0, {rxn: rxn, opts: opts, end: end});
 }
 
-function rpMod(x) {
-  return x * (0.8 + 0.4 * randomPara());
+function runRxn(rxn) {
+  const a = rxn.opts.a;
+  switch (rxn.rxn) {
+    case 'decontrol':
+      if (a.kind !== "critter") {
+        console.log("Err: Non-critter to decontrol rxn");
+        return;
+      }
+      if (a.pose !== "death" && a.pose !== "dead") {
+        console.log("Err: Live-posed critter to decontrol rxn")
+        return;
+      }
+      deleteCritter(a, true);
+    break;
+    default:
+      console.log("Err: Unknown reaction to runRxn");
+      return;
+  }
 }
 
-function getDir(x, y, defaultRV = 0) {
-  if (x === 0) return y === 0 ? defaultRV : (y > 0 ? DIR_S : DIR_N );
-  if (y === 0) return (x > 0 ? DIR_E : DIR_W)
+function deqCurrentDelayed() {
+  // half a tick of tolerance, so float drift in g_now can't make a reaction a tick late
+  while (delayedRxnArr.length && delayedRxnArr.at(-1).end <= g_now + tempo / 2)
+    runRxn(delayedRxnArr.pop());
+}
 
-  const absX = Math.abs(x);
-  const absY = Math.abs(y);
-  // tan(1/8 circle) ~= 0.414, tan(3/8 circle) ~= 2.414
-  if (absX >= absY * 2.414) return x > 0 ? DIR_E : DIR_W;
-  if (absY >= absX * 2.414) return y > 0 ? DIR_S : DIR_N;
-  return x > 0 ? (y > 0 ? DIR_SE : DIR_NE) : (y > 0 ? DIR_SW : DIR_NW);
+// GAME LOOP
+// The world advances in fixed ticks of `tempo` game seconds. In the browser, each frame
+// runs as many ticks as real time has passed, so the game runs at the same speed at any
+// refresh rate. At most one frame is ever pending (loopHandle).
+const maxCatchUpS = 0.25;  // longer gaps (a hidden tab, a debugger pause) are dropped
+
+let loopHandle = null;     // pending requestAnimationFrame / setTimeout id
+let lastFrameMs = null;    // null when (re)starting
+let tickDebtS = 0;         // real time passed but not yet simulated
+let startRealtime = Date.now();
+let isInitialized = false;
+
+// LISTENERS let others keep up without the simulation knowing who they are:
+//   tick listeners   run at the start of every tick, before the world changes (the mind
+//                    decides, the controls pan the camera)
+//   frame listeners  run after each frame's ticks and after a single step (the view draws)
+const tickListeners = [];
+const frameListeners = [];
+function onTick(fn) { tickListeners.push(fn); }
+function onFrame(fn) { frameListeners.push(fn); }
+function notifyFrame() { frameListeners.forEach(fn => fn()); }
+
+function tick() {
+  if (consoleOnlyMode) {
+    const tps = g_tick / ((Date.now() - startRealtime) / 1000)
+    console.log("Begin tick=" + g_tick + " + tps=" + tps);
+  }
+  tickListeners.forEach(fn => fn());
+  applyIntents();
+  deqCurrentDelayed();
+  updateAllCritters();
+  g_tick++;
+  g_now += tempo;
+}
+
+function runFrame(nowMs) {
+  loopHandle = null;
+  if (isPaused) return;
+  if (lastFrameMs !== null) {
+    tickDebtS += Math.min((nowMs - lastFrameMs) / 1000, maxCatchUpS);
+  }
+  lastFrameMs = nowMs;
+  // the epsilon keeps float drift in the debt from skipping a tick
+  while (tickDebtS >= tempo - 1e-9) {
+    tick();
+    tickDebtS -= tempo;
+  }
+  notifyFrame();
+  scheduleFrame();
+}
+
+// Console-only mode: one tick per setTimeout, as fast as possible.
+// TODO: run ticks in batches per setTimeout; one each is several times slower than
+// running them back to back.
+function runConsoleBatch() {
+  loopHandle = null;
+  if (isPaused) return;
+  tick();
+  scheduleFrame();
+}
+
+function scheduleFrame() {
+  if (isPaused || loopHandle !== null) return;
+  loopHandle = consoleOnlyMode
+    ? setTimeout(runConsoleBatch, 0)
+    : requestAnimationFrame(runFrame);
+}
+
+function startLoop() {
+  lastFrameMs = null; // time spent stopped isn't owed as ticks
+  tickDebtS = 0;
+  scheduleFrame();
+}
+
+function stopLoop() {
+  if (loopHandle === null) return;
+  if (consoleOnlyMode) clearTimeout(loopHandle);
+  else cancelAnimationFrame(loopHandle);
+  loopHandle = null;
 }
 
 function pause() {
   isPaused = true;
-  stopLoop(); // takes effect immediately; no stray tick from an already-pending frame
+  stopLoop(); // at once: no stray tick from an already pending frame
 }
 
 function unpause() {
@@ -1299,20 +1427,18 @@ function stepOnce() {
   notifyFrame();
 }
 
-let startRealtime = Date.now();
-let isInitialized = false;
-
-// Creates the world's critters. Call once, before attaching a view or starting.
+// Creates the world's grass and critters. Call once, before attaching a view or starting.
 function init() {
   if (isInitialized) return alert("sim.init called twice");
   isInitialized = true;
+  initGrass();
   wolves.forEach(wolf => { allCritters.push(initCritter(wolf, "wolf")); });
   deer.forEach(aDeer => { allCritters.push(initCritter(aDeer, "deer")); });
-  forbidOverlapsOnStart(); // must run after critters exist
+  forbidOverlapsOnStart();
 }
 
-// Starts the game loop: in real time (one requestAnimationFrame loop), or with
-// consoleOnly, as fast as possible with no browser needed.
+// Starts the game loop: in real time, or with consoleOnly as fast as possible and
+// without a browser.
 function start({ consoleOnly = false } = {}) {
   if (!isInitialized) return alert("sim.start called before sim.init");
   consoleOnlyMode = consoleOnly;
@@ -1321,35 +1447,41 @@ function start({ consoleOnly = false } = {}) {
 }
 
 // THE INTERFACE
-// What viewers and controllers use. They read critters' fields directly (gx, gy, pose,
-// poseTick, currentDirection (the facing), hx, hy (the heading), speed, species, wind,
-// stamina, uid, blockedTick, stunnedUntil) but change the world only
-// through the functions here.
+// Views and controllers read critters' fields directly (gx, gy, pose, poseTick,
+// currentDirection (the facing), hx, hy (the heading), speed, targetSpeed, species, wind,
+// stamina, food, eating, carcass, uid, blockedTick, stunnedUntil) but change the world
+// only through these functions.
 return {
   // lifecycle and time
   init, start, pause, unpause, togglePause, stepOnce,
   get isPaused() { return isPaused; },
-  get tickCount() { return g_tick; }, // ticks run so far
-  get now() { return g_now; },        // game seconds so far
+  get tickCount() { return g_tick; },
+  get now() { return g_now; },        // game seconds
   get tempo() { return tempo; },      // game seconds per tick
   onTick, onFrame,
 
-  // the world, and questions about it
+  // the world
   gridWidthN, gridHeightN, getTerrainAt, obstacleAt,
   tileCorners, heightAt, get maxLevel() { return maxLevel; },
-  isBlockedTile, isLandTile, canStepTo, blocksSight, isLiveCritter,
+  isBlockedTile, isLandTile, isWaterAt, canStepTo, blocksSight, isLiveCritter,
   allCritters, allCorpses, pcWolf, deathDurationSBySpecies,
+  get speeds() { return SPEEDS.name; },
+  get swimMinStamina() { return SPEEDS.swimMinStaminaFrac; },
+  // food
+  grassFoodAt, grassHeightAt, grassChangesSince, carcassPieces, carcassMeatKg, eatReachTiles,
+  get grassMaxKg() { return SPEEDS.grassMaxKg; },
+  get deerMeatKg() { return SPEEDS.deerMeatKg; },
 
-  // telling critters what to do (intents), from a mind and from the player
+  // intents
   setIntent, setPlayerIntent, playerHasControl,
   getDir, moveVecByDir, DIR_E, DIR_SE, DIR_S, DIR_SW, DIR_W, DIR_NW, DIR_N, DIR_NE,
 
-  // Everything else, for tests and debugging from the console only: views and
-  // controllers must not use these.
+  // For tests and debugging only; views and controllers must not use these.
   internals: {
     tick, wolves, deer, allLandTiles,
-    setCritterIdle, setCritterMoving, setCritterHeading, isInWater, isImpassable, getOccupiedTiles,
+    setCritterIdle, setCritterMoving, setCritterHeading, isInWater, getOccupiedTiles,
     forbidOverlapsOnStart, critterBoxRad, travelSpeedBySpeciesAndPose,
+    REALISTIC, GAMIFIED, SPEEDS, drawLifespanS, startCritterDeath, growGrass, setGrassKg, stun,
     windRefillHalfLifeSByPose, staminaFullRefillSByPose, maxStepLevels,
     get loopHandle() { return loopHandle; },
   },
@@ -1357,5 +1489,5 @@ return {
 
 })();
 
-// In Node (tests/headless.test.js), sim.js is a module; in the browser this adds nothing.
+// In Node, sim.js is a module; in the browser this does nothing.
 if (typeof module !== "undefined" && module.exports) module.exports = sim;

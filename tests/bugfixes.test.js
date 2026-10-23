@@ -75,8 +75,8 @@ async function main(browser, r) {
       deathTicks: poses.filter(x => x === "death").length,
       expectedDeathTicks: deathData.nFrames * deathData.holdTks,
       walkedAfterDeath: poses.slice(poses.indexOf("death")).includes("walk"),
-      corpseX: parseInt(animat.spriteEl(d).style.backgroundPosition),
-      expectedCorpseX: -deadData.colZero * deadData.frameW,
+      corpseClass: animat.spriteEl(d).className,
+      corpseLayers: (animat.spriteEl(d).style.backgroundImage.match(/url\(/g) || []).length,
     };
   });
   r.check(k.diedAt !== null, "bug 3: a wolf kills an IDLE deer");
@@ -84,8 +84,8 @@ async function main(browser, r) {
     "bug 4: a dying deer told to run still becomes a corpse");
   r.check(k.deathTicks === k.expectedDeathTicks,
     `bug 5: death animation plays in full (${k.deathTicks} ticks, expected ${k.expectedDeathTicks})`);
-  r.check(k.corpseX === k.expectedCorpseX,
-    `bug 5: corpse shows the frame set by deer.dead.colZero (x ${k.corpseX}px, expected ${k.expectedCorpseX}px)`);
+  r.check(k.corpseClass === "critter deer-carcass" && k.corpseLayers === 9,
+    `bug 5: the corpse shows the whole carcass, skeleton and all 8 pieces (${k.corpseClass}, ${k.corpseLayers} layers)`);
 
   // 6: resting recovers (on dry land: swimming changes neither reserve)
   await moveToOpenLand(page);

@@ -55,9 +55,12 @@ RISER_COL = 15
 # Ground materials, one sheet row each: (name, flat block cell in tiles.png, riser source).
 # The riser (cliff) source is the block whose side fills cliff faces below the lip.
 MATERIALS = [
-    ("grass", (64, 64), (288, 0)),     # grass top; earth (dirt block) cliffs
+    ("grass", (64, 64), (288, 0)),     # grass top, short; earth (dirt block) cliffs
     ("dirt",  (288, 0), (288, 0)),
     ("stone", (192, 160), (192, 160)),
+    ("grass-medium", (0, 64), (288, 0)),   # medium grass (tufts at the edges)
+    ("grass-tall", (32, 64), (288, 0)),    # tall grass (tufts standing above the top)
+    ("grass-bare", "grazed", (288, 0)),    # grazed-out grass: dirt with stubble (grazed_block)
 ]
 
 LIP_ROWS = 3          # top rows of a block side that belong at the top of any face
@@ -65,8 +68,40 @@ SHADE = 0.10          # brightness change per level of rise across a tile
 
 
 def load_block(tiles, xy):
+    if xy == "grazed":
+        return grazed_block(tiles)
     x, y = xy
     return np.array(tiles.crop((x, y, x + 32, y + 32)).convert("RGBA"))
+
+
+# GRAZED-OUT GRASS: no such block in tiles.png, so it is made from the dirt block (288, 0)
+# with stubble on its top - small clumps of the grass block's greens, cropped short - and
+# a few darker, trampled specks.
+STUBBLE = {"L": (168, 202, 88, 255), "M": (117, 167, 67, 255), "D": (70, 130, 50, 255)}
+TRAMPLED = (122, 72, 65, 255)
+TUFTS = [["L.L", ".M."], ["LL", "MD"], [".L.", "LMD"], ["L", "M"], ["L.", ".D"], ["M"]]
+
+
+def grazed_block(tiles):
+    out = load_block(tiles, (288, 0)).copy()
+    dirt = tuple(int(c) for c in out[16, 16])
+
+    def on_top(x, y):  # well inside the top diamond (centre (16, 16), 32 x 16)
+        return abs(x + 0.5 - 16) / 16 + abs(y + 0.5 - 16) / 8 <= 0.85
+
+    for gy in range(9, 24, 3):  # clumps on a jittered lattice
+        for gx in range(2, 31, 5):
+            x0, y0 = gx + (gy * 7) % 5 - 2, gy + (gx * 3) % 3 - 1
+            if not on_top(x0, y0):
+                continue
+            for dy, line in enumerate(TUFTS[(gx * 5 + gy * 3) % len(TUFTS)]):
+                for dx, ch in enumerate(line):
+                    if ch != "." and on_top(x0 + dx, y0 + dy):
+                        out[y0 + dy, x0 + dx] = STUBBLE[ch]
+    for x, y in [(9, 15), (20, 12), (24, 18), (14, 20), (17, 16)]:
+        if on_top(x, y) and tuple(int(c) for c in out[y, x]) == dirt:
+            out[y, x] = TRAMPLED
+    return out
 
 
 def side_band(block, col):

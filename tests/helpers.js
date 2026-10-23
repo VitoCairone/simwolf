@@ -32,19 +32,23 @@ async function openGame(browser, { viewport, initScript, initArg } = {}) {
   return page;
 }
 
-// Moves a critter (default: the player's wolf) to the middle of open dry land, at least
-// `radius` tiles from any water or blocked tile (boulder), stops it, and centers the camera on it.
+// Moves a critter (default: the player's wolf) to the middle of open, dry, level land, at
+// least `radius` tiles from any water, blocked tile (boulder) or change of height, stops
+// it, and centers the camera on it.
 // Use this before tests that expect land poses (walk/trot/gallop/idle): critters can
 // otherwise wander into water and swim. With clearOthers, every other critter is moved
 // off the map so nothing gets in the way.
 async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = false } = {}) {
   return page.evaluate(({ who, radius, clearOthers }) => {
     const a = who === "pcWolf" ? sim.pcWolf : eval(who);
+    // dry, unblocked and level with the middle tile (so no step can stop it either)
     const dry = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.isBlockedTile(i, j);
     const tile = sim.internals.allLandTiles.find(([i, j]) => {
       if (i < radius || j < radius || i >= sim.gridWidthN - radius || j >= sim.gridHeightN - radius) return false;
+      const level = sim.tileCorners(i, j)[0];
       for (let di = -radius; di <= radius; di++)
-        for (let dj = -radius; dj <= radius; dj++) if (!dry(i + di, j + dj)) return false;
+        for (let dj = -radius; dj <= radius; dj++)
+          if (!dry(i + di, j + dj) || sim.tileCorners(i + di, j + dj).some(c => c !== level)) return false;
       return true;
     });
     if (!tile) return null;
@@ -54,6 +58,7 @@ async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = 
     a.gx = a.nextGX = tile[0] + 0.5; a.gy = a.nextGY = tile[1] + 0.5;
     a.stunnedUntil = 0; // not stunned from before it was moved
     sim.internals.setCritterIdle(a);
+    a.speed = 0; // placed: standing, not slowing from how it moved before
     if (a === sim.pcWolf) animat.followWolf();
     animat.render();
     return tile;

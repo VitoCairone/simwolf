@@ -1,42 +1,33 @@
-// THE VIEW: everything the player sees, and nothing else.
+// THE VIEW: everything the player sees. It draws the simulation's current state (tiles,
+// critters, the camera, the meters, the movement pad's highlight and the debug readouts)
+// and only ever reads the simulation.
 //
-// animat draws the simulation's current state: tiles, critter sprites and their
-// animation, the camera and zoom, the exertion meters, the movement pad's highlight, the
-// arrow-mode icon, and the debug readouts. It only ever READS the simulation (sim.js);
-// it never changes it. Its own state (camera, zoom, which DOM elements exist) is its own.
-//
-// Everything it offers is on the one global it defines, `animat`. Connect it to a
-// simulation with animat.attach(sim); it then redraws after every frame of ticks
-// (sim.onFrame). Functions that change the view itself (zoom, camera, pad highlight) are
-// called by controls.js in response to the player's input.
+// Everything it offers is on the one global it defines, `animat`. Connect it with
+// animat.attach(sim); it then redraws after every frame of ticks. controls.js calls the
+// functions that change the view itself (zoom, camera, pad highlight).
 
 const animat = (() => {
 
 let sim = null; // set by attach()
 
-// PROJECTION
-// Isometric: a tile that is SQUARE in grid space appears as a SQUASHED DIAMOND, its
-// surface half as many pixels high as it is wide.
+// PROJECTION: isometric, a grid square drawn as a diamond half as high as it is wide.
 const tileSize = 32;
 const tileRiserPY = 8;
 const halfTile = tileSize / 2;
 const qtrTile = tileSize / 4;
-// Water tiles in tiles.png draw their surface this many px lower than land surfaces, so
-// water looks sunken. Anything in water is drawn on that lower surface: a point on it
-// appears this far below the same grid point on land (half a tile, diagonally).
+// Water tiles in tiles.png draw their surface this much lower than land, so anything in
+// water is drawn this far below the same grid point on land.
 const waterSurfaceDropPY = 8;
-// Terrain height (see TERRAIN HEIGHT in sim.js): one level is drawn one block riser high,
-// so stacked blocks make cliffs and the water surface sits one level below level-0 land.
+// One terrain level (see TERRAIN HEIGHT in sim.js) is one block riser high, so the water
+// surface sits one level below level-0 land.
 const levelHeightPY = tileRiserPY;
 let worldRadPX = 0;  // set by attach(), from the grid size
 let worldDiamPY = 0;
 
 function boundVal(val, min, max) { return Math.max(min, Math.min(val, max)); }
 
-// rendering errors occur abruptly at x == 1677740
-// unknown why at this time
-// also observed at: [369092, 1404710] and other values which are
-// close to 1500k in Y and 300k+ in X
+// TODO: drawing breaks down at pixel coordinates around 1.4-1.7 million (likely the
+// browser's limit on CSS positions); far beyond this map's size, but it caps the map.
 function isoProject(gx, gy) {
   const px = (gx - gy) * halfTile;
   const py = (gx + gy) * qtrTile;
@@ -56,71 +47,74 @@ function rectiProject(px, py) {
   return [gx, gy];
 }
 
-// Converts a direction measured on SCREEN (from sim.getDir of a pixel vector, e.g.
-// DIR_N = straight up on screen) to the grid direction that is drawn that way.
-// The isometric view turns the grid 45 degrees, so this is a rotation by one step:
-// screen up -> grid NW, screen right -> grid NE, screen down -> grid SE, etc.
+// The grid direction drawn as screen direction screenDir (sim.getDir of a pixel vector):
+// the view turns the grid 45 degrees, so screen up is grid NW, screen right grid NE.
 function screenDirToGridDir(screenDir) {
   return (screenDir + 7) % 8;
 }
 
-// The grid vector drawn as screen vector (sx, sy) on flat ground: the inverse of
-// isoProject's linear part, up to scale (the length doesn't matter). Screen right (1, 0)
-// is grid (1, -1), NE; screen down (0, 1) is grid (2, 2), SE.
+// The grid vector drawn as screen vector (sx, sy) on flat ground, up to scale: the
+// inverse of isoProject's linear part.
 function screenVecToGridVec(sx, sy) {
   return [sx + 2 * sy, 2 * sy - sx];
 }
 
 // SPRITE SHEETS
-// A pose may set its own facing rows (rowByDir, mirrorByDir: by grid direction DIR_*),
-// for a sheet laid out differently from its species' usual one.
-
-// The deer's death sheet has two drawn facings, row 0 facing N (up-right) and row 1
-// facing E (down-right); S (down-left) is E mirrored and W (up-left) is N mirrored. A
-// deer facing between two diagonals (SE, SW, NW, NE) dies facing the next diagonal
-// clockwise: SE -> S, SW -> W, NW -> N, NE -> E.
+// The deer's death and carcass sheets have two facings, row 0 facing N (up-right) and
+// row 1 E (down-right); S and W are those mirrored, and the in-between directions use
+// the next diagonal clockwise.
 //                  E(↘)   SE(↓) S(↙)  SW(←) W(↖)  NW(↑)  N(↗)   NE(→)
 const deerDeathFacing = {
   rowByDir:    [1,     1,    1,    0,    0,    0,     0,     1],
   mirrorByDir: [false, true, true, true, true, false, false, false],
 };
-// `sheet` names the sprite sheet's CSS class in style.css (.wolf, .wolf-swim, ...),
-// which sets the sheet image and frame size; frameW/frameH must match that class.
-// holdTks: how many simulation ticks each frame is shown.
+// Each pose's frames:
+//   sheet           the sheet's CSS class in style.css, which sets its image and frame
+//                   size (frameW and frameH must match it)
+//   colZero, nFrames, holdTks   a run of columns, each shown holdTks ticks, looping
+//   cols, holds, loopFrom       or: columns and ticks each, looping from cols[loopFrom]
+//   topToShadow     y of the shadow's center (the critter's ground point) in a frame
+//   rowByDir, mirrorByDir       the sheet's rows by direction, if not the species' own
+// The deer's land frames and timing follow the artist's preview (images_raw/OvN65m.gif,
+// via spritecraft/extract_deer_gif.py): 100 ms a frame, 500 ms at the idle's pauses.
+const deerIdleCols = Array.from({ length: 24 }, (_, k) => 11 + k);
 const frameDataBySpeciesAndPose = {
   wolf: {
     walk: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 },
     idle: {sheet: "wolf", nFrames: 4, colZero: 8, frameW: 64, frameH: 64,
       holdTks: 12, topToShadow: 39 },
+    // TODO: trot and gallop frames of their own (these are the walk's)
     trot: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
-      holdTks: 5, topToShadow: 39 }, // placeholder
+      holdTks: 5, topToShadow: 39 },
     gallop: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
-      holdTks: 5, topToShadow: 39 }, // placeholder
-    // swim sheet is made from the run frames, same 7 facing rows. Its frames already
-    // draw the waterline waterSurfaceDropPY below the ground point, so the same
-    // topToShadow as on land puts the swimmer on the (lower) water surface. Land tiles
-    // in front of a swimmer are drawn over it (see spriteZIndex).
+      holdTks: 5, topToShadow: 39 },
+    // The swim frames already draw the waterline waterSurfaceDropPY below the ground
+    // point, so the land's topToShadow puts the swimmer on the lower water surface.
     swim: {sheet: "wolf-swim", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 8, topToShadow: 39 },
   },
   deer: {
-    walk: {sheet: "deer", nFrames: 11, colZero: 0, frameW: 32, frameH: 41,
-      holdTks: 5, topToShadow: 33},
-    idle: {sheet: "deer", nFrames: 24, colZero: 11, frameW: 32, frameH: 41,
-      holdTks: 12, topToShadow: 33},
-    trot: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
-      holdTks: 12, topToShadow: 33},
-    gallop: {sheet: "deer", nFrames: 10, colZero: 35, frameW: 32, frameH: 41,
-      holdTks: 12, topToShadow: 33}, // placeholder
-    // swim frames are 40x48 (wider/taller than land frames to fit the ripple ring).
-    // same topToShadow as the deer's land poses, as for the wolf's swim (see there)
+    // (columns 10 and 44 are the preview's start and stop of a run, in no cycle)
+    walk: {sheet: "deer", nFrames: 10, colZero: 0, frameW: 32, frameH: 41,
+      holdTks: 6, topToShadow: 33},
+    // standing, looking about, turning its head and lowering it, with a pause at each
+    idle: {sheet: "deer", cols: deerIdleCols,
+      holds: deerIdleCols.map(c => (c === 19 || c === 26 || c === 33 ? 30 : 6)),
+      frameW: 32, frameH: 41, topToShadow: 33},
+    // TODO: a trot of its own (this is the run cycle, as for the gallop)
+    trot: {sheet: "deer", nFrames: 9, colZero: 35, frameW: 32, frameH: 41,
+      holdTks: 6, topToShadow: 33},
+    gallop: {sheet: "deer", nFrames: 9, colZero: 35, frameW: 32, frameH: 41,
+      holdTks: 6, topToShadow: 33},
+    // standing and eating (sim's a.eating): lowers its head, then keeps it down
+    graze: {sheet: "deer", cols: [32, 33], holds: [6, 30], loopFrom: 1,
+      frameW: 32, frameH: 41, topToShadow: 33},
+    // larger frames, to fit the ripple ring
     swim: {sheet: "deer-swim", nFrames: 10, colZero: 0, frameW: 40, frameH: 48,
       holdTks: 10, topToShadow: 33 },
-    // death: its own sheet (made by spritecraft/make_deer_death.py), 48x48 frames: the
-    // knees give, it rolls over and lies on its side. Two drawn facings, mirrored for the
-    // other two (deerDeathFacing). Must play through exactly once in the simulation's
-    // deathDurationSBySpecies (checked by attach). The corpse ("dead") is its last frame.
+    // Plays exactly once in the simulation's death pose (attach checks this). A corpse
+    // with a carcass is drawn by drawCarcass instead of "dead".
     death: {sheet: "deer-death", nFrames: 5, colZero: 0, frameW: 48, frameH: 48,
       holdTks: 8, topToShadow: 40, ...deerDeathFacing},
     dead: {sheet: "deer-death", nFrames: 1, colZero: 4, frameW: 48, frameH: 48,
@@ -128,9 +122,9 @@ const frameDataBySpeciesAndPose = {
   }
 };
 
-// Sprite row (and horizontal mirroring) for each grid direction, indexed by DIR_*:
+// Sheet row and mirroring by direction (DIR_*), for species with a row per direction:
 //            E(↘) SE(↓) S(↙) SW(←) W(↖) NW(↑) N(↗) NE(→)
-// Wolf sheet rows: 0 ↗, 1 ↘, 2 ↙, 3 ↖, 4 ↑, 5 →, 6 ↓. Facing ← is row 5 mirrored.
+// The wolf's rows: 0 ↗, 1 ↘, 2 ↙, 3 ↖, 4 ↑, 5 →, 6 ↓; ← is → mirrored.
 const spriteRowByDir = {
   wolf: [1, 6, 2, 5, 3, 4, 0, 5],
 };
@@ -141,26 +135,33 @@ const mirrorByDir = {
 function spriteRow(a) {
   const rows = spriteRowByDir[a.species];
   if (rows) return rows[a.currentDirection];
-  // species with only the 4 diagonal rows (e.g. deer): odd directions borrow a neighbor
+  // only the 4 diagonals drawn (the deer): the others borrow the next one clockwise
   return (Math.floor(a.currentDirection / 2) + 1) % 4;
 }
 
-// Animation frame from how long the critter has been in its pose (sim's a.poseTick):
-// each frame shows for holdTks ticks, looping.
-function frameIndex(a, frameData) {
-  const ticksInPose = sim.tickCount - (a.poseTick ?? 0); // 1 after the pose's first tick
-  return Math.floor(Math.max(0, ticksInPose - 1) / frameData.holdTks) % frameData.nFrames;
+// The sheet column to show, from how long the critter has been in its pose (or since
+// sinceTick).
+function frameColumn(a, fd, sinceTick = a.poseTick ?? 0) {
+  const t = Math.max(0, sim.tickCount - sinceTick - 1); // 0 on the pose's first tick
+  if (!fd.cols) return fd.colZero + Math.floor(t / fd.holdTks) % fd.nFrames;
+  const from = fd.loopFrom ?? 0;
+  if (fd.introTks === undefined) { // worked out on first use
+    fd.introTks = fd.holds.slice(0, from).reduce((x, y) => x + y, 0);
+    fd.loopTks = fd.holds.slice(from).reduce((x, y) => x + y, 0);
+  }
+  let left = t < fd.introTks ? t : fd.introTks + (t - fd.introTks) % fd.loopTks, k = 0;
+  while (left >= fd.holds[k]) left -= fd.holds[k++];
+  return fd.cols[k];
 }
 
-// DRAWING ORDER (z-index) of tiles and critter sprites, which share one stacking order
-// (the layers in style.css don't set their own). Depth = gx + gy: larger is nearer the
-// camera. z-index must be an integer, so depths are scaled by 100.
-//   water tiles      0 .. 254         always lowest: the water surface is below land
-//   land tiles       1000 + 100*depth by depth, interleaved with swimmers
-//   swimmers         1000 + 100*depth so a land tile in front of a swimmer covers it
-//   land critters    100000 + depth   above all tiles (land is level, nothing hides them)
-// A land tile's depth is its center's (i + j + 1); a swimmer counts as half a tile
-// further back, so only land clearly in front of it (by more than half a tile) covers it.
+// DRAWING ORDER: tiles and sprites share one stacking order (z-index, which must be an
+// integer). Depth = gx + gy, larger nearer the camera:
+//   water tiles      i + j               lowest: the water surface is below all land
+//   land tiles       1000 + 100 * depth  interleaved with swimmers, so land in front of
+//   swimmers         1000 + 100 * depth  a swimmer covers it
+//   land critters    100000 + 100 * depth  above all tiles
+// A land tile's depth is its center's (i + j + 1); a swimmer counts half a tile further
+// back, so only land clearly in front of it covers it.
 const zSwimLandBase = 1000;
 const zLandCritterBase = 100000;
 
@@ -184,6 +185,7 @@ const spriteLayer = el("sprite-layer");
 const debugWolfEl = el("dbel-pc-wolf");
 const windFillEl = el("wind-meter-fill");
 const staminaFillEl = el("stamina-meter-fill");
+const foodFillEl = el("food-meter-fill");
 const zoomInBtn = el("zoom-in");
 const zoomOutBtn = el("zoom-out");
 const arrowsIconEl = el("arrow-mode-icon");
@@ -198,17 +200,16 @@ function setStyle(node, cache, prop, value) {
   node.style[prop] = value;
 }
 
-// CAMERA
-// worldShift is the world pixel at the viewport's top-left corner (at zoom 1); zoom
-// scales about the viewport's center. The camera follows the player's wolf unless the
-// player has panned away (controls.js re-attaches it).
-// TODO: pan limits are based on zoom = 1, so you cannot pan to the edges when zoomed in
+// CAMERA: shiftPX, shiftPY is the world pixel at the viewport's top-left at zoom 1; zoom
+// scales about the viewport's center. It follows the player's wolf until the player
+// pans away.
+// TODO: the pan limits assume zoom 1, so zoomed in you can't pan to the map's edges.
 const zoomMin = 1;
 const zoomMax = 8;
 const camera = { shiftPX: 0, shiftPY: 0, zoom: 1, followsWolf: true };
 let viewportWidth = 0;
 let viewportHeight = 0;
-let drawnCameraKey = null; // camera state the field and tiles were last drawn for
+let drawnCameraKey = null; // the camera the tiles were last drawn for
 
 function measureViewport() {
   viewportWidth = fieldWrapper.clientWidth;
@@ -246,22 +247,20 @@ function clearAllRenderedTiles() {
   shoreTiles.clear();
 }
 
-// TODO: cache the terrain-to-class lookup to reduce redundant work
+// TODO: cache this; tiles coming into view ask for the same terrain again.
 function getTileClassAt(i, j) {
   return sim.getTerrainAt(i, j);
 }
 
+// Creates the tiles in view and removes those out of it. It takes the grid rectangle
+// around the viewport at zoom 1 (twice the tiles in view), which covers any higher zoom.
 function renderVisibleTiles() {
-  // Note the absence of factoring for zoom;
-  // this method collects the square which contains
-  // all tiles (actually twice as many because it surrounds the displayed diamond)
-  // at zoom = 1, ergo always more than enough at higher zoom.
   const { shiftPX, shiftPY } = camera;
   const cornerPs = [
-    [shiftPX, shiftPY], // TopLeft
-    [shiftPX + viewportWidth, shiftPY], // TopRight
-    [shiftPX, shiftPY + viewportHeight], // BotLeft
-    [shiftPX + viewportWidth, shiftPY + viewportHeight] // BotRight
+    [shiftPX, shiftPY],
+    [shiftPX + viewportWidth, shiftPY],
+    [shiftPX, shiftPY + viewportHeight],
+    [shiftPX + viewportWidth, shiftPY + viewportHeight]
   ];
   const cornerGs = cornerPs.map(pair => rectiProject(...pair));
 
@@ -269,7 +268,7 @@ function renderVisibleTiles() {
   const iMax = Math.min(sim.gridWidthN - 1, Math.floor(cornerGs[3][0]));
   const jMin = Math.max(0, Math.floor(cornerGs[1][1]));
   const jMax = Math.min(sim.gridHeightN - 1, Math.floor(cornerGs[2][1]));
-  // ...and further down-screen, where raised ground can still reach up into view
+  // and further down-screen, where raised ground can reach up into view
   const raisedRows = Math.ceil(sim.maxLevel * levelHeightPY / qtrTile);
   const iMaxRaised = Math.min(sim.gridWidthN - 1, iMax + raisedRows);
   const jMaxRaised = Math.min(sim.gridHeightN - 1, jMax + raisedRows);
@@ -294,46 +293,29 @@ function renderVisibleTiles() {
   }
 }
 
-// SHORES: water lapping at the land. Its picture is an OUTGOING WAVE: a wave front
-// running out from the land, which always joins up - it ends at land, or carries on into
-// the next tile's wave, never stopping short in open water. Two sprite sets in tiles.png
-// row 9 draw it (each set's columns are the frames of its animation):
-//   STRAIGHT  columns 0-1: light along one edge (as drawn, its top-right edge), its wave
-//             front parallel to that edge, crossing the two edges beside it near that
-//             edge's ends
-//   CORNER    columns 2-5: light in one corner (as drawn, its top corner), its wave front
-//             an arc around that corner, crossing the two edges that meet there near it
-//   INTERIOR  images/shore-inner.png (made from the straight sprites by
-//             spritecraft/make_shore_tiles.py): light along two edges that meet, its wave
-//             front the two straight fronts meeting in a V, crossing the other two edges
-//             as straight tiles along each of them would
-// Where a wave crosses an edge into land it ends there; into water, the tile across must
-// have a wave crossing at the same point (near the same grid vertex).
-// Which water gets which (shorePlacementAt):
-//   1. land along exactly one edge: STRAIGHT, light to it. (A straight coast is all
-//      straight tiles, the same way round.)
-//   2. land along two edges that meet (a notch, as in a lake's corner): INTERIOR, light
-//      along both: it carries the straight waves on either side round the bend.
-//   3. land along two opposite edges (a channel): STRAIGHT, light to the side whose coast
-//      runs on furthest (shoreLookTiles each way), so neighbours along it agree.
-//   4. land along three edges: STRAIGHT, light to the middle one (its wave runs from land
-//      to land).
-//   5. no land along its edges but land diagonally beyond a corner: CORNER around that
-//      corner (a point of land), but only if both neighbours beside that corner have a
-//      wave crossing to it there - so a rectangle of land has exactly 4 corner pieces,
-//      and a staircase coast an interior corner in each notch and a corner beyond each.
-//   6. anything else (land along all four edges, open water): plain water (.tile.water).
-// Each sprite is turned to face the right way: mirrored (left to right and/or top to
-// bottom, about the diamond's center), or for a corner on the left or right, rotated a
-// quarter turn (images/shore-rotated.png, made by spritecraft/make_shore_tiles.py;
-// mirrorings can't do that).
-// One global clock drives every shore, and all the sets' loops last the same time and
-// start together: each shoreFrameTicks of game time (so it stops when paused) every corner
-// and interior tile steps to its next frame (of 4), and every straight tile, with half as
-// many frames, holds each one twice as long (0, 0, 1, 1, 0, ...), all at once.
-// For correctness first: the whole terrain map's water and land is kept once known
-// (isWaterAt), and each tile's placement too (shorePlacementAt).
-const shoreFrameTicks = 24;     // 0.4 s a step: a loop every 1.6 s
+// SHORES: water lapping at the land, drawn as an OUTGOING WAVE: a wave front running out
+// from the land that always joins up, ending at land or carrying on into the next tile's
+// wave, never stopping short in open water. Three sprite sets draw it, each set's
+// columns being its animation frames:
+//   STRAIGHT  tiles.png row 9, columns 0-1: light along one edge, the front parallel to it
+//   CORNER    tiles.png row 9, columns 2-5: light in one corner, the front an arc around it
+//   INTERIOR  images/shore-inner.png: light along two edges that meet, the front a V
+// Which water tile gets which (shorePlacementAt), by the land along its edges:
+//   one edge          STRAIGHT, light to it
+//   two edges meeting INTERIOR, carrying the straight waves either side round the bend
+//   two opposite      STRAIGHT, light to the side whose coast runs on furthest
+//                     (shoreLookTiles each way), so neighbours along a channel agree
+//   three edges       STRAIGHT, light to the middle one
+//   none, but land beyond a corner   CORNER around it, if both neighbours beside that
+//                     corner have a wave crossing to it, so a rectangle of land gets
+//                     exactly 4 corners
+//   otherwise         plain water
+// Sprites are mirrored about the diamond's center, or for a corner on the left or right,
+// taken from images/shore-rotated.png (a quarter turn no mirroring can make). One clock
+// steps every shore together: every shoreFrameTicks of game time, 4-frame sets advance a
+// frame and 2-frame sets hold each frame for two steps, so all loops stay in step.
+// Water and placements are worked out once per tile and kept: the terrain never changes.
+const shoreFrameTicks = 24;
 const shoreLoopSteps = 4;       // steps in a loop (the corner set's frames)
 const shoreSheetRowY = 9 * 32;  // y of row 9 in tiles.png
 const shoreLookTiles = 3;
@@ -344,9 +326,9 @@ const shoreSets = {
   corner: { columns: [2, 3, 4, 5] },
   inner: { columns: [0, 1, 2, 3] }, // (columns of images/shore-inner.png)
 };
-// A tile's screen edges and corners. Edges: TL top-left (its grid W side), TR top-right
-// (N), BL bottom-left (S), BR bottom-right (E). Corners (grid vertices): T top (i, j),
-// R right (i + 1, j), B bottom (i + 1, j + 1), L left (i, j + 1).
+// A tile's edges as drawn: TL top-left (grid W), TR top-right (N), BL bottom-left (S),
+// BR bottom-right (E). Its corners, at grid vertices: T top (i, j), R right (i + 1, j),
+// B bottom (i + 1, j + 1), L left (i, j + 1).
 const edgeStep = { TL: [-1, 0], TR: [0, -1], BL: [0, 1], BR: [1, 0] };
 const oppositeEdge = { TL: "BR", BR: "TL", TR: "BL", BL: "TR" };
 const edgeCorners = { TL: ["L", "T"], TR: ["T", "R"], BR: ["R", "B"], BL: ["B", "L"] };
@@ -354,8 +336,8 @@ const cornerEdges = { T: ["TL", "TR"], R: ["TR", "BR"], B: ["BR", "BL"], L: ["BL
 const cornerVertex = { T: [0, 0], R: [1, 0], B: [1, 1], L: [0, 1] };
 // the tile diagonally beyond each corner
 const cornerStep = { T: [-1, -1], R: [1, -1], B: [1, 1], L: [-1, 1] };
-// Each way a sprite can be shown: mirrored (flipX, flipY) and/or rotated a quarter turn
-// (corner only). Straight: by the edge its light is along; corner: by its light corner.
+// How each sprite is shown, by the edge (straight) or corner (corner, interior) its light
+// is at.
 const shoreVariants = {
   linear: {
     TR: { set: "linear", flipX: false, flipY: false, rotated: false },
@@ -369,7 +351,7 @@ const shoreVariants = {
     R: { set: "corner", flipX: false, flipY: false, rotated: true },
     L: { set: "corner", flipX: true,  flipY: false, rotated: true },
   },
-  inner: { // by the corner between its two land edges; row: of images/shore-inner.png
+  inner: { // row: of images/shore-inner.png
     T: { set: "inner", flipX: false, flipY: false, row: 0 },
     B: { set: "inner", flipX: false, flipY: true,  row: 0 },
     R: { set: "inner", flipX: false, flipY: false, row: 1 },
@@ -377,8 +359,8 @@ const shoreVariants = {
   },
 };
 
-// Whether tile (i, j) is water (off the map counts as water: no land there), kept for the
-// whole map: 0 not yet known, 1 water, 2 land.
+// Whether tile (i, j) is water; off the map counts as water. Kept per tile: 0 unknown,
+// 1 water, 2 land.
 let waterKnown = null;
 function isWaterAt(i, j) {
   if (i < 0 || j < 0 || i >= sim.gridWidthN || j >= sim.gridHeightN) return true;
@@ -393,9 +375,8 @@ function landEdgesOf(i, j) {
   return ["TL", "TR", "BL", "BR"].filter(e => !isWaterAt(i + edgeStep[e][0], j + edgeStep[e][1]));
 }
 
-// How far the coast runs along edge e of water tile (i, j): the water tiles in a row to
-// either side of it (along that edge, up to shoreLookTiles each way) with land on that
-// same side.
+// How far the coast runs along edge e of water tile (i, j): the water tiles in line with
+// it, up to shoreLookTiles each way, with land on that same side.
 function coastRun(i, j, e) {
   const [di, dj] = edgeStep[e];
   let run = 0;
@@ -409,8 +390,8 @@ function coastRun(i, j, e) {
   return run;
 }
 
-// Where a placement's wave crosses its tile's edges: [edge, corner] pairs, each meaning
-// "crosses this edge near this corner".
+// Where a placement's wave crosses its tile's edges: [edge, corner] pairs, "crosses this
+// edge near this corner".
 function waveCrossings(placement) {
   // a straight wave along edge e: crosses the edge beside each of e's corners
   const straight = e => edgeCorners[e].map(c => [cornerEdges[c].find(f => f !== e), c]);
@@ -425,8 +406,7 @@ function waveCrossesAt(i, j, e, c) {
   return !!p && waveCrossings(p).some(([pe, pc]) => pe === e && pc === c);
 }
 
-// The same physical edge and corner, as seen from the tile beyond edge e: the edge
-// opposite, and the corner at the same grid vertex.
+// The same edge and grid vertex, as seen from the tile beyond edge e.
 function acrossEdge(e, c) {
   const [di, dj] = edgeStep[e], [vi, vj] = cornerVertex[c];
   const v = [vi - di, vj - dj]; // the vertex in the other tile's terms
@@ -434,9 +414,8 @@ function acrossEdge(e, c) {
   return [oppositeEdge[e], c2];
 }
 
-// Where water tile (i, j)'s wave is and what draws it: { kind: "straight", edge } or
-// { kind: "corner" or "inner", corner }, or null for plain water. Kept per tile once
-// worked out.
+// Water tile (i, j)'s wave: { kind: "straight", edge }, { kind: "corner" | "inner",
+// corner }, or null for plain water.
 const placements = new Map();
 function shorePlacementAt(i, j) {
   const key = i * sim.gridHeightN + j;
@@ -449,13 +428,13 @@ function shorePlacementAt(i, j) {
       const corner = Object.keys(cornerEdges).find(c => cornerEdges[c].every(e => land.includes(e)));
       p = { kind: "inner", corner };
     } else if (land.length === 2) {
-      // a channel: to the side whose coast runs on furthest (ties: the first)
+      // a channel (ties: the first side)
       const [a, b] = land;
       p = { kind: "straight", edge: coastRun(i, j, b) > coastRun(i, j, a) ? b : a };
     } else if (land.length === 3) {
       p = { kind: "straight", edge: land.find(e => land.includes(oppositeEdge[e]) === false) };
     } else if (land.length === 0) {
-      // a point of land beyond a corner: a corner wave, if both neighbours' waves come to it
+      // a point of land beyond a corner
       for (const c of ["T", "R", "B", "L"]) {
         const [si, sj] = cornerStep[c];
         if (isWaterAt(i + si, j + sj)) continue;
@@ -480,8 +459,7 @@ function shoreVariantAt(i, j) {
   return shoreVariants[p.kind][p.corner];
 }
 
-// For tests and debugging: forget everything known about the terrain and draw it afresh
-// (after the terrain has been changed).
+// For tests: forget what is known about the terrain and draw it afresh.
 function redrawTerrain() {
   waterKnown = null;
   placements.clear();
@@ -498,12 +476,12 @@ function shoreClockNow() {
 
 function drawShoreTile(tile, clock) {
   const columns = shoreSets[tile.shore.set].columns;
-  // where in the loop, spread over this set's frames (linear: each frame for 2 steps)
+  // the set's frame for this step of the loop
   const k = Math.floor((clock % shoreLoopSteps) * columns.length / shoreLoopSteps);
   if (k === tile.shoreFrame) return;
   tile.shoreFrame = k;
-  // the rotated sheet has just the corner frames, in a row; the interior sheet a row for
-  // each of its two drawn notches
+  // shore-rotated.png holds just the corner frames, in a row; shore-inner.png a row per
+  // drawn notch
   tile.style.backgroundPosition = tile.shore.rotated ? `-${k * tileSize}px 0px`
     : tile.shore.set === "inner" ? `-${columns[k] * tileSize}px -${tile.shore.row * tileSize}px`
     : `-${columns[k] * tileSize}px -${shoreSheetRowY}px`;
@@ -512,30 +490,48 @@ function drawShoreTile(tile, clock) {
 let drawnShoreClock = -1;
 function drawShores() {
   const clock = shoreClockNow();
-  if (clock === drawnShoreClock) return; // (new tiles are drawn at the current frame)
+  if (clock === drawnShoreClock) return; // new tiles start at the current frame
   drawnShoreClock = clock;
   for (const tile of shoreTiles) drawShoreTile(tile, clock);
 }
 
-// GROUND: each land tile is drawn as a column (see images/ground-slopes.png, made by
-// spritecraft/make_slope_tiles.py): the sprite of its shape at its base level, whose
-// sides reach one level below the base like a flat block, then as many riser strips as
-// needed to reach down to the ground in front of it (where a cliff drops). Columns are
-// painted back to front (tileZIndex), so anything further down is covered by the ground
-// in front of it.
+// GROUND: each land tile is a column (images/ground-slopes.png, made by
+// spritecraft/make_slope_tiles.py): its shape's sprite at its base level, with sides
+// reaching one level below like a flat block, and riser strips below that down to the
+// ground in front of it (a cliff). Painted back to front, the ground in front covers
+// what is further down.
 const groundRowByTerrain = { grass: 0, dirt: 1, stone: 2 }; // sheet rows
+const grassRowByHeight = [5, 0, 3, 4]; // by sim.grassHeightAt: bare, short, medium, tall
+
+function groundRowAt(i, j, terrain) {
+  if (terrain === "grass") return grassRowByHeight[Math.max(0, sim.grassHeightAt(i, j))];
+  return groundRowByTerrain[terrain];
+}
+
+// Redraws the tiles in view whose grass height has changed.
+let grassSerial = 0;
+function drawGrass() {
+  const { serial, tiles } = sim.grassChangesSince(grassSerial);
+  grassSerial = serial;
+  const redraw = tiles || [...renderedTiles.keys()].map(k => k.split("_").map(Number));
+  for (const [i, j] of redraw) {
+    const key = `${i}_${j}`, old = renderedTiles.get(key);
+    if (!old || (!tiles && sim.grassHeightAt(i, j) < 0)) continue;
+    const tile = makeTileElement(i, j);
+    tileLayer.replaceChild(tile, old);
+    renderedTiles.set(key, tile);
+  }
+}
 const groundCellW = 32, groundCellH = 40;
 const groundBaseY = 16;    // y of the base plane's N corner within a shape cell
 const riserCol = 15;       // sheet column of the one-level riser strip
-// The boulder (.tile.boulder: its image in tiles.png) has no ground of its own: it rests on
-// its tile. In its 32 x 32 cell its footprint's widest corners are on row 25 (columns 7
-// and 25) and its front tip on row 30, so the footprint's center, row 25, goes on the
-// ground at the tile's center.
+// A boulder rests on its tile: row 25 of its 32 x 32 cell, its footprint's center, goes
+// on the ground at the tile's center.
 const boulderFootCenterY = 25;
 
-// The level a tile's front sides must reach down to, for the tile at (i, j) in front of
-// it: that tile's lowest corner; water and the map's edge show sides down to level -1
-// (the water surface is drawn one level below level-0 land).
+// The level a tile's front sides must reach down to, given the tile (i, j) in front of
+// it: its lowest corner, or -1 for water and off the map (the water surface is drawn a
+// level below level-0 land).
 function frontGroundLevel(i, j) {
   if (i >= sim.gridWidthN || j >= sim.gridHeightN) return -1;
   if (sim.getTerrainAt(i, j) === "water") return -1;
@@ -557,11 +553,11 @@ function makeTileElement(i, j) {
   tile.style.zIndex = tileZIndex(i, j, terrain);
   tile.style.left = `${px - halfTile}px`;
 
-  if (terrain === "water") { // water is flat at level 0, its own flat tile
+  if (terrain === "water") {
     tile.className = `tile ${terrain}`;
     tile.style.top = `${py - tileRiserPY}px`;
     const v = shoreVariantAt(i, j);
-    if (v) { // a shore, or a corner off a point of land: lapping (see SHORES)
+    if (v) {
       tile.shore = v;
       tile.shoreFrame = -1;
       if (v.rotated) tile.style.backgroundImage = "url('./images/shore-rotated.png')";
@@ -576,12 +572,12 @@ function makeTileElement(i, j) {
     return tile;
   }
 
-  // the column's origin is its base plane's N corner (less half a tile in x)
+  // the column's origin is its base plane's N corner, less half a tile in x
   const corners = sim.tileCorners(i, j);
   const base = Math.min(...corners);
   const shape = (corners[0] - base) | (corners[1] - base) << 1
     | (corners[2] - base) << 2 | (corners[3] - base) << 3;
-  const row = groundRowByTerrain[terrain];
+  const row = groundRowAt(i, j, terrain);
   if (row === undefined) return alert(`animat: no ground sprites for terrain "${terrain}"`);
   tile.className = "ground-column";
   tile.style.top = `${py - base * levelHeightPY}px`;
@@ -591,10 +587,10 @@ function makeTileElement(i, j) {
   for (let k = 1; k <= base - 1 - floor; k++) {
     tile.appendChild(groundPiece(riserCol, row, k * levelHeightPY));
   }
-  if (sim.obstacleAt(i, j) === "boulder") { // resting on the middle of the tile
+  if (sim.obstacleAt(i, j) === "boulder") {
     const boulder = document.createElement("div");
     boulder.className = "tile boulder";
-    // the tile's center on its surface, in the column's coordinates (base N corner = 0)
+    // the tile's center on its surface, relative to the column's origin
     const centerAboveBase = (corners[0] + corners[1] + corners[2] + corners[3]) / 4 - base;
     const centerY = isoProject(0.5, 0.5)[1] - centerAboveBase * levelHeightPY;
     boulder.style.left = "0px";
@@ -604,10 +600,8 @@ function makeTileElement(i, j) {
   return tile;
 }
 
-// CRITTER SPRITES
-// One element per critter (live or corpse), keyed by uid; created when a critter first
-// appears and removed when it leaves the simulation.
-// TODO: only keep elements for critters inside the viewport.
+// CRITTER SPRITES: one element per critter and corpse, by uid, for as long as it exists.
+// TODO: keep elements only for critters in view.
 const sprites = new Map(); // uid -> { node, css }
 
 function drawCritter(a) {
@@ -617,30 +611,57 @@ function drawCritter(a) {
     spriteLayer.appendChild(s.node);
     sprites.set(a.uid, s);
   }
-  const fd = frameDataBySpeciesAndPose[a.species][a.pose];
+  if (a.kind === "corpse" && a.carcass) return drawCarcass(a, s);
+  // a deer standing and eating is drawn grazing, timed from when it started
+  const grazing = a.species === "deer" && a.pose === "idle" && a.eating;
+  if (grazing && s.grazeSince === undefined) s.grazeSince = sim.tickCount - 1;
+  if (!grazing) s.grazeSince = undefined;
+  const fd = frameDataBySpeciesAndPose[a.species][grazing ? "graze" : a.pose];
   if (!fd) return alert(`animat: no sprite frames for ${a.species} pose "${a.pose}"`);
 
-  // Each pose names its sprite sheet's CSS class (see .critter in style.css), which
-  // sets the sheet image and frame size.
   const className = "critter " + fd.sheet;
   if (s.node.className !== className) s.node.className = className;
 
-  const frameCol = fd.colZero + frameIndex(a, fd);
+  const frameCol = frameColumn(a, fd, grazing ? s.grazeSince : undefined);
   const row = fd.rowByDir ? fd.rowByDir[a.currentDirection] : spriteRow(a);
   setStyle(s.node, s.css, "backgroundPosition",
     `-${frameCol * fd.frameW}px -${row * fd.frameH}px`);
-  // the element is centered on the critter's x, so mirroring about its center is safe
+  // the element is centered on the critter, so mirroring keeps it in place
   const mirror = fd.mirrorByDir ? fd.mirrorByDir[a.currentDirection]
     : (mirrorByDir[a.species]?.[a.currentDirection] ?? false);
   setStyle(s.node, s.css, "transform", mirror ? "scaleX(-1)" : "");
 
-  // critter image is offset so its noon-shadow center is at its grid coordinate, on the
-  // ground (flat sprites for now, also on slopes)
+  // the shadow's center on the critter's ground point
   const [isoX, isoY] = groundProject(a.gx, a.gy);
   const topOffset = fd.topToShadow ?? (fd.frameH / 2);
   setStyle(s.node, s.css, "left", `${isoX - fd.frameW / 2}px`);
   setStyle(s.node, s.css, "top", `${isoY - topOffset}px`);
-  // z-index must be an integer; a fractional value is silently ignored by the browser
+  // (a fractional z-index is silently ignored)
+  setStyle(s.node, s.css, "zIndex", String(spriteZIndex(a)));
+}
+
+// CARCASSES: 9 background layers of one element: the shadow, then each of the 8 pieces as
+// meat while any is left, else as bones. images/deer-carcass.png (made by
+// spritecraft/make_deer_carcass.py) has the shadow in column 0, then each piece's meat
+// and bones, bottom layer to top in carcassSheetPieces order.
+const carcassSheetPieces = ["groundHind", "groundFore", "hips", "midback", "chest", "head", "skyHind", "skyFore"];
+const carcassFrame = 48, carcassTopToShadow = 40;
+
+function drawCarcass(a, s) {
+  if (s.node.className !== "critter deer-carcass") s.node.className = "critter deer-carcass";
+  const row = deerDeathFacing.rowByDir[a.currentDirection];
+  const layers = []; // top first
+  for (let k = carcassSheetPieces.length - 1; k >= 0; k--) {
+    layers.push(1 + 2 * k + (a.carcass[carcassSheetPieces[k]] > 0 ? 0 : 1));
+  }
+  layers.push(0); // the shadow, at the bottom
+  setStyle(s.node, s.css, "backgroundImage", layers.map(() => "url('./images/deer-carcass.png')").join(", "));
+  setStyle(s.node, s.css, "backgroundPosition",
+    layers.map(col => `-${col * carcassFrame}px -${row * carcassFrame}px`).join(", "));
+  setStyle(s.node, s.css, "transform", deerDeathFacing.mirrorByDir[a.currentDirection] ? "scaleX(-1)" : "");
+  const [isoX, isoY] = groundProject(a.gx, a.gy);
+  setStyle(s.node, s.css, "left", `${isoX - carcassFrame / 2}px`);
+  setStyle(s.node, s.css, "top", `${isoY - carcassTopToShadow}px`);
   setStyle(s.node, s.css, "zIndex", String(spriteZIndex(a)));
 }
 
@@ -660,13 +681,10 @@ function drawCritters() {
   }
 }
 
-// DEBUG OUTLINE of the player's wolf's tile-sized footprint
+// DEBUG: a tile-sized outline centered on the player's wolf (on the water surface when
+// it swims).
 const debugWolfCss = {};
 function drawDebugWolf() {
-  // debug element, which has the dimensions of a tile (32 x 16),
-  // should be placed so that its center is the same as the wolf's center;
-  // to simplify the math it is its own image with no extra pixels.
-  // In water the wolf is on the water surface, which is drawn lower than land.
   const w = sim.pcWolf;
   const [isoX, isoY] = groundProject(w.gx, w.gy);
   const surfaceDrop = w.pose === "swim" ? waterSurfaceDropPY : 0;
@@ -674,19 +692,22 @@ function drawDebugWolf() {
   setStyle(debugWolfEl, debugWolfCss, "top", (isoY - qtrTile + surfaceDrop) + "px");
 }
 
-// EXERTION METERS: wind (top) and stamina (bottom) of the player's wolf; full bar = full
-// reserve. No labels: no words or numbers in gameplay UI.
+// METERS: the player's wolf's wind, stamina and food, a full bar when full. No labels:
+// the game shows no words or numbers.
 const windCss = {};
 const staminaCss = {};
+const foodCss = {};
 function drawExertion() {
   setStyle(windFillEl, windCss, "width", `${100 * sim.pcWolf.wind}%`);
   setStyle(staminaFillEl, staminaCss, "width", `${100 * sim.pcWolf.stamina}%`);
+  setStyle(foodFillEl, foodCss, "width", `${100 * sim.pcWolf.food}%`);
 }
 
-// Draws the whole view as the simulation is now. Called after every frame of ticks, and
-// directly after anything that changes the view while the game is paused.
+// Draws the whole view as the simulation is now: after every frame of ticks, and after
+// any change to the view while paused.
 function render() {
   drawCamera();
+  drawGrass();
   drawShores();
   drawCritters();
   drawDebugWolf();
@@ -704,7 +725,7 @@ function setZoom(z) {
   const newZoom = boundVal(z, zoomMin, zoomMax);
   if (newZoom === camera.zoom) return;
   // zooming out shows more of the world: start the tiles afresh
-  // (temporary artifacting can still appear when zooming out and then panning)
+  // TODO: tiles can still be briefly missing when zooming out and then panning.
   if (newZoom < camera.zoom) clearAllRenderedTiles();
   camera.zoom = newZoom;
   drawnCameraKey = null;
@@ -735,8 +756,8 @@ function followWolf() {
   render();
 }
 
-// Movement pad highlight. vx, vy: pointer offset from pad center, normalized so the
-// outer ring = 1. pose: the ring the pointer is in, or null when the pad is not in use.
+// The movement pad's knob and lit ring. vx, vy: the pointer's offset from the pad's
+// center (1 at the outer ring); pose: its ring, or null when the pad isn't in use.
 function showMovePad(vx, vy, pose) {
   movePadKnob.classList.toggle("visible", pose !== null);
   movePadKnob.setAttribute("cx", vx * 100);
@@ -776,14 +797,13 @@ function screenToGrid(clientX, clientY) {
   return rectiProject(px, py);
 }
 
-// Developer debug readout of grid coordinates (null = pointer not over the field).
+// DEBUG: the grid coordinates under the pointer (g null: not over the field).
 function showCursorCoords(g) {
   cursorCoordsEl.textContent = g
     ? `x: ${g[0].toFixed(3)}, y: ${g[1].toFixed(3)}`
     : `x: –, y: –`;
 }
 
-// CONNECTING TO A SIMULATION
 function attach(theSim) {
   if (sim) return alert("animat.attach called twice");
   if (!theSim || typeof theSim.onFrame !== "function")
@@ -808,7 +828,6 @@ function attach(theSim) {
   render();
 }
 
-// THE INTERFACE
 return {
   attach, render,
   // view changes, for controls.js
@@ -821,6 +840,7 @@ return {
   },
   // for tests and debugging
   spriteEl: a => sprites.get(a.uid)?.node,
+  tileEl: (i, j) => renderedTiles.get(`${i}_${j}`),
   spriteRow, spriteZIndex, frameDataBySpeciesAndPose,
 };
 

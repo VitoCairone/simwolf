@@ -19,7 +19,8 @@ async function main(browser, r) {
 
   // (after a moment, so the game has ticked since the last pointer move)
   const state = async () => { await p.waitForTimeout(80); return p.evaluate(() => ({
-    pose: sim.pcWolf.pose, dir: sim.pcWolf.currentDirection, inPad: controls.padInUse,
+    // told to stop counts as idle: it slows to a stop in its time (SPEED CHANGES in sim.js)
+    pose: sim.pcWolf.targetSpeed === 0 ? "idle" : sim.pcWolf.pose, dir: sim.pcWolf.currentDirection, inPad: controls.padInUse,
     knob: document.getElementById("move-pad-knob").classList.contains("visible"),
     active: [...document.querySelectorAll("#move-pad .ring.active")].map(e => e.dataset.pose),
   })); };
@@ -105,12 +106,14 @@ async function main(browser, r) {
   w = await p.evaluate(() => [sim.pcWolf.pose, sim.pcWolf.currentDirection === sim.DIR_SE]);
   r.check(w[0] === "gallop" && w[1], "wolf mode, inside the pad with ArrowUp held: the pad wins");
   await p.mouse.move(pad.x, pad.y, { steps: 3 }); await p.waitForTimeout(200);
-  r.check(await p.evaluate(() => sim.pcWolf.pose === "idle"), "pad center with ArrowUp held: the wolf stops");
+  r.check(await p.evaluate(() => sim.pcWolf.targetSpeed === 0), // stopping (it slows in its time)
+    "pad center with ArrowUp held: the wolf stops");
   await p.keyboard.up("ArrowUp");
   await p.mouse.move(400, 300, { steps: 4 });
   await p.keyboard.down("ArrowRight"); await p.waitForTimeout(150); await p.keyboard.up("ArrowRight");
   await p.waitForTimeout(150);
-  r.check(await p.evaluate(() => sim.pcWolf.pose === "idle"), "wolf mode: releasing the arrows stops the wolf");
+  r.check(await p.evaluate(() => sim.pcWolf.targetSpeed === 0), // stopping (it slows in its time)
+    "wolf mode: releasing the arrows stops the wolf");
 
   // the pad does not move with zoom
   await p.click("#zoom-in"); await p.waitForTimeout(100);
