@@ -8,7 +8,9 @@
 // grass within a rectangle on screen around the critter, the shape and size of the game
 // view at the default 2x zoom on a full-screen MacBook (about 1,290 x 810 CSS pixels).
 // In grid terms, screen-horizontal is dx - dy and screen-vertical dx + dy, so the
-// rectangle needs no square root.
+// rectangle needs no square root. A newborn sees nothing until old enough to "see".
+// Sight also tells a creature's sex, age (an infant, grown), its partner, and whether a
+// female is in heat (as smell would).
 // TODO: sight blocked by boulders and terrain, a field of view, and hearing. Earlier
 // attempts are shelved in experiments/realistic-senses/ and experiments/sight-overlay/.
 
@@ -27,21 +29,26 @@ function inSight(dx, dy, k = 1) {
 
 // What critter a perceives now, one snapshot per creature in sight (the dying and the
 // dead included):
-//   { uid, species, alive, gx, gy, vx, vy, swimming, meat }
-//   vx, vy: its velocity, tiles a tick
-//   meat:   for a carcass, the share of its meat left (1 all, 0 only bones)
+//   { uid, species, alive, gx, gy, vx, vy, swimming, meat, isMale, infant, grown,
+//     mateUid, inHeat }
+//   vx, vy:  its velocity, tiles a tick
+//   meat:    for a carcass, the share of its meat left (1 all, 0 only bones)
+//   mateUid: its partner's uid, or null
 function perceive(a) {
   const seen = [];
+  if (!sim.can(a, "see")) return seen;
   for (const list of [sim.allCritters, sim.allCorpses]) {
     for (const b of list) {
       if (b === a) continue;
       if (!inSight(b.gx - a.gx, b.gy - a.gy)) continue;
-      const speed = b.speed || 0;
+      const speed = b.speed || 0, alive = sim.isLiveCritter(b);
       seen.push({
-        uid: b.uid, species: b.species, alive: sim.isLiveCritter(b),
+        uid: b.uid, species: b.species, alive,
         gx: b.gx, gy: b.gy, vx: speed ? b.hx * speed : 0, vy: speed ? b.hy * speed : 0,
         swimming: b.pose === "swim",
-        meat: b.carcass ? sim.carcassMeatKg(b) / sim.deerMeatKg : undefined,
+        meat: b.carcass ? sim.carcassMeatKg(b) / b.carcassFullKg : undefined,
+        isMale: b.isMale, infant: sim.isInfant(b), grown: sim.isGrown(b),
+        mateUid: b.mateUid, inHeat: alive && sim.inHeat(b),
       });
     }
   }

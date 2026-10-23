@@ -15,9 +15,14 @@
 //
 // DECISIONS, in order of priority:
 //   a tired swimmer heads for land (toShore)
-//   a deer flees wolves it remembers (decideDeer), else grazes while hungry (graze)
-//   a wolf eats a carcass it knows of while not full, else hunts while hungry
-//     (decideWolf), waiting on the shore for prey in the water (waitAshore)
+//   a deer flees wolves it remembers (decideDeer)
+//   a wolf eats a carcass it knows of while not full (decideWolf)
+//   while its meter is above romanceAbove, a grown critter courts and mates, or mates
+//     with its partner in heat (social, romance only)
+//   a deer grazes while hungry (graze); a wolf hunts while hungry and weaned, waiting on
+//     the shore for prey in the water (waitAshore)
+//   mates and family (social): courting and mating as above, at any hunger; keeping near
+//     a partner or infants; the young keep near a parent
 //   anything else wanders (calm)
 // Every move goes through steer, which finds a way round obstacles.
 
@@ -31,6 +36,8 @@ const deerSafeTiles = 30;        // ...unless it is this far from where it last 
 const deerGallopWithinTiles = 8; // gallop while within this of where a wolf was last seen
 const deerCommitS = 0.75;        // keep to a chosen way to flee at least this long
 const deerCaughtBetween = 0.3;   // the pulls of wolves cancel to below this share: break sideways
+// Above this share of a full meter, courting and mating come before eating.
+const romanceAbove = 0.5;
 const deerGrazeBelow = 0.8;      // a deer starts grazing with its food meter below this
 const deerFullAt = 0.99;         // ...and grazes until it is this full
 // A tile is worth walking to and starting on with at least this share of the most a tile
@@ -53,6 +60,14 @@ const shoreLookAheadTiles = 40;  // looks this far along a swimmer's way for its
 const shoreRetryTurns = 10;      // a tired swimmer blocked this many turns looks for other land
 const returnToLandSureTiles = 4; // a calm swimmer this far from land surely heads for it
 const returnToLandGiveUpS = 1;   // ...but gives up after being blocked this long
+const mateCloseTiles = 1.2;      // stands ready to mate this near (center to center)
+const courtGiveUpS = 30;         // gives up courting one that hasn't mated after this long...
+const courtRetryS = 120;         // ...and leaves it be this long
+const pairStayTiles = 6;         // a paired male keeps within this of his partner
+const motherStayTiles = 4;       // a mother keeps within this of her infants
+const followParentTiles = 3;     // the young keep within this of a parent
+const kinLostTiles = 2;          // kin not where last seen, this near: lost until seen again
+const roamS = 40;                // an unpaired grown critter roams one way up to this long
 const playerHandoverS = 2;       // after the player lets go, the wolf waits this long
 const avoidBlockedS = 0.5;       // after a blocked move, avoid that direction this long
 const keepHeadingCos2 = 0.97;    // keep the current heading within 10 degrees (cos^2)
@@ -93,7 +108,10 @@ function memoryOf(a) {
   if (!m) {
     m = {
       known: new Map(),       // uid -> its latest sighting (see remember)
-      mode: "calm",           // calm | flee | chase | wait | feed | graze | ashore
+      familiar: new Set(),    // uids of its species met while it or they were infants
+      court: null,            // the critter it is courting: { uid, since }
+      refused: new Map(),     // uid -> courting it again only after this tick
+      mode: "calm",           // calm | flee | chase | wait | feed | graze | ashore | court | mate | family
       target: null,           // a wolf's prey (uid)
       targetUntil: -Infinity, // ...kept until this tick at least
       flee: null,             // a deer's way to flee: { dx, dy, until, since }
@@ -118,18 +136,30 @@ function memoryOf(a) {
 }
 
 // MEMORY: the latest sighting of every creature a critter has perceived (where, which
-// way and how fast, whether alive, swimming, the meat left on a carcass, and when), kept
-// after losing sight of it until too old to matter.
+// way and how fast, whether alive, swimming, the meat left on a carcass, its sex, age
+// and partner, whether in heat, and when), kept after losing sight of it until too old
+// to matter; its kin's (partner, parents, young) for good.
+// WESTERMARCK: it never forgets those of its species it met while it or they were
+// infants (m.familiar), and never mates with them.
 function remember(a, m, now) {
+  const selfInfant = sim.isInfant(a);
   for (const o of senses.perceive(a)) {
     const before = m.known.get(o.uid);
     m.known.set(o.uid, { species: o.species, alive: o.alive, gx: o.gx, gy: o.gy,
       vx: o.vx, vy: o.vy, swimming: o.swimming, meat: o.meat, seenTick: now,
+      isMale: o.isMale, infant: o.infant, grown: o.grown, mateUid: o.mateUid, inHeat: o.inHeat,
       // in sight since now, unless it was in sight at its last turn too
       sightedTick: before && before.seenTick === m.lastTurn ? before.sightedTick : now });
+    if (o.species === a.species && (selfInfant || o.infant)) m.familiar.add(o.uid);
   }
   const longest = ticks(Math.max(deerAlarmS, wolfForgetPreyS));
-  for (const [uid, k] of m.known) if (now - k.seenTick > longest) m.known.delete(uid);
+  for (const [uid, k] of m.known) {
+    if (now - k.seenTick > longest && !isKin(a, uid)) m.known.delete(uid);
+  }
+}
+
+function isKin(a, uid) {
+  return uid === a.mateUid || a.parentUids.includes(uid) || a.youngUids.includes(uid);
 }
 
 // Where a remembered creature should be by now, had it carried on as last seen (for at
@@ -258,10 +288,11 @@ function decideDeer(a, m, now) {
   }
   if (!threats) {
     m.flee = null;
+    const romance = a.food > romanceAbove && social(a, m, now, true);
+    if (romance) return romance;
     const grazing = graze(a, m, now);
     if (grazing) { m.mode = "graze"; return grazing; }
-    m.mode = "calm";
-    return calm(a, m, now);
+    return settle(a, m, now);
   }
 
   m.mode = "flee";
@@ -288,7 +319,7 @@ function decideDeer(a, m, now) {
 // sight around, or as far as it sees when nothing there is worth it. An intent, or null if not
 // grazing or no grass worth it is in sight.
 function graze(a, m, now) {
-  if (a.pose === "swim") return null;
+  if (a.pose === "swim" || !sim.can(a, "eat")) return null;
   if (m.grazing && a.food >= deerFullAt) m.grazing = false;
   if (!m.grazing && a.food < deerGrazeBelow) m.grazing = true;
   if (!m.grazing) return null;
@@ -316,15 +347,16 @@ function graze(a, m, now) {
   return move(a, m, m.grazeTo[0] + 0.5 - a.gx, m.grazeTo[1] + 0.5 - a.gy, "walk", now);
 }
 
-// WOLVES eat first: while not full, the nearest carcass with meat it saw within
-// wolfForgetPreyS. Otherwise they hunt while hungry. Of the deer it knows, a wolf picks
+// WOLVES eat first: while not full (and old enough to eat), the nearest carcass with meat
+// it saw within wolfForgetPreyS. Otherwise they hunt while hungry, once weaned (pups stay
+// with their family and eat what it kills). Of the deer it knows, a wolf picks
 // the nearest, or among those about as near, the one most straight ahead; then keeps to
 // it for wolfCommitS (unless a deer in sight is much nearer) and after that changes only
 // for one clearly nearer. In sight it heads straight for its prey; out of sight, for
 // where it should be by now, then on the way it went, searching. A deer searched for and
 // not found is lost until seen again.
 function decideWolf(a, m, now) {
-  if (a.food < wolfFullAt) {
+  if (a.food < wolfFullAt && sim.can(a, "eat")) {
     let carcass = null, bestD2 = Infinity;
     for (const k of m.known.values()) {
       if (k.species !== "deer" || k.alive || !(k.meat > 0) || now - k.seenTick > ticks(wolfForgetPreyS)) continue;
@@ -337,9 +369,11 @@ function decideWolf(a, m, now) {
       return move(a, m, carcass.gx - a.gx, carcass.gy - a.gy, "trot", now);
     }
   }
-  if (a.food >= wolfHuntBelow) {
-    m.target = null; m.searching = false; m.mode = "calm";
-    return calm(a, m, now);
+  const romance = a.food > romanceAbove && social(a, m, now, true);
+  if (romance) { m.target = null; m.searching = false; m.watch = null; return romance; }
+  if (a.food >= wolfHuntBelow || sim.isInfant(a)) {
+    m.target = null; m.searching = false; m.watch = null;
+    return settle(a, m, now);
   }
 
   let target = m.target !== null ? m.known.get(m.target) : undefined;
@@ -380,7 +414,7 @@ function decideWolf(a, m, now) {
     } else if (choice.d2 < wolfSwitchRatio * d2) choose(choice);
   }
   target = m.target !== null ? m.known.get(m.target) : undefined;
-  if (!target) { m.mode = "calm"; m.searching = false; return calm(a, m, now); }
+  if (!target) { m.searching = false; return settle(a, m, now); }
 
   m.plan = null;
   if (target.swimming) {
@@ -447,6 +481,99 @@ function landingAhead(k) {
   return null;
 }
 
+// With nothing more pressing: mates and family, else wander.
+function settle(a, m, now) {
+  const s = social(a, m, now);
+  if (s) return s;
+  m.mode = "calm";
+  return calm(a, m, now);
+}
+
+// MATES AND FAMILY: an intent, or null for nothing to do; with romanceOnly, only for
+// courting and mating.
+//   The young (not grown) keep within followParentTiles of a parent (the mother first).
+//   A female keeps within motherStayTiles of her nearest infant.
+//   A paired critter mates with its partner while she is in heat (she while she is); a
+//     paired male otherwise keeps within pairStayTiles of her, and she within twice that
+//     of him (so one trotting off at the other's speed can't leave the other behind).
+//   (Going to them, it trots while 2 tiles beyond where it would stop, else walks.)
+//   An unpaired grown critter courts the nearest unpaired grown critter of its species
+//     and the other sex, if not kin or familiar (WESTERMARCK): goes to it and stands
+//     ready to mate within mateCloseTiles. It gives up on one that hasn't mated with it in
+//     courtGiveUpS.
+// Kin out of sight are looked for where last seen; not there, they are lost until seen
+// again.
+function social(a, m, now, romanceOnly = false) {
+  const live = uid => {
+    const k = m.known.get(uid);
+    return k && k.alive && !k.lost ? k : null;
+  };
+  const d2Of = k => (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2;
+  // the intent to go to k (uid) until within `within` (in sight), or null when there
+  const goTo = (uid, k, within) => {
+    const d2 = d2Of(k);
+    if (k.seenTick === now) { if (d2 <= within * within) return null; }
+    else if (d2 <= kinLostTiles * kinLostTiles) { k.lost = true; return null; }
+    return move(a, m, k.gx - a.gx, k.gy - a.gy, d2 > within * within + 4 ? "trot" : "walk", now);
+  };
+  const mateWith = (uid, k) => {
+    const go = goTo(uid, k, mateCloseTiles);
+    if (go) return go;
+    return k.lost ? null : { gait: "mate", with: uid };
+  };
+
+  if (!sim.isGrown(a)) {
+    m.court = null;
+    if (romanceOnly) return null;
+    const uid = a.parentUids.find(live);
+    if (uid === undefined) return null;
+    m.mode = "family";
+    return goTo(uid, live(uid), followParentTiles);
+  }
+
+  if (!a.isMale && !romanceOnly) {
+    let infant = null, infantD2 = Infinity;
+    for (const uid of a.youngUids) {
+      const k = live(uid);
+      if (k && k.infant && d2Of(k) < infantD2) { infant = uid; infantD2 = d2Of(k); }
+    }
+    if (infant !== null) {
+      m.mode = "family";
+      const go = goTo(infant, live(infant), motherStayTiles);
+      if (go) return go;
+    }
+  }
+
+  if (a.mateUid !== null) {
+    m.court = null;
+    const p = live(a.mateUid);
+    if (!p) return null;
+    const inHeat = a.isMale ? p.inHeat : sim.inHeat(a);
+    if (inHeat && p.seenTick === now) { m.mode = "mate"; return mateWith(a.mateUid, p); }
+    if (romanceOnly) return null;
+    m.mode = "family";
+    return goTo(a.mateUid, p, a.isMale ? pairStayTiles : 2 * pairStayTiles);
+  }
+
+  let best = null, bestD2 = Infinity;
+  for (const [uid, k] of m.known) {
+    if (k.species !== a.species || !k.alive || k.lost || k.isMale === a.isMale || !k.grown) continue;
+    if (k.mateUid !== null || now - k.seenTick > ticks(wolfForgetPreyS)) continue;
+    if (m.familiar.has(uid) || isKin(a, uid) || (m.refused.get(uid) ?? -Infinity) > now) continue;
+    const d2 = d2Of(k);
+    if (d2 < bestD2) { best = uid; bestD2 = d2; }
+  }
+  if (best === null) { m.court = null; return null; }
+  if (!m.court || m.court.uid !== best) m.court = { uid: best, since: now };
+  else if (now - m.court.since > ticks(courtGiveUpS)) {
+    m.refused.set(best, now + ticks(courtRetryS));
+    m.court = null;
+    return null;
+  }
+  m.mode = "court";
+  return mateWith(best, m.known.get(best));
+}
+
 // A swimmer short of stamina (below sim.swimMinStamina) heads for the nearest land it
 // can climb onto, whatever else it would do.
 function toShore(a, m, now) {
@@ -461,8 +588,10 @@ function toShore(a, m, now) {
 }
 
 // CALM: wander for a random while (a random heading at a walk or trot, or a pause;
-// galloping is only for chasing and fleeing). A swimmer may head for land instead, the
-// more surely the farther away it is.
+// galloping is only for chasing and fleeing). An unpaired grown critter ROAMS instead,
+// to meet others: one heading at a trot for roamS / 2 to roamS (as young wolves disperse
+// to find mates). A swimmer may head for land instead, the more surely the farther away
+// it is.
 function calm(a, m, now) {
   const p = m.plan;
   const blocked = a.blockedTick > m.lastTurn;
@@ -483,7 +612,8 @@ function calm(a, m, now) {
       return move(a, m, m.plan.gx - a.gx, m.plan.gy - a.gy, "walk", now);
     }
   }
-  if (Math.random() < 0.1) {
+  const roam = sim.isGrown(a) && a.mateUid === null;
+  if (!roam && Math.random() < 0.1) {
     m.plan = { kind: "wander", until, intent: IDLE };
   } else {
     // the same intent all plan long, so the simulation works out its heading once
@@ -493,8 +623,9 @@ function calm(a, m, now) {
       const k = 1 / Math.max(Math.abs(dx), Math.abs(dy), 0.01); // about a tile ahead
       if (sim.canStepTo(a, a.gx + dx * k, a.gy + dy * k)) break;
     }
-    const gait = Math.random() < 0.5 ? "walk" : "trot";
-    m.plan = { kind: "wander", until, intent: { dx, dy, gait } };
+    const gait = roam || Math.random() < 0.5 ? "trot" : "walk";
+    m.plan = { kind: "wander", until: roam ? now + ticks(roamS * (0.5 + Math.random() / 2)) : until,
+      intent: { dx, dy, gait } };
   }
   return m.plan.intent;
 }
@@ -571,7 +702,7 @@ function stateOf(a) {
   const m = memories.get(a);
   if (!m) return null;
   return { mode: m.mode, target: m.target, searching: m.searching, flee: m.flee, detour: m.detour, watch: m.watch,
-    slot: m.slot, lastTurn: m.lastTurn,
+    slot: m.slot, lastTurn: m.lastTurn, court: m.court, familiar: [...m.familiar],
     avoid: m.avoid.map(t => t > sim.tickCount ? 1 : 0).join(""),
     known: [...m.known].map(([uid, k]) => ({ uid, ...k })) };
 }

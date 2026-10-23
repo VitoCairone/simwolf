@@ -37,7 +37,12 @@ const gridHeightN = 414;
 //   accelToGallopS         from standing to a full gallop, and back (see SPEED CHANGES)
 //   stunMinS, stunMaxS     how long a blocked move stuns a critter (see INTENTS)
 //   deathDurationSBySpecies   the death pose's length (animat.js fits its animation to it)
-//   lifeStageAgesS         ages a young critter can see, hear, walk, eat, run and mate
+//   lifeStageAgesS         ages a young critter can see, hear, walk, eat, run, is weaned
+//                          and can mate
+//   growthAgesS            ages at which a young critter weighs growthSharesBySpecies of
+//                          the way to adult weight (see BREEDING)
+//   breeding               gestation, how often a female can conceive, the oldest a
+//                          critter is fertile, and the mating act (see BREEDING)
 //   forcedMortalityMaxS, mortalityRatio   how long critters live (see FORCED MORTALITY)
 //   foodFullS, foodCapacityKg, eatKgPerS, deerMeatKg, grassMaxKg, grassRegrowKgPerS
 //                          food meters, eating and grass (see FOOD)
@@ -53,6 +58,8 @@ const realLifeStageAgesS = {
     walk:   { min: 14 * dayS, avg: 18 * dayS,  max: 21 * dayS },
     eat:    { min: 19 * dayS, avg: 25 * dayS,  max: 35 * dayS },
     run:    { min: 25 * dayS, avg: 28 * dayS,  max: 35 * dayS },
+    // weaned at 5-9 weeks, nursing on for a few more (San Diego Zoo Wildlife Alliance)
+    wean:   { min: 5 * 7 * dayS, avg: 8 * 7 * dayS, max: 10 * 7 * dayS },
     mate:   { min: 18 * monthS, avg: 24 * monthS,  max: 36 * monthS },
   },
   deer: {
@@ -61,8 +68,39 @@ const realLifeStageAgesS = {
     walk:   { min: 0.25 * hourS, avg: 0.5 * hourS, max: 1 * hourS},
     eat:    { min: 10 * dayS, avg: 20 * dayS, max: 30 * dayS },
     run:    { min: 1 * dayS, avg: 2 * dayS, max: 3 * dayS },
+    wean:   { min: 4 * monthS, avg: 5 * monthS, max: 8 * monthS }, // ~156 days (Add-my-Pet)
     mate:   { min: 16 * monthS, avg: 24 * monthS,  max: 36 * monthS },
   }
+};
+// Growth: the ages at which a young critter has grown growthSharesBySpecies (see BREEDING)
+// of the way from its birth weight to its adult weight. Wolves gain about linearly to
+// ~30 kg at 10-12 months, then slowly (Canadian Field-Naturalist 2003: 8-10 kg at 3
+// months); red deer: about 40% of a hind's weight at weaning, 50% at a year (estimates).
+const realGrowthAgesS = {
+  wolf: [0, 1 * monthS, 3 * monthS, 11 * monthS, 24 * monthS],
+  deer: [0, 5 * monthS, 12 * monthS, 24 * monthS, 48 * monthS],
+};
+// Breeding:
+//   Wolf: estrus once a year; gestation 60-65 days; litters (see BREEDING) average ~6
+//   (San Diego Zoo Wildlife Alliance), Yellowstone's largest 11 (NPS); females breed to
+//   about 10-11 years (Mech 1988), males a little longer (estimate). The copulatory tie
+//   lasts some 15-30 minutes.
+//   Red deer: one rut a year; gestation ~235 days; hinds' fecundity declines from about 9
+//   years (Rum Red Deer Project) and few calve past ~18, stags' earlier (estimates).
+//   Mating takes seconds.
+const realBreeding = {
+  wolf: {
+    gestationS: { min: 60 * dayS, avg: 63 * dayS, max: 65 * dayS },
+    intervalS: yearS,
+    maxFertileAgeS: { female: 11 * yearS, male: 12 * yearS },
+    mateActS: 20 * 60,
+  },
+  deer: {
+    gestationS: { min: 228 * dayS, avg: 235 * dayS, max: 242 * dayS },
+    intervalS: yearS,
+    maxFertileAgeS: { female: 18 * yearS, male: 15 * yearS },
+    mateActS: 10,
+  },
 };
 // The greatest ages recorded in captivity, where hunger, predators and disease (modelled
 // separately, or not at all) don't cut lives short. AnAge (genomics.senescence.info):
@@ -128,8 +166,10 @@ const REALISTIC = {
   accelToGallopS: { wolf: 2.5, deer: 1.5 },
   stunMinS: 0.1,
   stunMaxS: 0.5,
-  deathDurationSBySpecies: { deer: 2 / 3 },
+  deathDurationSBySpecies: { deer: 2 / 3, wolf: 1.1 },
   lifeStageAgesS: realLifeStageAgesS,
+  growthAgesS: realGrowthAgesS,
+  breeding: realBreeding,
   forcedMortalityMaxS: realForcedMortalityMaxS,
   mortalityRatio,
   foodFullS: realFoodFullS,
@@ -140,17 +180,18 @@ const REALISTIC = {
   grassRegrowKgPerS: realGrassRegrowKgPerS,
 };
 
-// GAMIFIED shrinks real times by one factor per area: lives so the wolf's greatest age
-// is 90 minutes, food so a wolf's full meter lasts 20 minutes, and exertion (draining
-// and refilling) 10 times as fast, and a deer's swimming twice that.
+// GAMIFIED shrinks real times by one factor per area: lives (growing up and breeding
+// too) so the wolf's greatest age is 90 minutes, food so a wolf's full meter lasts 20
+// minutes, and exertion (draining and refilling) 10 times as fast, and a deer's swimming
+// twice that. The mating act lasts a few seconds, long enough to see.
 const gameLifeScale = (90 * 60) / Math.min(...Object.values(realForcedMortalityMaxS));
 const gameFoodScale = (20 * 60) / realFoodFullS.wolf;
 const gameExertionSpeedup = 10;
 const scaledAges = (table, k) => Object.fromEntries(Object.entries(table).map(([sp, caps]) =>
   [sp, Object.fromEntries(Object.entries(caps).map(([cap, t]) =>
     [cap, { min: t.min * k, avg: t.avg * k, max: t.max * k }]))]));
-const scaledTimes = (table, k) => Object.fromEntries(Object.entries(table).map(([key, v]) =>
-  [key, typeof v === "object" ? scaledTimes(v, k) : v * k]));
+const scaledTimes = (table, k) => Array.isArray(table) ? table.map(v => v * k)
+  : Object.fromEntries(Object.entries(table).map(([key, v]) => [key, typeof v === "object" ? scaledTimes(v, k) : v * k]));
 
 const GAMIFIED = {
   name: "gamified",
@@ -172,8 +213,14 @@ const GAMIFIED = {
   accelToGallopS: { wolf: 2.5, deer: 1.5 },
   stunMinS: 0.1,
   stunMaxS: 0.5,
-  deathDurationSBySpecies: { deer: 2 / 3 },
+  deathDurationSBySpecies: { deer: 2 / 3, wolf: 1.1 },
   lifeStageAgesS: scaledAges(realLifeStageAgesS, gameLifeScale),
+  growthAgesS: scaledTimes(realGrowthAgesS, gameLifeScale),
+  breeding: (() => {
+    const b = scaledTimes(realBreeding, gameLifeScale);
+    b.wolf.mateActS = b.deer.mateActS = 3;
+    return b;
+  })(),
   forcedMortalityMaxS: {
     wolf: realForcedMortalityMaxS.wolf * gameLifeScale,
     deer: realForcedMortalityMaxS.deer * gameLifeScale,
@@ -456,11 +503,14 @@ function isLandTile(i, j) {
 }
 
 // CRITTERS
-// Each is a plain object; critter 0 is the player's wolf. Directions are indices into
+// Each is a plain object. Directions are indices into
 // moveVecByDir, clockwise from grid E.
 const nWolves = 10;
 const wolves = Array.from({length: nWolves}, () => ({}));
-const pcWolf = wolves[0];
+// THE PLAYER'S WOLF: wolves[0] at first. It lives and dies like any wolf; dying, and then
+// as a corpse, it stays the player's until the next wolf is born: that newborn becomes the
+// player's wolf. Meanwhile the player's intents do nothing.
+let pcWolf = wolves[0];
 const nDeer = 50;
 const deer = Array.from({length: nDeer}, () => ({}));
 
@@ -468,7 +518,8 @@ const allCritters = [];
 const allCorpses = [];
 const allLandTiles = [];  // every dry, unblocked tile: where critters are placed
 
-const critterBoxRad = 0.4; // half the side of every critter's square collision box
+// Half the side of an adult's square collision box; each critter's is a.boxRad (see SIZES).
+const critterBoxRad = 0.4;
 
 const DIR_E  = 0;
 const DIR_SE = 1;
@@ -514,6 +565,7 @@ function setPose(a, pose) {
   a.poseTick = g_tick;
 }
 
+// A newborn starts fed and unpaired, placed at random until its birth places it.
 function initCritter(a, species, isNewborn = false) {
   if (!a) return alert("Falsy ref to initCritter");
   if (a.kind) return alert("Already-kind ref to initCritter");
@@ -525,12 +577,21 @@ function initCritter(a, species, isNewborn = false) {
   a.birthTime = g_now - (isNewborn ? 0 : randBetween(adultS, a.lifespanS / 2));
   a.uid = g_next_uid++;
   a.isMale = Math.random() < 0.5;
+  a.adultKg = bodyKgBySpecies[species][a.isMale ? "male" : "female"];
+  updateWeight(a);
+  a.mateUid = null;        // its partner (see BREEDING)
+  a.matingWith = null;     // ...or whoever it is mating with now
+  a.parentUids = [];       // the mother first, if known
+  a.youngUids = [];
+  a.pregnancy = null;      // { dueAt, fatherUid }
+  a.lastBredAt = -Infinity;
   a.speed = 0;
   a.targetSpeed = 0;
   a.wind = 1;
   a.stamina = 1;
-  a.food = species === "wolf" ? wolfStartFood : randBetween(0.5, 1);
+  a.food = isNewborn ? 1 : species === "wolf" ? wolfStartFood : randBetween(0.5, 1);
   randomlyPlaceCritter(a);
+  critterByUid.set(a.uid, a);
   return a;
 }
 
@@ -590,8 +651,8 @@ function deleteCritter(critter, toCorpse = false) {
   if (typeof critter !== "object") return alert("invalid arg type to deleteCritter");
   const idx = allCritters.indexOf(critter);
   if (idx === -1) return alert("arg object to deleteCritter not in list");
-  // TODO: allow removing the player's wolf (critter 0) once the game can end.
-  if (idx === 0) return alert("cannot delete critter 0 in this version");
+  endPairing(critter);
+  critterByUid.delete(critter.uid);
   if (toCorpse) {
     critter.kind = "corpse";
     setPose(critter, "dead");
@@ -602,40 +663,42 @@ function deleteCritter(critter, toCorpse = false) {
 
 // Old enough to do a capability (a key of lifeStageAgesS).
 function _can(a, capability) {
-  return g_now - a.birthTime >= canAtAgeBySpecies[a.species][capability];
+  return ageS(a) >= canAtAgeBySpecies[a.species][capability];
 }
 
 // FORCED MORTALITY: each critter dies of age at a.lifespanS old, a share of its
-// species' greatest age drawn about normally when it is made. A deer dies as if killed
-// (death animation, then a corpse); a wolf, with no death animation, is removed. The
-// player's wolf doesn't die of age.
+// species' greatest age drawn about normally when it is made. It dies as if killed: its
+// death animation, then a corpse.
 function drawLifespanS(species) {
   const m = SPEEDS.mortalityRatio[species];
-  // the sum of 12 uniform draws, less 6, is about normal with mean 0 and spread 1
+  return aboutNormal(m.mean, m.sd, m.min, m.max) * SPEEDS.forcedMortalityMaxS[species];
+}
+
+// A draw about normal with this mean and spread, within [min, max]: the sum of 12
+// uniform draws, less 6, is about normal with mean 0 and spread 1.
+function aboutNormal(mean, sd, min, max) {
   let z = -6;
   for (let k = 0; k < 12; k++) z += Math.random();
-  const ratio = Math.min(m.max, Math.max(m.min, m.mean + m.sd * z));
-  return ratio * SPEEDS.forcedMortalityMaxS[species];
+  return Math.min(max, Math.max(min, mean + sd * z));
 }
 
 function isPastLifespan(a) {
-  return a !== pcWolf && isLiveCritter(a) && g_now - a.birthTime >= a.lifespanS;
-}
-
-// Death from age or hunger.
-function dieNaturally(a) {
-  if (a.species === "deer") startCritterDeath(a);
-  else deleteCritter(a); // TODO: a wolf death animation and corpse
+  return isLiveCritter(a) && g_now - a.birthTime >= a.lifespanS;
 }
 
 function startCritterDeath(a) {
-  if (!a || a.species !== "deer") return alert("Invalid arg to startCritterDeath");
+  if (!a || a.kind !== "critter") return alert("Invalid arg to startCritterDeath");
   if (a.pose === "death") return;
+  endPairing(a);
+  a.deathTime = g_now;
   a.speed = a.targetSpeed = 0;
   a.nextGX = a.gx;
   a.nextGY = a.gy;
   a.eating = false;
-  a.carcass = newCarcass();
+  if (a.species === "deer") { // (wolves aren't eaten)
+    a.carcass = newCarcass(a);
+    a.carcassFullKg = carcassMeatKg(a);
+  }
   setPose(a, "death");
   enqDelayed("decontrol", deathDurationSBySpecies[a.species], { a: a });
 }
@@ -643,15 +706,18 @@ function startCritterDeath(a) {
 // FOOD
 // Every critter has a food meter, a.food, 0 (empty) to 1 (full). It empties over
 // SPEEDS.foodFullS and fills by eating: a deer the grass on its tile, a wolf a carcass in
-// reach. A full meter holds SPEEDS.foodCapacityKg (meat for a wolf, dry grass for a deer).
-// A critter whose meter empties dies of hunger, except the player's wolf.
+// reach, once old enough to "eat" (and an infant by nursing: see BREEDING). An adult's
+// full meter holds SPEEDS.foodCapacityKg (meat for a wolf, dry grass for a deer); a young
+// critter's, that by its share of adult weight. A critter whose meter empties dies of
+// hunger.
 //
 // GRASS: every grass tile holds grass, in kg: at most SPEEDS.grassMaxKg, starting at
 // grassStartShare of that, regrowing at SPEEDS.grassRegrowKgPerS. Its HEIGHT (bare,
 // short, medium, tall) is for the view; tiles whose height changes are logged
 // (grassChangesSince) so the view redraws only those.
 //
-// CARCASSES: a dead deer's meat is in 8 pieces. Wolves eat one piece until it is gone,
+// CARCASSES: a dead deer's meat (SPEEDS.deerMeatKg for an adult, by weight for a young
+// one; c.carcassFullKg) is in 8 pieces. Wolves eat one piece until it is gone,
 // then another picked at random from those left (c.eatingPiece is shared by every wolf
 // at the carcass). The view shows each piece as meat until all of it is eaten.
 const carcassPieces = [ // name, share of the meat
@@ -669,8 +735,9 @@ const grassGrowEveryTicks = 60;
 const grassStartShare = 1 / 10; // the least that is still drawn short
 const grassTallFrom = 2 / 3, grassMediumFrom = 1 / 3, grassShortFrom = 1 / 10; // shares of the most
 
-function newCarcass() {
-  return Object.fromEntries(carcassPieces.map(([name, share]) => [name, share * SPEEDS.deerMeatKg]));
+function newCarcass(a) {
+  const kg = SPEEDS.deerMeatKg * a.weightKg / a.adultKg;
+  return Object.fromEntries(carcassPieces.map(([name, share]) => [name, share * kg]));
 }
 
 function carcassMeatKg(c) {
@@ -760,8 +827,9 @@ function carcassInReach(a) {
 function updateFood(a) {
   if (!isLiveCritter(a)) return false;
   a.food = Math.max(0, a.food - tempo / SPEEDS.foodFullS[a.species]);
-  if (a.eating) {
-    const capacity = SPEEDS.foodCapacityKg[a.species];
+  if (isInfant(a)) nurse(a);
+  if (a.eating && _can(a, "eat")) {
+    const capacity = foodCapacityKg(a);
     let room = (1 - a.food) * capacity, bite = SPEEDS.eatKgPerS[a.species] * tempo;
     if (a.species === "deer") {
       const i = Math.floor(a.gx), j = Math.floor(a.gy), k = i * gridHeightN + j;
@@ -788,7 +856,240 @@ function updateFood(a) {
     }
     a.food = Math.min(1, a.food);
   }
-  return a.food <= 0 && a !== pcWolf;
+  return a.food <= 0;
+}
+
+// A full meter's kg, by weight.
+function foodCapacityKg(a) {
+  return SPEEDS.foodCapacityKg[a.species] * a.weightKg / a.adultKg;
+}
+
+// BREEDING
+// Every critter is male or female (a.isMale). Once old enough to "mate" (grown), two
+// unpaired critters of one species and opposite sexes pair by mating: both intend to
+// mate with each other ({ gait: "mate", with: uid }), stand still on land within
+// mateReachTiles, and then mate (pose "mate", facing each other, for the species'
+// mateActS; nothing else moves them meanwhile). A pair (a.mateUid) lasts until one dies,
+// and its two mate only with each other. On pairing, each adopts the other's young not
+// yet grown (a.parentUids, a.youngUids).
+// A female is in heat (inHeat) while fertile (grown and not past her maxFertileAgeS), not
+// pregnant, and a year (intervalS) after she last mated in heat (a.lastBredAt). Mated
+// while in heat, her heat is spent; by a fertile male (not past his maxFertileAgeS), she
+// conceives, and after gestationS, once on land, gives birth beside herself:
+// a litter (litterBySpecies) whose parents are her, the father and her partner, while
+// alive; young that don't fit within birthSearchTiles of her are stillborn.
+// GROWTH: a critter weighs a.weightKg, going from its species' birth weight to its sex's
+// adult weight (a.adultKg) by growthSharesBySpecies at SPEEDS.growthAgesS.
+// NURSING: an infant (not yet weaned) within nurseReachTiles of its mother, neither in
+// water, fills its meter from hers at the species' eating rate.
+// The mind (mind.js) decides who courts whom; the simulation only checks that a pairing
+// is possible (canPair).
+
+// Body weights, kg: at birth, and adult by sex. Wolf: 0.3-0.5 kg at birth (San Diego Zoo
+// Wildlife Alliance); adults average 41 (female) and 50 (male) in Yellowstone (NPS). Red
+// deer: estimates for European red deer.
+const bodyKgBySpecies = {
+  wolf: { birth: 0.4, female: 41, male: 50 },
+  deer: { birth: 8, female: 100, male: 160 },
+};
+// Shares of the way from birth to adult weight at SPEEDS.growthAgesS (see GAME SPEEDS).
+const growthSharesBySpecies = {
+  wolf: [0, 0.06, 0.19, 0.73, 1],
+  deer: [0, 0.35, 0.5, 0.75, 1],
+};
+// Litter size: base plus one for each of `tries` that comes up with `chance`. Wolf: mean
+// 5.5, 1 to 11; red deer: a calf, twins rarely (estimate).
+const litterBySpecies = {
+  wolf: { base: 1, tries: 10, chance: 0.45 },
+  deer: { base: 1, tries: 1, chance: 0.005 },
+};
+const mateReachTiles = 1.5;   // center to center
+const nurseReachTiles = 1.5;
+const birthSearchTiles = 3;
+const critterByUid = new Map(); // every critter in play (not corpses)
+
+// Its age, which stops at its death.
+function ageS(a) { return (a.deathTime ?? g_now) - a.birthTime; }
+function isGrown(a) { return _can(a, "mate"); }
+function isInfant(a) { return !_can(a, "wean"); }
+function isMating(a) { return a.pose === "mate"; }
+
+function isFertile(a) {
+  return isGrown(a) && ageS(a) <= SPEEDS.breeding[a.species].maxFertileAgeS[a.isMale ? "male" : "female"];
+}
+
+function inHeat(a) {
+  return !a.isMale && isFertile(a) && !a.pregnancy
+    && g_now - a.lastBredAt >= SPEEDS.breeding[a.species].intervalS;
+}
+
+// Whether a and b may mate: grown, of one species and opposite sexes, and both unpaired
+// or paired to each other.
+function canPair(a, b) {
+  return a !== b && isLiveCritter(a) && isLiveCritter(b) && a.species === b.species
+    && a.isMale !== b.isMale && isGrown(a) && isGrown(b)
+    && (a.mateUid === null && b.mateUid === null || a.mateUid === b.uid && b.mateUid === a.uid);
+}
+
+function growthShare(species, age) {
+  const ages = SPEEDS.growthAgesS[species], shares = growthSharesBySpecies[species];
+  if (age >= ages[ages.length - 1]) return 1;
+  let k = 1;
+  while (ages[k] <= age) k++;
+  return shares[k - 1] + (shares[k] - shares[k - 1]) * (age - ages[k - 1]) / (ages[k] - ages[k - 1]);
+}
+
+function updateWeight(a) {
+  const birthKg = bodyKgBySpecies[a.species].birth;
+  a.weightKg = birthKg + (a.adultKg - birthKg) * growthShare(a.species, Math.max(0, ageS(a)));
+  const stage = youngStage(a);
+  a.boxRad = stage && stage <= smallBoxStages ? critterBoxRad * youngScales[stage - 1] : critterBoxRad;
+}
+
+// SIZES: a critter's size is the cube root of its share of adult weight, in one of 5
+// classes: adult (0), or young stages 1 (smallest) to 4, sized youngScales of an adult.
+// Each stage starts halfway (in size) from the one below; the thresholds are cubed, so no
+// cube root is taken. The view draws each class from its own sprite set (animat.js, YOUNG
+// STAGES). The smallest smallBoxStages stages have collision boxes (a.boxRad) shrunk to
+// their size, so a litter or a calf hems its parents in less.
+const youngScales = [0.3, 0.45, 0.6, 0.8];
+const youngStageBelowShare = youngScales.map((s, k) => ((s + (youngScales[k + 1] ?? 1)) / 2) ** 3);
+const smallBoxStages = 2;
+
+// 1 (smallest) to 4, or 0 for adult size.
+function youngStage(a) {
+  const share = a.weightKg / a.adultKg;
+  for (let k = 0; k < youngStageBelowShare.length; k++) if (share < youngStageBelowShare[k]) return k + 1;
+  return 0;
+}
+
+function nurse(a) {
+  const mother = critterByUid.get(a.parentUids[0]);
+  if (!mother || !isLiveCritter(mother) || isInWater(a) || isInWater(mother)) return;
+  if ((mother.gx - a.gx) ** 2 + (mother.gy - a.gy) ** 2 > nurseReachTiles * nurseReachTiles) return;
+  const capacity = foodCapacityKg(a), motherCapacity = foodCapacityKg(mother);
+  const take = Math.min(SPEEDS.eatKgPerS[a.species] * tempo, (1 - a.food) * capacity, mother.food * motherCapacity);
+  if (!(take > 0)) return;
+  a.food = Math.min(1, a.food + take / capacity);
+  mother.food = Math.max(0, mother.food - take / motherCapacity);
+}
+
+// Starts every mating that both critters intend and that can happen now.
+function startMatings() {
+  for (const [a, intent] of intents) {
+    if (intent.gait !== "mate" || (a === pcWolf && playerIntent)) continue;
+    const b = critterByUid.get(intent.with);
+    if (!b || a.uid > b.uid) continue; // each pair once
+    const theirs = b === pcWolf && playerIntent ? null : intents.get(b);
+    if (!theirs || theirs.gait !== "mate" || theirs.with !== a.uid) continue;
+    if (!canPair(a, b) || isMating(a) || isMating(b)) continue;
+    if (a.speed > 0 || b.speed > 0 || a.stunnedUntil > g_tick || b.stunnedUntil > g_tick) continue;
+    if (isInWater(a) || isInWater(b)) continue;
+    if ((a.gx - b.gx) ** 2 + (a.gy - b.gy) ** 2 > mateReachTiles * mateReachTiles) continue;
+    for (const [x, y] of [[a, b], [b, a]]) {
+      x.eating = false;
+      x.matingWith = y.uid;
+      x.nextGX = x.gx;
+      x.nextGY = x.gy;
+      setPose(x, "mate");
+      x.currentDirection = getDir(y.gx - x.gx, y.gy - x.gy, x.currentDirection);
+    }
+    enqDelayed("mated", SPEEDS.breeding[a.species].mateActS, { a, b });
+  }
+}
+
+// The end of a mating act: if both lived through it, they are a pair, and the female may
+// conceive.
+function finishMating(a, b) {
+  const bothLive = isMating(a) && isMating(b) && a.matingWith === b.uid && b.matingWith === a.uid;
+  for (const x of [a, b]) {
+    if (x.matingWith !== (x === a ? b : a).uid) continue;
+    x.matingWith = null;
+    intents.delete(x); // done: it waits for its next decision
+    if (isMating(x)) setPose(x, "idle");
+  }
+  if (!bothLive) return;
+  if (a.mateUid === null) pair(a, b);
+  const [female, male] = a.isMale ? [b, a] : [a, b];
+  if (!inHeat(female)) return;
+  female.lastBredAt = g_now; // her heat is spent, conceiving or not
+  if (isFertile(male)) conceive(female, male);
+}
+
+function pair(a, b) {
+  a.mateUid = b.uid;
+  b.mateUid = a.uid;
+  for (const [x, y] of [[a, b], [b, a]]) {
+    for (const uid of x.youngUids) {
+      const c = critterByUid.get(uid);
+      if (!c || isGrown(c) || c.parentUids.includes(y.uid)) continue;
+      c.parentUids.push(y.uid);
+      y.youngUids.push(uid);
+    }
+  }
+}
+
+function conceive(female, male) {
+  const g = SPEEDS.breeding[female.species].gestationS;
+  const dueIn = aboutNormal(g.avg, (g.max - g.min) / 4, g.min, g.max);
+  female.pregnancy = { dueAt: g_now + dueIn, fatherUid: male.uid };
+}
+
+// On a death: the partner is free to pair again, and any pregnancy ends.
+function endPairing(a) {
+  const p = a.mateUid !== null ? critterByUid.get(a.mateUid) : null;
+  if (p && p.mateUid === a.uid) p.mateUid = null;
+  a.mateUid = null;
+  a.pregnancy = null;
+}
+
+function litterSize(species) {
+  const l = litterBySpecies[species];
+  let n = l.base;
+  for (let k = 0; k < l.tries; k++) if (Math.random() < l.chance) n++;
+  return n;
+}
+
+// Offsets of whole tiles around a mother, nearest first: young placed at these are at
+// least a tile apart, so never overlap each other.
+const birthOffsets = [];
+for (let di = -birthSearchTiles; di <= birthSearchTiles; di++)
+  for (let dj = -birthSearchTiles; dj <= birthSearchTiles; dj++)
+    if (di || dj) birthOffsets.push([di, dj]);
+birthOffsets.sort((p, q) => (p[0] * p[0] + p[1] * p[1]) - (q[0] * q[0] + q[1] * q[1]));
+
+// Up to n places for newborns around female f: dry land she could walk straight to,
+// clear of every critter and corpse.
+function birthSpots(f, n) {
+  const others = allCritters.concat(allCorpses), spots = [];
+  for (const [di, dj] of birthOffsets) {
+    if (spots.length >= n) break;
+    const x = f.gx + di, y = f.gy + dj;
+    if (isWaterAt(x, y) || !canStepTo(f, x, y)) continue;
+    // (as if the newborn were adult-sized)
+    if (others.some(c => Math.abs(c.gx - x) < critterBoxRad + c.boxRad && Math.abs(c.gy - y) < critterBoxRad + c.boxRad)) continue;
+    spots.push([x, y]);
+  }
+  return spots;
+}
+
+function giveBirth(f) {
+  const { fatherUid } = f.pregnancy;
+  f.pregnancy = null;
+  const parents = [f.uid];
+  for (const uid of [fatherUid, f.mateUid]) {
+    const p = critterByUid.get(uid);
+    if (p && isLiveCritter(p) && !parents.includes(uid)) parents.push(uid);
+  }
+  for (const [x, y] of birthSpots(f, litterSize(f.species))) {
+    const c = initCritter({}, f.species, true);
+    c.gx = c.nextGX = x;
+    c.gy = c.nextGY = y;
+    c.parentUids = parents.slice();
+    for (const uid of parents) critterByUid.get(uid).youngUids.push(c.uid);
+    allCritters.push(c);
+    if (c.species === "wolf" && !isLiveCritter(pcWolf)) pcWolf = c; // the player's new wolf
+  }
 }
 
 // INTENTS
@@ -799,6 +1100,7 @@ function updateFood(a) {
 //   null                   carry on as it is
 //   { gait: "idle" }       stand still (in water: swim on; see SWIMMING)
 //   { gait: "eat" }        stand still and eat what is there (see FOOD)
+//   { gait: "mate", with } stand still, ready to mate with critter uid `with` (see BREEDING)
 //   { dx, dy, gait }       move along grid vector (dx, dy), any length, at walk, trot or
 //                          gallop, or the best gait wind and stamina allow
 //   { dir, gait }          the same along one of the 8 directions
@@ -818,7 +1120,7 @@ const facingKeepCos = 0.866;     // cos 30 degrees
 
 // The intent with its heading (hx, hy) at unit length, reusing prev's for the same vector.
 function prepareIntent(intent, prev) {
-  if (!intent || intent.gait === "idle" || intent.gait === "eat") return intent || null;
+  if (!intent || intent.gait === "idle" || intent.gait === "eat" || intent.gait === "mate") return intent || null;
   if (intent.dir !== undefined) {
     const [hx, hy] = moveVecByDir[intent.dir];
     return { dir: intent.dir, gait: intent.gait, hx, hy };
@@ -846,9 +1148,9 @@ function playerHasControl() {
 }
 
 function applyIntent(a, intent) {
-  if (a.stunnedUntil > g_tick) return;
+  if (a.stunnedUntil > g_tick || isMating(a)) return;
   a.eating = intent.gait === "eat";
-  if (intent.gait === "idle" || intent.gait === "eat") setCritterIdle(a);
+  if (intent.gait === "idle" || intent.gait === "eat" || intent.gait === "mate") setCritterIdle(a);
   else setCritterHeading(a, intent.hx, intent.hy, intent.gait, intent.dir);
 }
 
@@ -858,7 +1160,9 @@ function applyIntents() {
     if (a === pcWolf && playerIntent) continue;
     applyIntent(a, intent);
   }
-  if (playerIntent) {
+  if (!isLiveCritter(pcWolf)) {
+    playerIntentApplied = false; // dead: the player's intents do nothing
+  } else if (playerIntent) {
     playerIntentApplied = true;
     applyIntent(pcWolf, playerIntent);
   } else if (playerIntentApplied) { // the player let go: stop
@@ -902,8 +1206,9 @@ function facingFor(a, hx, hy) {
 // Move along unit heading (hx, hy) at newPose, or the best gait the critter can manage;
 // face `facing` if given, else the heading.
 function setCritterHeading(a, hx, hy, newPose = "walk", facing = undefined) {
-  if (!isLiveCritter(a)) return;
+  if (!isLiveCritter(a) || isMating(a)) return;
   if (a.stunnedUntil > g_tick) return;
+  if (!_can(a, "walk")) return; // a newborn that can't walk yet stays put
   const same = a.hx === hx && a.hy === hy && (facing === undefined || facing === a.currentDirection);
   if (newPose === a.pose && same) return;
 
@@ -931,7 +1236,7 @@ function setCritterHeading(a, hx, hy, newPose = "walk", facing = undefined) {
 }
 
 function setCritterIdle(a) {
-  if (a.pose === "death" || a.pose === "dead") return;
+  if (a.pose === "death" || a.pose === "dead" || isMating(a)) return;
   a.landPose = "idle";
   a.swimBurst = false;
   if (isInWater(a)) { // nothing stands still in water: it swims on the way it faces
@@ -956,7 +1261,7 @@ function changeSpeed(a) {
     const step = accelBySpecies[a.species];
     a.speed = a.speed < target ? Math.min(target, a.speed + step) : Math.max(target, a.speed - step);
   }
-  if (a.speed === 0 && target === 0 && a.pose !== "idle" && a.pose !== "swim" && isLiveCritter(a)) {
+  if (a.speed === 0 && target === 0 && a.pose !== "idle" && a.pose !== "swim" && !isMating(a) && isLiveCritter(a)) {
     a.nextGX = a.gx;
     a.nextGY = a.gy;
     setPose(a, "idle");
@@ -1028,14 +1333,14 @@ function applyExertion(a) {
 function isInWater(a) {
   const s = a.waterState;
   if (s && s.gx === a.gx && s.gy === a.gy) return s.allWater;
-  const allWater = isWaterAt(a.gx, a.gy);
+  const allWater = isWaterAt(a.gx, a.gy, a.boxRad);
   a.waterState = { gx: a.gx, gy: a.gy, allWater };
   return allWater;
 }
 
-// Whether a critter at (gx, gy) would be in water.
-function isWaterAt(gx, gy) {
-  return getOccupiedTiles(gx, gy).every(tile => getTerrainAt(...tile.split("_").map(Number)) === "water");
+// Whether a critter at (gx, gy), with a box boxRad, would be in water.
+function isWaterAt(gx, gy, boxRad = critterBoxRad) {
+  return getOccupiedTiles(gx, gy, boxRad).every(tile => getTerrainAt(...tile.split("_").map(Number)) === "water");
 }
 
 function mayEnterWater(a) {
@@ -1084,7 +1389,7 @@ function stepTileFacts() {
   return stepTileCache;
 }
 function canStepTo(a, gx, gy) {
-  const facts = stepTileFacts();
+  const facts = stepTileFacts(), r = a.boxRad;
   const keepDry = a.pose !== "swim" && !mayEnterWater(a);
   const blocked = (i, j) => {
     const key = i * gridHeightN + j;
@@ -1103,21 +1408,21 @@ function canStepTo(a, gx, gy) {
   let h = height(a.gx, a.gy);
   for (let s = 1; s <= n; s++) {
     const x = a.gx + (gx - a.gx) * s / n, y = a.gy + (gy - a.gy) * s / n;
-    if (x < critterBoxRad || y < critterBoxRad
-      || x >= gridWidthN - critterBoxRad || y >= gridHeightN - critterBoxRad) return false;
-    const i0 = Math.floor(x - critterBoxRad), i1 = Math.floor(x + critterBoxRad);
-    const j0 = Math.floor(y - critterBoxRad), j1 = Math.floor(y + critterBoxRad);
+    if (x < r || y < r || x >= gridWidthN - r || y >= gridHeightN - r) return false;
+    const i0 = Math.floor(x - r), i1 = Math.floor(x + r);
+    const j0 = Math.floor(y - r), j1 = Math.floor(y + r);
     for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (blocked(i, j)) return false;
     const hNext = height(x, y);
     if (Math.abs(hNext - h) > maxStepLevels) return false;
-    if (keepDry && isWaterAt(x, y)) return false;
+    if (keepDry && isWaterAt(x, y, r)) return false;
     h = hNext;
   }
   return true;
 }
 
 // THE TICK'S WORLD UPDATE: food and age; then every critter's reserves, speed and next
-// position; then all moves at once (moveAllTogether), deaths, and grass growth.
+// position; then all moves at once (moveAllTogether), deaths, births, and (every second)
+// growth of grass and of critters.
 function updateAllCritters() {
   const pastLifespan = allCritters.filter(isPastLifespan);
   const starved = [];
@@ -1136,13 +1441,13 @@ function updateAllCritters() {
 
     const nextGX = a.gx + a.hx * a.speed;
     const nextGY = a.gy + a.hy * a.speed;
-    if (nextGX >= critterBoxRad && nextGX < (gridWidthN - critterBoxRad)
-      && nextGY >= critterBoxRad && nextGY < (gridHeightN - critterBoxRad)) {
+    const r = a.boxRad;
+    if (nextGX >= r && nextGX < gridWidthN - r && nextGY >= r && nextGY < gridHeightN - r) {
       if (Math.abs(heightAt(nextGX, nextGY) - heightAt(a.gx, a.gy)) > maxStepLevels) {
         stun(a); // a cliff
         return;
       }
-      if (a.pose !== "swim" && !mayEnterWater(a) && isWaterAt(nextGX, nextGY)) {
+      if (a.pose !== "swim" && !mayEnterWater(a) && isWaterAt(nextGX, nextGY, r)) {
         stun(a); // too tired to go into the water
         return;
       }
@@ -1154,9 +1459,14 @@ function updateAllCritters() {
   });
 
   moveAllTogether(allCritters, allCorpses);
-  pastLifespan.forEach(dieNaturally);
-  starved.forEach(a => { if (isLiveCritter(a) && allCritters.includes(a)) dieNaturally(a); });
-  if (g_tick % grassGrowEveryTicks === 0) growGrass(grassGrowEveryTicks * tempo);
+  pastLifespan.forEach(a => startCritterDeath(a));
+  starved.forEach(a => { if (isLiveCritter(a) && allCritters.includes(a)) startCritterDeath(a); });
+  allCritters.filter(a => a.pregnancy && g_now >= a.pregnancy.dueAt && isLiveCritter(a)
+    && !isMating(a) && !isInWater(a)).forEach(giveBirth);
+  if (g_tick % grassGrowEveryTicks === 0) {
+    growGrass(grassGrowEveryTicks * tempo);
+    allCritters.forEach(updateWeight);
+  }
 }
 
 // COLLISIONS: every mover's next position is checked against blocked tiles and every
@@ -1217,11 +1527,11 @@ function getOccupiedTiles(gx, gy, boxRad = critterBoxRad) {
   return tiles;
 }
 
-// Must use the same box as getOccupiedTiles, or near pairs in different tiles are
+// Must use the same boxes as getOccupiedTiles, or near pairs in different tiles are
 // never tested.
-// TODO: a box size per individual, ideally rectangular.
+// TODO: rectangular boxes, fitting each species' shape.
 function doNextBoundingBoxesOverlap(a, b) {
-  const span = 2 * critterBoxRad;
+  const span = a.boxRad + b.boxRad;
   return Math.abs(a.nextGX - b.nextGX) < span && Math.abs(a.nextGY - b.nextGY) < span;
 }
 
@@ -1229,7 +1539,7 @@ function doNextBoundingBoxesOverlap(a, b) {
 // overlap and are moving apart (a wolf on the deer it just killed must be able to leave).
 function doNextMovesCollide(a, b) {
   if (!doNextBoundingBoxesOverlap(a, b)) return false;
-  const span = 2 * critterBoxRad;
+  const span = a.boxRad + b.boxRad;
   const overlapNow = Math.abs(a.gx - b.gx) < span && Math.abs(a.gy - b.gy) < span;
   if (!overlapNow) return true;
   const nowL2 = (a.gx - b.gx) ** 2 + (a.gy - b.gy) ** 2;
@@ -1249,7 +1559,7 @@ function findCollidingPairs(creatures) {
 
   for (let i = 0; i < creatures.length; i++) {
     const creature = creatures[i];
-    const tiles = getOccupiedTiles(creature.nextGX, creature.nextGY);
+    const tiles = getOccupiedTiles(creature.nextGX, creature.nextGY, creature.boxRad);
     let allWater = true;
 
     for (const tile of tiles) {
@@ -1289,8 +1599,8 @@ function findCollidingPairs(creatures) {
   return collisions;
 }
 
-// DELAYED REACTIONS: things that happen a set game time later. The only one so far is
-// "decontrol": a dying critter becomes a corpse.
+// DELAYED REACTIONS: things that happen a set game time later: "decontrol", a dying
+// critter becomes a corpse; "mated", the end of a mating act.
 // Kept sorted by end time, latest first, so the next one due pops off the end.
 // TODO: a priority queue, if many reactions are ever pending at once.
 const delayedRxnArr = []
@@ -1315,6 +1625,9 @@ function runRxn(rxn) {
         return;
       }
       deleteCritter(a, true);
+    break;
+    case 'mated':
+      finishMating(a, rxn.opts.b);
     break;
     default:
       console.log("Err: Unknown reaction to runRxn");
@@ -1357,6 +1670,7 @@ function tick() {
   }
   tickListeners.forEach(fn => fn());
   applyIntents();
+  startMatings();
   deqCurrentDelayed();
   updateAllCritters();
   g_tick++;
@@ -1438,6 +1752,19 @@ function init() {
   initGrass();
   wolves.forEach(wolf => { allCritters.push(initCritter(wolf, "wolf")); });
   deer.forEach(aDeer => { allCritters.push(initCritter(aDeer, "deer")); });
+  // half of each species male, at random (but the player's wolf, either)
+  for (const list of [wolves.slice(1), deer]) {
+    const sexes = list.map((_, k) => k % 2 === 0);
+    for (let k = sexes.length - 1; k > 0; k--) {
+      const r = Math.floor(Math.random() * (k + 1));
+      [sexes[k], sexes[r]] = [sexes[r], sexes[k]];
+    }
+    list.forEach((a, k) => {
+      a.isMale = sexes[k];
+      a.adultKg = bodyKgBySpecies[a.species][a.isMale ? "male" : "female"];
+      updateWeight(a);
+    });
+  }
   forbidOverlapsOnStart();
 }
 
@@ -1453,8 +1780,10 @@ function start({ consoleOnly = false } = {}) {
 // THE INTERFACE
 // Views and controllers read critters' fields directly (gx, gy, pose, poseTick,
 // currentDirection (the facing), hx, hy (the heading), speed, targetSpeed, species, wind,
-// stamina, food, eating, carcass, uid, blockedTick, stunnedUntil) but change the world
-// only through these functions.
+// stamina, food, eating, carcass, carcassFullKg, uid, blockedTick, stunnedUntil, isMale,
+// birthTime, deathTime, weightKg, adultKg, boxRad, mateUid, matingWith, parentUids, youngUids,
+// pregnancy)
+// but change the world only through these functions.
 return {
   // lifecycle and time
   init, start, pause, unpause, togglePause, stepOnce,
@@ -1468,13 +1797,17 @@ return {
   gridWidthN, gridHeightN, getTerrainAt, obstacleAt,
   tileCorners, heightAt, get maxLevel() { return maxLevel; },
   isBlockedTile, isLandTile, isWaterAt, canStepTo, blocksSight, isLiveCritter,
-  allCritters, allCorpses, pcWolf, deathDurationSBySpecies,
+  allCritters, allCorpses, deathDurationSBySpecies,
+  get pcWolf() { return pcWolf; },    // the player's wolf, or its corpse (see THE PLAYER'S WOLF)
   get speeds() { return SPEEDS.name; },
   get swimMinStamina() { return SPEEDS.swimMinStaminaFrac; },
   // food
   grassFoodAt, grassHeightAt, grassChangesSince, carcassPieces, carcassMeatKg, eatReachTiles,
   get grassMaxKg() { return SPEEDS.grassMaxKg; },
   get deerMeatKg() { return SPEEDS.deerMeatKg; },
+  // ages and breeding
+  can: _can, isGrown, isInfant, isFertile, inHeat, mateReachTiles, youngStage, youngScales,
+  mateActSBySpecies: Object.fromEntries(Object.entries(SPEEDS.breeding).map(([sp, b]) => [sp, b.mateActS])),
 
   // intents
   setIntent, setPlayerIntent, playerHasControl,
@@ -1487,6 +1820,8 @@ return {
     forbidOverlapsOnStart, critterBoxRad, travelSpeedBySpeciesAndPose,
     REALISTIC, GAMIFIED, SPEEDS, drawLifespanS, startCritterDeath, growGrass, setGrassKg, stun,
     windRefillHalfLifeSByPose, staminaFullRefillSByPose, maxStepLevels,
+    critterByUid, bodyKgBySpecies, growthShare, updateWeight, litterSize, birthSpots, giveBirth,
+    conceive, pair, foodCapacityKg, canPair,
     get loopHandle() { return loopHandle; },
   },
 };

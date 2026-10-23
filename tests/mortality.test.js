@@ -7,7 +7,7 @@
 //    mean share of the maximum, within bounds; the first critters start as adults
 //    younger than their lifespan
 //  - a critter past its lifespan dies: a deer through its death animation to a corpse, a
-//    wolf is gone; the player's wolf doesn't die of age
+//    wolf likewise, the player's too
 // Runs sim.js in Node (no browser), as a second copy with the choice flipped to REALISTIC.
 
 const path = require("path");
@@ -87,14 +87,14 @@ async function main(browser, r) {
     const wolf = sim.allCritters.find(a => a.species === "wolf" && a !== sim.pcWolf);
     for (const a of [deer, wolf, sim.pcWolf]) a.birthTime = sim.now - a.lifespanS - 1;
     sim.internals.tick();
-    const deerPose = deer.pose, wolfGone = !sim.allCritters.includes(wolf), pcAlive = sim.allCritters.includes(sim.pcWolf);
-    for (let n = 0; n < 60; n++) sim.internals.tick();
-    return { deerPose, deerCorpse: sim.allCorpses.includes(deer) && deer.pose === "dead", wolfGone, pcAlive,
-      wolfCorpse: sim.allCorpses.includes(wolf) };
+    const pc = sim.pcWolf, poses = [deer, wolf, pc].map(a => a.pose);
+    for (let n = 0; n < 70; n++) sim.internals.tick();
+    const corpse = a => sim.allCorpses.includes(a) && !sim.allCritters.includes(a) && a.pose === "dead";
+    return { poses, corpses: [deer, wolf, pc].map(corpse), stillPlayers: sim.pcWolf === pc };
   })()`, g);
-  r.check(old.deerPose === "death" && old.deerCorpse, `a deer past its lifespan dies (${old.deerPose}), then is a corpse`);
-  r.check(old.wolfGone && !old.wolfCorpse, "a wolf past its lifespan is gone");
-  r.check(old.pcAlive, "the player's wolf doesn't die of age");
+  r.check(old.poses.every(p => p === "death") && old.corpses.every(c => c),
+    `a deer, a wolf and the player's wolf past their lifespans die (${old.poses.join(", ")}), then are corpses`);
+  r.check(old.stillPlayers, "the player's wolf, dead, is still the player's (until the next wolf is born)");
 
   // the other choice
   const real = loadSim(source.replace(/^const SPEEDS = GAMIFIED;$/m, "const SPEEDS = REALISTIC;"));

@@ -36,7 +36,7 @@ async function main(browser, r) {
     `every grass tile holds grass, at most ${grass.max} kg; no other ground does ` +
     `(${grass.tiles} grass tiles, ${grass.total.toFixed(0)} kg in all)`);
   r.check(grass.heights[2] === 0 && grass.heights[3] === 0 && grass.heights[1] > 0.9 * grass.tiles
-    && grass.total <= 0.1 * grass.max * grass.tiles + 1,
+    && grass.total <= 0.1 * grass.max * grass.tiles + 5, // (+ a few seconds' regrowth before the pause)
     `grass starts short: a tenth of the most on every tile (short ${grass.heights[1]}, bare ${grass.heights[0]} ` +
     `(grazed already), of ${grass.tiles}; ${grass.total.toFixed(0)} kg in all)`);
 
@@ -150,27 +150,25 @@ async function main(browser, r) {
   r.check(start.wolves.every(f => f < start.below && f > start.below - 0.05), // (less what they have used since)
     `every wolf starts just hungry enough to hunt and eat (meters ${[...new Set(start.wolves.map(f => f.toFixed(3)))].join(", ")}; hunts below ${start.below})`);
 
-  // 3. the meter empties over foodFullS; a critter starves at 0, the player's wolf doesn't
+  // 3. the meter empties over foodFullS; a critter starves at 0 (the player's wolf too: see breeding.test.js)
   const starve = await p.evaluate(() => {
     const S = sim.internals;
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     const w = sim.allCritters.find(c => c.species === "wolf" && c !== sim.pcWolf && sim.isLiveCritter(c));
-    const pc = sim.pcWolf;
     [d, w].forEach(c => { mind.ignore(c); c.food = 0.5; c.eating = false; });
     const t0 = sim.now, d0 = d.food;
     for (let n = 0; n < 60; n++) S.tick();
     const fell = (d0 - d.food) / (sim.now - t0), expect = 1 / S.SPEEDS.foodFullS.deer;
-    d.food = w.food = pc.food = 1e-6;
+    d.food = w.food = 1e-6;
     const wolvesBefore = sim.allCritters.filter(c => c.species === "wolf").length;
     for (let n = 0; n < 5; n++) S.tick();
     return { fell, expect, deerPose: d.pose, deerLive: sim.isLiveCritter(d),
-      wolfGone: !sim.allCritters.includes(w), wolvesBefore, pcLive: sim.isLiveCritter(pc), pcFood: pc.food };
+      wolfPose: w.pose, wolfLive: sim.isLiveCritter(w), wolvesBefore };
   });
   r.check(Math.abs(starve.fell / starve.expect - 1) < 0.01,
     `the meter empties from full over ${(1 / starve.expect / 60).toFixed(1)} game minutes (${grass.speeds})`);
-  r.check(!starve.deerLive && starve.deerPose === "death" && starve.wolfGone && starve.pcLive,
-    `at 0 a deer starves (to its death animation: ${starve.deerPose}), a wolf is gone (${starve.wolfGone}); ` +
-    `the player's wolf lives on (meter ${starve.pcFood})`);
+  r.check(!starve.deerLive && starve.deerPose === "death" && !starve.wolfLive && starve.wolfPose === "death",
+    `at 0 a deer or a wolf starves (to its death animation: ${starve.deerPose}, ${starve.wolfPose})`);
 
   // 4. the player's wolf eats a carcass, a piece at a time in a random order, by standing still next to it
   const tile = await moveToOpenLand(p, { radius: 3, clearOthers: true });
@@ -178,6 +176,7 @@ async function main(browser, r) {
     const S = sim.internals, w = sim.pcWolf;
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     d.gx = d.nextGX = w.gx + 1; d.gy = d.nextGY = w.gy; d.speed = 0; S.setCritterIdle(d);
+    d.weightKg = d.adultKg; // fully grown: a carcass of deerMeatKg
     S.startCritterDeath(d, w);
     const deathTicks = Math.ceil(sim.deathDurationSBySpecies.deer / sim.tempo) + 2;
     w.food = 1; // not hungry while it dies
@@ -224,6 +223,7 @@ async function main(browser, r) {
     // a full wolf eats no more: a second carcass
     const d2 = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     d2.gx = d2.nextGX = w.gx; d2.gy = d2.nextGY = w.gy + 1; d2.speed = 0; S.setCritterIdle(d2);
+    d2.weightKg = d2.adultKg;
     S.startCritterDeath(d2, w);
     for (let k = 0; k < deathTicks; k++) { w.food = 1; S.tick(); }
     const meatFull = sim.carcassMeatKg(d2);

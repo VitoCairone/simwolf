@@ -65,6 +65,20 @@ async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = 
   }, { who, radius, clearOthers });
 }
 
+// Makes every deer a grown stag (antlered: see ANTLERS in animat.js), for tests of the
+// stag's sprites: other deer are drawn without antlers, from other sheets.
+async function makeStags(page) {
+  return page.evaluate(() => sim.allCritters.forEach(c => {
+    if (c.species !== "deer") return;
+    c.isMale = true;
+    c.mateUid = null;
+    c.pregnancy = null;
+    c.lifespanS = 1e9;
+    c.birthTime = Math.min(c.birthTime, sim.now - sim.internals.SPEEDS.lifeStageAgesS.deer.mate.max);
+    sim.internals.updateWeight(c);
+  }));
+}
+
 function makeReporter(suiteName) {
   const r = { suiteName, passed: 0, failed: 0 };
   r.check = (cond, msg) => {
@@ -99,4 +113,4 @@ function ensureOutputDir(sub = "") {
   return dir;
 }
 
-module.exports = { ROOT, PAGE_URL, launchBrowser, openGame, moveToOpenLand, makeReporter, runStandalone, ensureOutputDir };
+module.exports = { ROOT, PAGE_URL, launchBrowser, openGame, moveToOpenLand, makeStags, makeReporter, runStandalone, ensureOutputDir };

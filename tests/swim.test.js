@@ -6,10 +6,11 @@
 // also wind; out of wind a sprint drops to swimming, out of stamina a swimmer can't move.
 
 const path = require("path");
-const { openGame, runStandalone, ensureOutputDir } = require("./helpers");
+const { openGame, makeStags, runStandalone, ensureOutputDir } = require("./helpers");
 
 async function main(browser, r) {
   const p = await openGame(browser, { viewport: { width: 1000, height: 750 } });
+  await makeStags(p); // (the stag's sheets)
 
   // Find a straight shoreline: land tiles to the west, open water to the east (grid E).
   const setup = await p.evaluate(() => {
@@ -133,7 +134,7 @@ async function main(browser, r) {
     return { inWater: sim.internals.isInWater(sim.pcWolf), pose: sim.pcWolf.pose, cls: el.className,
       sheet: getComputedStyle(el).backgroundImage };
   });
-  r.check(!back.inWater && back.pose === "gallop" && back.cls === "critter wolf" && back.sheet.includes("wolf-run-stand.png"),
+  r.check(!back.inWater && back.pose === "gallop" && back.cls === "critter wolf" && back.sheet.includes("wolf-land.png"),
     `climbing out resumes the requested land pose (${back.pose}) and the land sheet (class "${back.cls}")`);
 
   // 5. a deer swims too, with its own sheet and 40x48 frames, at its own speed

@@ -6,10 +6,11 @@
 // Saves a screenshot of deer standing, grazing and running to tests/output/deeranim/.
 
 const path = require("path");
-const { openGame, moveToOpenLand, runStandalone, ensureOutputDir } = require("./helpers");
+const { openGame, makeStags, moveToOpenLand, runStandalone, ensureOutputDir } = require("./helpers");
 
 async function main(browser, r) {
   const p = await openGame(browser, { viewport: { width: 900, height: 650 } });
+  await makeStags(p); // (the stag's sheets)
   await p.evaluate(() => sim.pause());
   await moveToOpenLand(p, { radius: 5, clearOthers: true });
   const res = await p.evaluate(() => {

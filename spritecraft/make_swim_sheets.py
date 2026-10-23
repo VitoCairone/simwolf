@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Generate the swimming sprite sheets from the run frames of the land sheets.
 
-    images/wolf-run-stand.png      -> images/wolf-swim.png   (8 frames x 7 facings, 64x64)
+    images/wolf-land.png           -> images/wolf-swim.png   (8 frames x 7 facings, 64x64)
     images/stag-walk-idle-run.png  -> images/stag-swim.png   (10 frames x 4 facings, 40x48)
+    images/hind-land.png           -> images/hind-swim.png   (the same without antlers, from the
+                                                              walk frames: see make_hind_sheets.py)
 
 Usage (from anywhere; needs Python 3 with Pillow and numpy):
 
@@ -55,7 +57,7 @@ RING_HALF_WIDTH_TILES = 0.3        # tilted ring: half-width across the body, in
 # What to build. ground = the frame's ground point (x, topToShadow of the land poses).
 SHEETS = {
     "wolf": dict(
-        src="wolf-run-stand.png", out="wolf-swim.png",
+        src="wolf-land.png", out="wolf-swim.png",
         rows=range(7), cols=range(8),            # run uses the walk frames, all 7 facings
         frame=(64, 64), ground=(32, 39), out_frame=(64, 64), cut=13,
         # rows 0-3 are the diagonal facings. 0 (up-right) / 2 (down-left) lie along grid
@@ -67,6 +69,16 @@ SHEETS = {
         src="stag-walk-idle-run.png", out="stag-swim.png",
         rows=range(4), cols=range(35, 45),       # run frames
         frame=(32, 41), ground=(16, 33), out_frame=(40, 48), cut=17,  # wider/taller for the ring
+        axis_by_row={},
+        sheet_class="deer-swim",
+    ),
+    "hind": dict(
+        src="hind-land.png", out="hind-swim.png",
+        # the walk frames: the run's lowered head would be under water, and a hind has no
+        # antlers above it
+        rows=range(4), cols=range(0, 10),
+        # lower: without antlers, more of the head, neck and back must show above water
+        frame=(32, 41), ground=(16, 33), out_frame=(40, 48), cut=12,
         axis_by_row={},
         sheet_class="deer-swim",
     ),
@@ -245,6 +257,8 @@ def main():
                     help="wolf waterline height above the ground point, px (default %(default)s)")
     ap.add_argument("--deer-cut", type=int, default=SHEETS["deer"]["cut"],
                     help="deer waterline height above the ground point, px (default %(default)s)")
+    ap.add_argument("--hind-cut", type=int, default=SHEETS["hind"]["cut"],
+                    help="hind waterline height above the ground point, px (default %(default)s)")
     ap.add_argument("--src-dir", type=Path, default=IMAGES, help="where the land sheets are")
     ap.add_argument("--out-dir", type=Path, default=IMAGES, help="where to write the swim sheets")
     ap.add_argument("--only", choices=list(SHEETS), help="build just one species' sheet")
@@ -254,7 +268,7 @@ def main():
     for species, spec in SHEETS.items():
         if args.only and species != args.only:
             continue
-        cut = args.wolf_cut if species == "wolf" else args.deer_cut
+        cut = {"wolf": args.wolf_cut, "deer": args.deer_cut, "hind": args.hind_cut}[species]
         out_path = args.out_dir / spec["out"]
         build(spec, cut, args.src_dir, out_path)
         need = spec["ground"][1]   # same as the land poses: frames keep the ground point

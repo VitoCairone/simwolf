@@ -92,7 +92,7 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
 .wolf {
   width: 64px;
   height: 64px;
-  background-image: url('./images/wolf-run-stand.png');
+  background-image: url('./images/wolf-land.png');
 }
 .wolf-swim {
   width: 64px;
@@ -113,6 +113,42 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   width: 48px;
   height: 48px;
   background-image: url('./images/stag-death.png');
+}
+/* Deer without antlers: hinds and stags too young to breed (see ANTLERS in animat.js;
+   made by spritecraft/make_hind_sheets.py). */
+.deer.hind { background-image: url('./images/hind-land.png'); }
+.deer-swim.hind { background-image: url('./images/hind-swim.png'); }
+.deer-death.hind { background-image: url('./images/hind-death.png'); }
+/* Young critters: the same sheets shrunk (deer: the antlerless ones), stage 1 the
+   smallest (see YOUNG STAGES in animat.js; made by spritecraft/make_young_sheets.py). */
+.wolf.stage1 { background-image: url('./images/young/wolf-land-stage1.png'); }
+.wolf.stage2 { background-image: url('./images/young/wolf-land-stage2.png'); }
+.wolf.stage3 { background-image: url('./images/young/wolf-land-stage3.png'); }
+.wolf.stage4 { background-image: url('./images/young/wolf-land-stage4.png'); }
+.wolf-swim.stage1 { background-image: url('./images/young/wolf-swim-stage1.png'); }
+.wolf-swim.stage2 { background-image: url('./images/young/wolf-swim-stage2.png'); }
+.wolf-swim.stage3 { background-image: url('./images/young/wolf-swim-stage3.png'); }
+.wolf-swim.stage4 { background-image: url('./images/young/wolf-swim-stage4.png'); }
+.deer.stage1 { background-image: url('./images/young/hind-land-stage1.png'); }
+.deer.stage2 { background-image: url('./images/young/hind-land-stage2.png'); }
+.deer.stage3 { background-image: url('./images/young/hind-land-stage3.png'); }
+.deer.stage4 { background-image: url('./images/young/hind-land-stage4.png'); }
+.deer-swim.stage1 { background-image: url('./images/young/hind-swim-stage1.png'); }
+.deer-swim.stage2 { background-image: url('./images/young/hind-swim-stage2.png'); }
+.deer-swim.stage3 { background-image: url('./images/young/hind-swim-stage3.png'); }
+.deer-swim.stage4 { background-image: url('./images/young/hind-swim-stage4.png'); }
+.deer-death.stage1 { background-image: url('./images/young/hind-death-stage1.png'); }
+.deer-death.stage2 { background-image: url('./images/young/hind-death-stage2.png'); }
+.deer-death.stage3 { background-image: url('./images/young/hind-death-stage3.png'); }
+.deer-death.stage4 { background-image: url('./images/young/hind-death-stage4.png'); }
+/* Between a mating pair (see HEARTS in animat.js). */
+.heart {
+  position: absolute;
+  width: 11px;
+  height: 10px;
+  background-image: url('./images/heart.png');
+  image-rendering: pixelated;
+  pointer-events: none;
 }
 /* Its background layers are set by animat.js (see CARCASSES there). */
 .deer-carcass {
@@ -179,7 +215,7 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   visibility: hidden;
 }
 #move-pad-knob.visible { visibility: visible; }
-.tile.boulder   { background-position: -288px -128px; }
+/* .tile.boulder: its rock is chosen by animat.js (see BOULDERS). */
 .tile.water     { background-position: -192px -288px; }
 /* Debug readout: the grid coordinates under the pointer. */
 #cursor-coords {

@@ -6,7 +6,7 @@
 // Saves the fall, frame by frame, to tests/output/death/.
 
 const path = require("path");
-const { openGame, runStandalone, ensureOutputDir } = require("./helpers");
+const { openGame, makeStags, runStandalone, ensureOutputDir } = require("./helpers");
 
 // expected [sheet row, mirrored] by grid direction E, SE, S, SW, W, NW, N, NE
 const FACING = [[1, false], [1, true], [1, true], [0, true], [0, true], [0, false], [0, false], [1, false]];
@@ -14,6 +14,7 @@ const DIR_LABEL = ["E", "SE", "S", "SW", "W", "NW", "N", "NE"];
 
 async function main(browser, r) {
   const p = await openGame(browser, { viewport: { width: 700, height: 520 } });
+  await makeStags(p); // (the stag's sheets)
   const outDir = ensureOutputDir("death");
 
   // a wolf walks into a standing deer on open ground (as in bugfixes.test.js)

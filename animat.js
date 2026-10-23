@@ -77,22 +77,60 @@ const deerDeathFacing = {
 //   rowByDir, mirrorByDir       the sheet's rows by direction, if not the species' own
 // The deer's land frames and timing follow the artist's preview (images_raw/OvN65m.gif,
 // via spritecraft/extract_deer_gif.py): 100 ms a frame, 500 ms at the idle's pauses.
+// The wolf's follow its preview (images_raw/5V5aC4.gif) and sheet (images_raw/wolf-all.png),
+// via spritecraft/extract_wolf_sheet.py: run 70 ms a frame, idle 200, death 100, and the
+// howl and bite as listed. Frames held a time that isn't a whole number of ticks are
+// timed by holdsFromMs.
 const deerIdleCols = Array.from({ length: 24 }, (_, k) => 11 + k);
+const colsFrom = (first, n) => Array.from({ length: n }, (_, k) => first + k);
+
+// Ticks to hold each frame, the times in ms rounded as they add up, so the whole loop
+// keeps the right length.
+function holdsFromMs(ms) {
+  const tickMs = 1000 / 60; // (sim.tempo, which this runs before attach can read)
+  let sum = 0, done = 0;
+  return ms.map(t => { sum += t; const end = Math.round(sum / tickMs), h = end - done; done = end; return h; });
+}
+
+// The wolf's diagonal-only sheet columns (death, howl, bite): its rows 0-3 are the
+// diagonals; the in-between directions use the next diagonal clockwise.
+//                    E(↘) SE(↓) S(↙) SW(←) W(↖) NW(↑) N(↗) NE(→)
+const wolfDiagonalFacing = {
+  rowByDir:          [1,   1,    2,   2,    3,   3,    0,   0],
+  mirrorByDir: Array(8).fill(false),
+};
+const wolfRun = {sheet: "wolf", cols: colsFrom(0, 8), holds: holdsFromMs(Array(8).fill(70)),
+  frameW: 64, frameH: 64, topToShadow: 39};
 const frameDataBySpeciesAndPose = {
   wolf: {
+    // TODO: walk and trot frames of their own (the artist drew only the run); here the
+    // run, more slowly
     walk: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 },
-    idle: {sheet: "wolf", nFrames: 4, colZero: 8, frameW: 64, frameH: 64,
-      holdTks: 12, topToShadow: 39 },
-    // TODO: trot and gallop frames of their own (these are the walk's)
     trot: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 },
-    gallop: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
-      holdTks: 5, topToShadow: 39 },
+    gallop: wolfRun,
+    idle: {sheet: "wolf", nFrames: 4, colZero: 8, frameW: 64, frameH: 64,
+      holdTks: 12, topToShadow: 39 },
     // The swim frames already draw the waterline waterSurfaceDropPY below the ground
     // point, so the land's topToShadow puts the swimmer on the lower water surface.
     swim: {sheet: "wolf-swim", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 8, topToShadow: 39 },
+    // mating, all but censored: standing, facing its partner (see HEARTS)
+    mate: {sheet: "wolf", nFrames: 4, colZero: 8, frameW: 64, frameH: 64,
+      holdTks: 12, topToShadow: 39 },
+    // Plays exactly once in the simulation's death pose (attach checks this); the corpse
+    // holds the last frame.
+    death: {sheet: "wolf", nFrames: 11, colZero: 21, frameW: 64, frameH: 64,
+      holdTks: 6, topToShadow: 39, ...wolfDiagonalFacing},
+    dead: {sheet: "wolf", nFrames: 1, colZero: 32, frameW: 64, frameH: 64,
+      holdTks: Infinity, topToShadow: 39, ...wolfDiagonalFacing},
+    // not used yet
+    howl: {sheet: "wolf", cols: colsFrom(12, 9), holds: holdsFromMs([100, 100, 100, 100, 100, 150, 500, 100, 100]),
+      frameW: 64, frameH: 64, topToShadow: 39, ...wolfDiagonalFacing},
+    bite: {sheet: "wolf", cols: colsFrom(33, 15),
+      holds: holdsFromMs([100, 40, 40, 40, 40, 40, 40, 40, 40, 100, 100, 100, 100, 100, 20]),
+      frameW: 64, frameH: 64, topToShadow: 39, ...wolfDiagonalFacing},
   },
   deer: {
     // (columns 10 and 44 are the preview's start and stop of a run, in no cycle)
@@ -110,6 +148,8 @@ const frameDataBySpeciesAndPose = {
     // standing and eating (sim's a.eating): lowers its head, then keeps it down
     graze: {sheet: "deer", cols: [32, 33], holds: [6, 30], loopFrom: 1,
       frameW: 32, frameH: 41, topToShadow: 33},
+    mate: {sheet: "deer", nFrames: 1, colZero: 11, frameW: 32, frameH: 41,
+      holdTks: Infinity, topToShadow: 33},
     // larger frames, to fit the ripple ring
     swim: {sheet: "deer-swim", nFrames: 10, colZero: 0, frameW: 40, frameH: 48,
       holdTks: 10, topToShadow: 33 },
@@ -121,6 +161,21 @@ const frameDataBySpeciesAndPose = {
       holdTks: Infinity, topToShadow: 40, ...deerDeathFacing},
   }
 };
+
+// YOUNG STAGES: a critter is drawn from one of 5 versions of each sheet by its size class
+// (sim.youngStage, see SIZES in sim.js): the adult's, or one of 4 shrunk to
+// sim.youngScales (images/young/<sheet>-stage<k>.png, made by
+// spritecraft/make_young_sheets.py; keep its scales in step). style.css sets each stage's
+// images.
+
+// ANTLERS: only a stag old enough to breed (sim.isGrown) has antlers. Every other deer is
+// drawn from the antlerless sheets (images/hind-*.png, made by
+// spritecraft/make_hind_sheets.py; class "hind"); the young stages are shrunk from those.
+// (A deer reaches adult size before breeding age, so no grown stag is drawn young.)
+function hasAntlers(a) {
+  return a.species === "deer" && a.isMale && sim.isGrown(a);
+}
+
 
 // Sheet row and mirroring by direction (DIR_*), for species with a row per direction:
 //            E(↘) SE(↓) S(↙) SW(←) W(↖) NW(↑) N(↗) NE(→)
@@ -202,13 +257,15 @@ function setStyle(node, cache, prop, value) {
 
 // CAMERA: shiftPX, shiftPY is the world pixel at the viewport's top-left at zoom 1; zoom
 // scales about the viewport's center. It can be pinned to a critter (the player's wolf
-// at first), following it, and its corpse if it dies; if it is gone altogether (a wolf
-// leaves no corpse), the camera stays where it was. Panning unpins it.
+// at first), following it, and its corpse if it dies; if it is gone altogether, the
+// camera stays where it was. Pinned to the player's wolf (or its corpse), it moves to the
+// player's next wolf when there is one. Panning unpins it.
 // TODO: the pan limits assume zoom 1, so zoomed in you can't pan to the map's edges.
 const zoomMin = 1;
 const zoomMax = 8;
 const camera = { shiftPX: 0, shiftPY: 0, zoom: 2 }; // starts a step in from the widest
 let pinned = null; // the critter or corpse the camera follows
+let playerWolf = null; // the player's wolf when the camera last looked
 let viewportWidth = 0;
 let viewportHeight = 0;
 let drawnCameraKey = null; // the camera the tiles were last drawn for
@@ -225,6 +282,10 @@ function centerShiftOn(gx, gy) {
 }
 
 function drawCamera() {
+  if (sim.pcWolf !== playerWolf) { // the player has a new wolf
+    if (pinned === playerWolf) pinned = sim.pcWolf;
+    playerWolf = sim.pcWolf;
+  }
   if (pinned && !sim.allCritters.includes(pinned) && !sim.allCorpses.includes(pinned)) pinned = null;
   if (pinned) centerShiftOn(pinned.gx, pinned.gy);
   camera.shiftPX = boundVal(camera.shiftPX, -worldRadPX, worldRadPX - viewportWidth);
@@ -530,6 +591,25 @@ const riserCol = 15;       // sheet column of the one-level riser strip
 // A boulder rests on its tile: row 25 of its 32 x 32 cell, its footprint's center, goes
 // on the ground at the tile's center.
 const boulderFootCenterY = 25;
+// BOULDERS: each is one of the free-standing rocks in tiles.png, [column, row]: brown or
+// grey. The colour goes with the ground under it (grey on stone, brown on dirt) and, on
+// grass, a broad smooth field (rocks near each other, and along a wall, mostly share it);
+// which rock of that colour, a hash of the tile. Like the terrain, a pure function of the
+// tile: no random numbers, the same rock every time it is drawn.
+const boulderSprites = {
+  brown: [[9, 4], [10, 4], [0, 5], [1, 5], [2, 5], [3, 5], [4, 5], [5, 5]],
+  grey: [[7, 5], [9, 5], [10, 5], [0, 6], [1, 6]],
+};
+const greyGrassAbove = 1.1; // of the colour field's 0..2 range: less than half the grass grey
+
+function boulderSpriteAt(i, j, terrain) {
+  const tri = x => 2 * Math.abs(x - Math.floor(x + 0.5)); // a triangle wave, 0..1
+  const grey = terrain === "stone" || (terrain === "grass" && tri(i / 57 + 0.3) + tri(j / 49 + 0.6) > greyGrassAbove);
+  const set = boulderSprites[grey ? "grey" : "brown"];
+  let h = Math.imul(i, 73856093) ^ Math.imul(j, 19349663);
+  h = Math.imul(h ^ (h >>> 13), 0x5bd1e995);
+  return set[((h ^ (h >>> 15)) >>> 0) % set.length];
+}
 
 // The level a tile's front sides must reach down to, given the tile (i, j) in front of
 // it: its lowest corner, or -1 for water and off the map (the water surface is drawn a
@@ -592,6 +672,8 @@ function makeTileElement(i, j) {
   if (sim.obstacleAt(i, j) === "boulder") {
     const boulder = document.createElement("div");
     boulder.className = "tile boulder";
+    const [col, row] = boulderSpriteAt(i, j, terrain);
+    boulder.style.backgroundPosition = `-${col * tileSize}px -${row * tileSize}px`;
     // the tile's center on its surface, relative to the column's origin
     const centerAboveBase = (corners[0] + corners[1] + corners[2] + corners[3]) / 4 - base;
     const centerY = isoProject(0.5, 0.5)[1] - centerAboveBase * levelHeightPY;
@@ -621,7 +703,9 @@ function drawCritter(a) {
   const fd = frameDataBySpeciesAndPose[a.species][grazing ? "graze" : a.pose];
   if (!fd) return alert(`animat: no sprite frames for ${a.species} pose "${a.pose}"`);
 
-  const className = "critter " + fd.sheet;
+  const stage = sim.youngStage(a);
+  const hind = a.species === "deer" && !stage && !hasAntlers(a);
+  const className = "critter " + fd.sheet + (stage ? " stage" + stage : hind ? " hind" : "");
   if (s.node.className !== className) s.node.className = className;
 
   const frameCol = frameColumn(a, fd, grazing ? s.grazeSince : undefined);
@@ -657,7 +741,10 @@ function drawCarcass(a, s) {
     layers.push(1 + 2 * k + (a.carcass[carcassSheetPieces[k]] > 0 ? 0 : 1));
   }
   layers.push(0); // the shadow, at the bottom
-  setStyle(s.node, s.css, "backgroundImage", layers.map(() => "url('./images/deer-carcass.png')").join(", "));
+  const stage = sim.youngStage(a);
+  const url = stage ? `url('./images/young/hind-carcass-stage${stage}.png')`
+    : `url('./images/${hasAntlers(a) ? "deer" : "hind"}-carcass.png')`;
+  setStyle(s.node, s.css, "backgroundImage", layers.map(() => url).join(", "));
   setStyle(s.node, s.css, "backgroundPosition",
     layers.map(col => `-${col * carcassFrame}px -${row * carcassFrame}px`).join(", "));
   setStyle(s.node, s.css, "transform", deerDeathFacing.mirrorByDir[a.currentDirection] ? "scaleX(-1)" : "");
@@ -680,6 +767,39 @@ function drawCritters() {
       s.node.remove();
       sprites.delete(uid);
     }
+  }
+  drawHearts();
+}
+
+// HEARTS: a pink heart (images/heart.png) between a mating pair, above both, rising and
+// fading in and out over the act. One element per pair, keyed by the lower uid.
+const heartW = 11, heartH = 10;
+const heartFromPY = 18, heartRisePY = 22; // above the pair's ground points
+const hearts = new Map(); // lower uid -> { node, css }
+
+function drawHearts() {
+  const now = new Set();
+  for (const a of sim.allCritters) {
+    if (a.pose !== "mate" || a.matingWith === null || a.uid > a.matingWith) continue;
+    const b = sprites.get(a.matingWith)?.critter;
+    if (!b) continue;
+    now.add(a.uid);
+    let h = hearts.get(a.uid);
+    if (!h) {
+      h = { node: document.createElement("div"), css: {} };
+      h.node.className = "heart";
+      spriteLayer.appendChild(h.node);
+      hearts.set(a.uid, h);
+    }
+    const p = Math.min(1, Math.max(0, (sim.tickCount - a.poseTick) * sim.tempo / sim.mateActSBySpecies[a.species]));
+    const [ax, ay] = groundProject(a.gx, a.gy), [bx, by] = groundProject(b.gx, b.gy);
+    setStyle(h.node, h.css, "left", `${Math.round((ax + bx) / 2 - heartW / 2)}px`);
+    setStyle(h.node, h.css, "top", `${Math.round((ay + by) / 2 - heartFromPY - heartRisePY * p - heartH)}px`);
+    setStyle(h.node, h.css, "opacity", String(Math.min(1, p / 0.15, (1 - p) / 0.25).toFixed(2)));
+    setStyle(h.node, h.css, "zIndex", String(Math.max(spriteZIndex(a), spriteZIndex(b)) + 1));
+  }
+  for (const [uid, h] of hearts) {
+    if (!now.has(uid)) { h.node.remove(); hearts.delete(uid); }
   }
 }
 
@@ -839,7 +959,8 @@ function attach(theSim) {
 
   for (const [species, deathS] of Object.entries(sim.deathDurationSBySpecies)) {
     const d = frameDataBySpeciesAndPose[species].death;
-    if (Math.abs(d.nFrames * d.holdTks * sim.tempo - deathS) > 1e-9)
+    const ticks = d.cols ? d.holds.reduce((x, y) => x + y, 0) : d.nFrames * d.holdTks;
+    if (Math.abs(ticks * sim.tempo - deathS) > 1e-9)
       return alert(`animat: ${species} death animation doesn't last sim's ${deathS} s`);
   }
 
@@ -847,7 +968,7 @@ function attach(theSim) {
   window.addEventListener("resize", () => { measureViewport(); render(); });
   showArrowMode(false);
   updateZoomButtons();
-  pinned = sim.pcWolf;
+  pinned = playerWolf = sim.pcWolf;
 
   sim.onFrame(render);
   render();
@@ -865,6 +986,8 @@ return {
   },
   // for tests and debugging
   spriteEl: a => sprites.get(a.uid)?.node,
+  heartEl: a => hearts.get(Math.min(a.uid, a.matingWith ?? a.uid))?.node,
+  youngStage: a => sim.youngStage(a), hasAntlers,
   tileEl: (i, j) => renderedTiles.get(`${i}_${j}`),
   spriteRow, spriteZIndex, frameDataBySpeciesAndPose,
 };
