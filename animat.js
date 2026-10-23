@@ -243,6 +243,7 @@ const renderedTiles = new Map();
 function clearAllRenderedTiles() {
   for (const tile of renderedTiles.values()) tileLayer.removeChild(tile);
   renderedTiles.clear();
+  shoreTiles.clear();
 }
 
 // TODO: cache the terrain-to-class lookup to reduce redundant work
@@ -278,6 +279,7 @@ function renderVisibleTiles() {
     if (i < iMin || i > iMaxRaised || j < jMin || j > jMaxRaised) {
       tileLayer.removeChild(tile);
       renderedTiles.delete(key);
+      shoreTiles.delete(tile);
     }
   }
 
@@ -290,6 +292,229 @@ function renderVisibleTiles() {
       renderedTiles.set(key, tile);
     }
   }
+}
+
+// SHORES: water lapping at the land. Its picture is an OUTGOING WAVE: a wave front
+// running out from the land, which always joins up - it ends at land, or carries on into
+// the next tile's wave, never stopping short in open water. Two sprite sets in tiles.png
+// row 9 draw it (each set's columns are the frames of its animation):
+//   STRAIGHT  columns 0-1: light along one edge (as drawn, its top-right edge), its wave
+//             front parallel to that edge, crossing the two edges beside it near that
+//             edge's ends
+//   CORNER    columns 2-5: light in one corner (as drawn, its top corner), its wave front
+//             an arc around that corner, crossing the two edges that meet there near it
+//   INTERIOR  images/shore-inner.png (made from the straight sprites by
+//             spritecraft/make_shore_tiles.py): light along two edges that meet, its wave
+//             front the two straight fronts meeting in a V, crossing the other two edges
+//             as straight tiles along each of them would
+// Where a wave crosses an edge into land it ends there; into water, the tile across must
+// have a wave crossing at the same point (near the same grid vertex).
+// Which water gets which (shorePlacementAt):
+//   1. land along exactly one edge: STRAIGHT, light to it. (A straight coast is all
+//      straight tiles, the same way round.)
+//   2. land along two edges that meet (a notch, as in a lake's corner): INTERIOR, light
+//      along both: it carries the straight waves on either side round the bend.
+//   3. land along two opposite edges (a channel): STRAIGHT, light to the side whose coast
+//      runs on furthest (shoreLookTiles each way), so neighbours along it agree.
+//   4. land along three edges: STRAIGHT, light to the middle one (its wave runs from land
+//      to land).
+//   5. no land along its edges but land diagonally beyond a corner: CORNER around that
+//      corner (a point of land), but only if both neighbours beside that corner have a
+//      wave crossing to it there - so a rectangle of land has exactly 4 corner pieces,
+//      and a staircase coast an interior corner in each notch and a corner beyond each.
+//   6. anything else (land along all four edges, open water): plain water (.tile.water).
+// Each sprite is turned to face the right way: mirrored (left to right and/or top to
+// bottom, about the diamond's center), or for a corner on the left or right, rotated a
+// quarter turn (images/shore-rotated.png, made by spritecraft/make_shore_tiles.py;
+// mirrorings can't do that).
+// One global clock drives every shore, and all the sets' loops last the same time and
+// start together: each shoreFrameTicks of game time (so it stops when paused) every corner
+// and interior tile steps to its next frame (of 4), and every straight tile, with half as
+// many frames, holds each one twice as long (0, 0, 1, 1, 0, ...), all at once.
+// For correctness first: the whole terrain map's water and land is kept once known
+// (isWaterAt), and each tile's placement too (shorePlacementAt).
+const shoreFrameTicks = 24;     // 0.4 s a step: a loop every 1.6 s
+const shoreLoopSteps = 4;       // steps in a loop (the corner set's frames)
+const shoreSheetRowY = 9 * 32;  // y of row 9 in tiles.png
+const shoreLookTiles = 3;
+const shoreTiles = new Set();   // rendered shore tiles (they animate)
+
+const shoreSets = {
+  linear: { columns: [0, 1] },
+  corner: { columns: [2, 3, 4, 5] },
+  inner: { columns: [0, 1, 2, 3] }, // (columns of images/shore-inner.png)
+};
+// A tile's screen edges and corners. Edges: TL top-left (its grid W side), TR top-right
+// (N), BL bottom-left (S), BR bottom-right (E). Corners (grid vertices): T top (i, j),
+// R right (i + 1, j), B bottom (i + 1, j + 1), L left (i, j + 1).
+const edgeStep = { TL: [-1, 0], TR: [0, -1], BL: [0, 1], BR: [1, 0] };
+const oppositeEdge = { TL: "BR", BR: "TL", TR: "BL", BL: "TR" };
+const edgeCorners = { TL: ["L", "T"], TR: ["T", "R"], BR: ["R", "B"], BL: ["B", "L"] };
+const cornerEdges = { T: ["TL", "TR"], R: ["TR", "BR"], B: ["BR", "BL"], L: ["BL", "TL"] };
+const cornerVertex = { T: [0, 0], R: [1, 0], B: [1, 1], L: [0, 1] };
+// the tile diagonally beyond each corner
+const cornerStep = { T: [-1, -1], R: [1, -1], B: [1, 1], L: [-1, 1] };
+// Each way a sprite can be shown: mirrored (flipX, flipY) and/or rotated a quarter turn
+// (corner only). Straight: by the edge its light is along; corner: by its light corner.
+const shoreVariants = {
+  linear: {
+    TR: { set: "linear", flipX: false, flipY: false, rotated: false },
+    TL: { set: "linear", flipX: true,  flipY: false, rotated: false },
+    BR: { set: "linear", flipX: false, flipY: true,  rotated: false },
+    BL: { set: "linear", flipX: true,  flipY: true,  rotated: false },
+  },
+  corner: {
+    T: { set: "corner", flipX: false, flipY: false, rotated: false },
+    B: { set: "corner", flipX: false, flipY: true,  rotated: false },
+    R: { set: "corner", flipX: false, flipY: false, rotated: true },
+    L: { set: "corner", flipX: true,  flipY: false, rotated: true },
+  },
+  inner: { // by the corner between its two land edges; row: of images/shore-inner.png
+    T: { set: "inner", flipX: false, flipY: false, row: 0 },
+    B: { set: "inner", flipX: false, flipY: true,  row: 0 },
+    R: { set: "inner", flipX: false, flipY: false, row: 1 },
+    L: { set: "inner", flipX: true,  flipY: false, row: 1 },
+  },
+};
+
+// Whether tile (i, j) is water (off the map counts as water: no land there), kept for the
+// whole map: 0 not yet known, 1 water, 2 land.
+let waterKnown = null;
+function isWaterAt(i, j) {
+  if (i < 0 || j < 0 || i >= sim.gridWidthN || j >= sim.gridHeightN) return true;
+  if (!waterKnown) waterKnown = new Uint8Array(sim.gridWidthN * sim.gridHeightN);
+  const k = i * sim.gridHeightN + j;
+  if (!waterKnown[k]) waterKnown[k] = sim.getTerrainAt(i, j) === "water" ? 1 : 2;
+  return waterKnown[k] === 1;
+}
+
+// The edges of water tile (i, j) with land beyond them.
+function landEdgesOf(i, j) {
+  return ["TL", "TR", "BL", "BR"].filter(e => !isWaterAt(i + edgeStep[e][0], j + edgeStep[e][1]));
+}
+
+// How far the coast runs along edge e of water tile (i, j): the water tiles in a row to
+// either side of it (along that edge, up to shoreLookTiles each way) with land on that
+// same side.
+function coastRun(i, j, e) {
+  const [di, dj] = edgeStep[e];
+  let run = 0;
+  for (const [ai, aj] of [[dj, di], [-dj, -di]]) { // the two ways along the edge
+    for (let k = 1; k <= shoreLookTiles; k++) {
+      const ni = i + ai * k, nj = j + aj * k;
+      if (!isWaterAt(ni, nj) || isWaterAt(ni + di, nj + dj)) break;
+      run++;
+    }
+  }
+  return run;
+}
+
+// Where a placement's wave crosses its tile's edges: [edge, corner] pairs, each meaning
+// "crosses this edge near this corner".
+function waveCrossings(placement) {
+  // a straight wave along edge e: crosses the edge beside each of e's corners
+  const straight = e => edgeCorners[e].map(c => [cornerEdges[c].find(f => f !== e), c]);
+  if (placement.kind === "straight") return straight(placement.edge);
+  if (placement.kind === "inner") return cornerEdges[placement.corner].flatMap(straight); // both
+  return cornerEdges[placement.corner].map(e => [e, placement.corner]); // around its corner
+}
+
+// Whether water tile (i, j)'s wave crosses its edge e near its corner c (as placed).
+function waveCrossesAt(i, j, e, c) {
+  const p = shorePlacementAt(i, j);
+  return !!p && waveCrossings(p).some(([pe, pc]) => pe === e && pc === c);
+}
+
+// The same physical edge and corner, as seen from the tile beyond edge e: the edge
+// opposite, and the corner at the same grid vertex.
+function acrossEdge(e, c) {
+  const [di, dj] = edgeStep[e], [vi, vj] = cornerVertex[c];
+  const v = [vi - di, vj - dj]; // the vertex in the other tile's terms
+  const c2 = Object.keys(cornerVertex).find(k => cornerVertex[k][0] === v[0] && cornerVertex[k][1] === v[1]);
+  return [oppositeEdge[e], c2];
+}
+
+// Where water tile (i, j)'s wave is and what draws it: { kind: "straight", edge } or
+// { kind: "corner" or "inner", corner }, or null for plain water. Kept per tile once
+// worked out.
+const placements = new Map();
+function shorePlacementAt(i, j) {
+  const key = i * sim.gridHeightN + j;
+  if (placements.has(key)) return placements.get(key);
+  let p = null;
+  if (isWaterAt(i, j) && i >= 0 && j >= 0 && i < sim.gridWidthN && j < sim.gridHeightN) {
+    const land = landEdgesOf(i, j);
+    if (land.length === 1) p = { kind: "straight", edge: land[0] };
+    else if (land.length === 2 && land[0] !== oppositeEdge[land[1]]) {
+      const corner = Object.keys(cornerEdges).find(c => cornerEdges[c].every(e => land.includes(e)));
+      p = { kind: "inner", corner };
+    } else if (land.length === 2) {
+      // a channel: to the side whose coast runs on furthest (ties: the first)
+      const [a, b] = land;
+      p = { kind: "straight", edge: coastRun(i, j, b) > coastRun(i, j, a) ? b : a };
+    } else if (land.length === 3) {
+      p = { kind: "straight", edge: land.find(e => land.includes(oppositeEdge[e]) === false) };
+    } else if (land.length === 0) {
+      // a point of land beyond a corner: a corner wave, if both neighbours' waves come to it
+      for (const c of ["T", "R", "B", "L"]) {
+        const [si, sj] = cornerStep[c];
+        if (isWaterAt(i + si, j + sj)) continue;
+        const joins = cornerEdges[c].every(e => {
+          const [ni, nj] = [i + edgeStep[e][0], j + edgeStep[e][1]];
+          const [e2, c2] = acrossEdge(e, c);
+          return landEdgesOf(ni, nj).length > 0 && waveCrossesAt(ni, nj, e2, c2);
+        });
+        if (joins) { p = { kind: "corner", corner: c }; break; }
+      }
+    }
+  }
+  placements.set(key, p);
+  return p;
+}
+
+// The sprite to draw a tile's placement with, or null.
+function shoreVariantAt(i, j) {
+  const p = shorePlacementAt(i, j);
+  if (!p) return null;
+  if (p.kind === "straight") return shoreVariants.linear[p.edge];
+  return shoreVariants[p.kind][p.corner];
+}
+
+// For tests and debugging: forget everything known about the terrain and draw it afresh
+// (after the terrain has been changed).
+function redrawTerrain() {
+  waterKnown = null;
+  placements.clear();
+  clearAllRenderedTiles();
+  drawnCameraKey = null;
+  render();
+}
+
+const shoreFlipOrigin = "16px 24px"; // the water diamond's center in its 32 x 32 cell
+
+function shoreClockNow() {
+  return Math.floor(sim.tickCount / shoreFrameTicks);
+}
+
+function drawShoreTile(tile, clock) {
+  const columns = shoreSets[tile.shore.set].columns;
+  // where in the loop, spread over this set's frames (linear: each frame for 2 steps)
+  const k = Math.floor((clock % shoreLoopSteps) * columns.length / shoreLoopSteps);
+  if (k === tile.shoreFrame) return;
+  tile.shoreFrame = k;
+  // the rotated sheet has just the corner frames, in a row; the interior sheet a row for
+  // each of its two drawn notches
+  tile.style.backgroundPosition = tile.shore.rotated ? `-${k * tileSize}px 0px`
+    : tile.shore.set === "inner" ? `-${columns[k] * tileSize}px -${tile.shore.row * tileSize}px`
+    : `-${columns[k] * tileSize}px -${shoreSheetRowY}px`;
+}
+
+let drawnShoreClock = -1;
+function drawShores() {
+  const clock = shoreClockNow();
+  if (clock === drawnShoreClock) return; // (new tiles are drawn at the current frame)
+  drawnShoreClock = clock;
+  for (const tile of shoreTiles) drawShoreTile(tile, clock);
 }
 
 // GROUND: each land tile is drawn as a column (see images/ground-slopes.png, made by
@@ -335,6 +560,19 @@ function makeTileElement(i, j) {
   if (terrain === "water") { // water is flat at level 0, its own flat tile
     tile.className = `tile ${terrain}`;
     tile.style.top = `${py - tileRiserPY}px`;
+    const v = shoreVariantAt(i, j);
+    if (v) { // a shore, or a corner off a point of land: lapping (see SHORES)
+      tile.shore = v;
+      tile.shoreFrame = -1;
+      if (v.rotated) tile.style.backgroundImage = "url('./images/shore-rotated.png')";
+      if (v.set === "inner") tile.style.backgroundImage = "url('./images/shore-inner.png')";
+      if (v.flipX || v.flipY) {
+        tile.style.transformOrigin = shoreFlipOrigin;
+        tile.style.transform = `scale(${v.flipX ? -1 : 1}, ${v.flipY ? -1 : 1})`;
+      }
+      shoreTiles.add(tile);
+      drawShoreTile(tile, shoreClockNow());
+    }
     return tile;
   }
 
@@ -449,6 +687,7 @@ function drawExertion() {
 // directly after anything that changes the view while the game is paused.
 function render() {
   drawCamera();
+  drawShores();
   drawCritters();
   drawDebugWolf();
   drawExertion();
@@ -573,7 +812,7 @@ function attach(theSim) {
 return {
   attach, render,
   // view changes, for controls.js
-  zoomIn, zoomOut, setZoom, panCamera, centerCameraOn, followWolf,
+  zoomIn, zoomOut, setZoom, panCamera, centerCameraOn, followWolf, redrawTerrain,
   showMovePad, showArrowMode, showCursorCoords,
   // reading the view
   screenToGrid, screenDirToGridDir, screenVecToGridVec, isoProject,
