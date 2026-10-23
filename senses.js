@@ -4,8 +4,11 @@
 // Everything it offers is on the one global it defines, `senses`. Connect it with
 // senses.attach(sim).
 //
-// For now there is one sense: SIGHT of every creature within sightRangeTiles, in any
-// direction and through anything, and of the grass near a critter.
+// For now there is one sense: SIGHT, through anything, of every creature and of the
+// grass within a rectangle on screen around the critter, the shape and size of the game
+// view at the default 2x zoom on a full-screen MacBook (about 1,290 x 810 CSS pixels).
+// In grid terms, screen-horizontal is dx - dy and screen-vertical dx + dy, so the
+// rectangle needs no square root.
 // TODO: sight blocked by boulders and terrain, a field of view, and hearing. Earlier
 // attempts are shelved in experiments/realistic-senses/ and experiments/sight-overlay/.
 
@@ -13,7 +16,14 @@ const senses = (() => {
 
 let sim = null; // set by attach()
 
-const sightRangeTiles = 20;
+// In grid steps; one tile across the screen is 2 of |dx - dy|, one tile down it 2 of |dx + dy|.
+const sightHalfWidthTiles = 20.2;  // |dx - dy| at most this
+const sightHalfHeightTiles = 25.3; // |dx + dy| at most this
+
+// Whether grid offset (dx, dy) is in sight, or with k < 1, within that share of it.
+function inSight(dx, dy, k = 1) {
+  return Math.abs(dx - dy) <= k * sightHalfWidthTiles && Math.abs(dx + dy) <= k * sightHalfHeightTiles;
+}
 
 // What critter a perceives now, one snapshot per creature in sight (the dying and the
 // dead included):
@@ -21,13 +31,11 @@ const sightRangeTiles = 20;
 //   vx, vy: its velocity, tiles a tick
 //   meat:   for a carcass, the share of its meat left (1 all, 0 only bones)
 function perceive(a) {
-  const range2 = sightRangeTiles * sightRangeTiles;
   const seen = [];
   for (const list of [sim.allCritters, sim.allCorpses]) {
     for (const b of list) {
       if (b === a) continue;
-      const dx = b.gx - a.gx, dy = b.gy - a.gy;
-      if (dx * dx + dy * dy > range2) continue;
+      if (!inSight(b.gx - a.gx, b.gy - a.gy)) continue;
       const speed = b.speed || 0;
       seen.push({
         uid: b.uid, species: b.species, alive: sim.isLiveCritter(b),
@@ -40,11 +48,13 @@ function perceive(a) {
   return seen;
 }
 
-// The grass tiles within radius of critter a that have grass on them: [{ i, j, kg }].
-function grassAround(a, radius) {
-  const out = [], ci = Math.floor(a.gx), cj = Math.floor(a.gy), r2 = radius * radius;
-  for (let i = ci - radius; i <= ci + radius; i++) for (let j = cj - radius; j <= cj + radius; j++) {
-    if ((i + 0.5 - a.gx) ** 2 + (j + 0.5 - a.gy) ** 2 > r2) continue;
+// The tiles with grass on them whose centers are in sight of critter a, or within share k
+// of it: [{ i, j, kg }].
+function grassAround(a, k = 1) {
+  const out = [], ci = Math.floor(a.gx), cj = Math.floor(a.gy);
+  const r = Math.ceil(k * (sightHalfWidthTiles + sightHalfHeightTiles) / 2) + 1;
+  for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
+    if (!inSight(i + 0.5 - a.gx, j + 0.5 - a.gy, k)) continue;
     const kg = sim.grassFoodAt(i, j);
     if (kg > 0) out.push({ i, j, kg });
   }
@@ -58,7 +68,7 @@ function attach(theSim) {
   sim = theSim;
 }
 
-return { attach, perceive, grassAround, sightRangeTiles };
+return { attach, perceive, grassAround, inSight, sightHalfWidthTiles, sightHalfHeightTiles };
 
 })();
 

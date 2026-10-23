@@ -14,7 +14,7 @@ let mind = null;   // optional
 
 const arrowKeyNames = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
 const keysPressed = {};
-const cameraSpeed = 50; // screen px per tick while panning with the arrow keys
+const cameraSpeed = 50; // screen px per tick while panning with the arrow keys, at zoom 1
 
 // The sidebar toggle: the arrow keys move the wolf (true) or pan the camera.
 let arrowsMoveWolf = false;
@@ -43,11 +43,13 @@ function updatePlayerIntent() {
   sim.setPlayerIntent(intent);
 }
 
-// Camera mode: held arrow keys pan the camera every tick, even while the pad is in use.
+// Camera mode: held arrow keys pan the camera every tick, even while the pad is in use,
+// covering the same ground on screen at any zoom (so less of the world zoomed in).
 function panWithArrowKeys() {
   if (arrowsMoveWolf) return;
-  const dx = (keysPressed["ArrowRight"] ? cameraSpeed : 0) - (keysPressed["ArrowLeft"] ? cameraSpeed : 0);
-  const dy = (keysPressed["ArrowDown"] ? cameraSpeed : 0) - (keysPressed["ArrowUp"] ? cameraSpeed : 0);
+  const speed = cameraSpeed / animat.camera.zoom;
+  const dx = (keysPressed["ArrowRight"] ? speed : 0) - (keysPressed["ArrowLeft"] ? speed : 0);
+  const dy = (keysPressed["ArrowDown"] ? speed : 0) - (keysPressed["ArrowUp"] ? speed : 0);
   if (arrowKeyNames.some(k => keysPressed[k])) animat.panCamera(dx, dy);
 }
 
@@ -67,6 +69,7 @@ function toggleArrowMode() {
   arrowsMoveWolf = !arrowsMoveWolf;
   animat.showArrowMode(arrowsMoveWolf);
   if (arrowsMoveWolf) animat.followWolf();
+  else animat.unpinCamera();
   updatePlayerIntent();
   if (!arrowsMoveWolf && !pad && mind) mind.takeOver(sim.pcWolf);
 }
@@ -129,8 +132,15 @@ function attach(theSim, theAnimat, theMind = null) {
   movePadEl.addEventListener("pointerleave", releaseMovePad);
   movePadEl.addEventListener("pointercancel", releaseMovePad);
 
-  // debug readout of the grid point under the pointer
+  // clicking a critter or corpse pins the camera to it
   const fieldWrapper = document.getElementById("field-wrapper");
+  fieldWrapper.addEventListener("click", e => {
+    if (movePadEl.contains(e.target)) return;
+    const a = animat.critterAtScreen(e.clientX, e.clientY);
+    if (a) animat.pinCamera(a);
+  });
+
+  // debug readout of the grid point under the pointer
   fieldWrapper.addEventListener("mousemove", e =>
     animat.showCursorCoords(animat.screenToGrid(e.clientX, e.clientY)));
   fieldWrapper.addEventListener("mouseleave", () => animat.showCursorCoords(null));

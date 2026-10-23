@@ -74,6 +74,27 @@ async function main(browser, r) {
     `...and when it swims away, the far shore it is heading for (${JSON.stringify(wait.awaySpot)}; far shore ` +
     `${wait.far ? JSON.stringify(wait.far) : "none within 40 tiles, so the land nearest it"})`);
 
+  // a waiting wolf that loses sight of the swimmer loses interest at once
+  const gaveUp = await p.evaluate(([i, j]) => {
+    const S = sim.internals;
+    const w = sim.allCritters.find(c => c.species === "wolf" && c !== sim.pcWolf);
+    const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
+    const place = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; S.setCritterIdle(c); c.speed = 0; };
+    place(w, i - 2.5, j - 3.5); place(d, i + 4.5, j + 3.5);
+    w.food = 0.3; w.wind = w.stamina = 1; d.wind = d.stamina = 1;
+    mind.forget(w); mind.ignore(w, false);
+    for (let n = 0; n < 60; n++) { S.setCritterMoving(d, sim.DIR_E, "walk"); S.tick(); }
+    const waiting = mind.stateOf(w).mode;
+    place(d, -64, -64); // out of sight
+    for (let n = 0; n < 12; n++) S.tick(); // two turns
+    const st = mind.stateOf(w), k = st.known.find(o => o.uid === d.uid);
+    const out = { waiting, after: st.mode, lost: !!(k && k.lost) };
+    mind.ignore(w); place(w, -60, -60);
+    return out;
+  }, shore);
+  r.check(gaveUp.waiting === "wait" && gaveUp.after !== "wait" && gaveUp.lost,
+    `a waiting wolf that loses sight of the swimmer loses interest at once (${gaveUp.waiting} -> ${gaveUp.after})`);
+
   // no kills in the water: a wolf on top of a swimming deer doesn't kill it
   const noKill = await p.evaluate(([i, j]) => {
     const S = sim.internals;

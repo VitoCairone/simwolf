@@ -201,12 +201,14 @@ function setStyle(node, cache, prop, value) {
 }
 
 // CAMERA: shiftPX, shiftPY is the world pixel at the viewport's top-left at zoom 1; zoom
-// scales about the viewport's center. It follows the player's wolf until the player
-// pans away.
+// scales about the viewport's center. It can be pinned to a critter (the player's wolf
+// at first), following it, and its corpse if it dies; if it is gone altogether (a wolf
+// leaves no corpse), the camera stays where it was. Panning unpins it.
 // TODO: the pan limits assume zoom 1, so zoomed in you can't pan to the map's edges.
 const zoomMin = 1;
 const zoomMax = 8;
-const camera = { shiftPX: 0, shiftPY: 0, zoom: 2, followsWolf: true }; // starts a step in from the widest
+const camera = { shiftPX: 0, shiftPY: 0, zoom: 2 }; // starts a step in from the widest
+let pinned = null; // the critter or corpse the camera follows
 let viewportWidth = 0;
 let viewportHeight = 0;
 let drawnCameraKey = null; // the camera the tiles were last drawn for
@@ -223,8 +225,8 @@ function centerShiftOn(gx, gy) {
 }
 
 function drawCamera() {
-  const w = sim.pcWolf;
-  if (camera.followsWolf && w.gx !== undefined) centerShiftOn(w.gx, w.gy);
+  if (pinned && !sim.allCritters.includes(pinned) && !sim.allCorpses.includes(pinned)) pinned = null;
+  if (pinned) centerShiftOn(pinned.gx, pinned.gy);
   camera.shiftPX = boundVal(camera.shiftPX, -worldRadPX, worldRadPX - viewportWidth);
   camera.shiftPY = boundVal(camera.shiftPY, 0, (worldDiamPY + tileRiserPY) - viewportHeight);
 
@@ -602,12 +604,12 @@ function makeTileElement(i, j) {
 
 // CRITTER SPRITES: one element per critter and corpse, by uid, for as long as it exists.
 // TODO: keep elements only for critters in view.
-const sprites = new Map(); // uid -> { node, css }
+const sprites = new Map(); // uid -> { node, css, critter }
 
 function drawCritter(a) {
   let s = sprites.get(a.uid);
   if (!s) {
-    s = { node: document.createElement("div"), css: {} };
+    s = { node: document.createElement("div"), css: {}, critter: a };
     spriteLayer.appendChild(s.node);
     sprites.set(a.uid, s);
   }
@@ -736,24 +738,46 @@ function setZoom(z) {
 function zoomIn() { setZoom(camera.zoom * 2); }
 function zoomOut() { setZoom(camera.zoom / 2); }
 
-// The camera stops following the wolf and moves by this many screen pixels.
+// The camera, unpinned, moves by this many screen pixels at zoom 1.
 function panCamera(dxPX, dyPX) {
-  camera.followsWolf = false;
+  pinned = null;
   camera.shiftPX += dxPX;
   camera.shiftPY += dyPX;
 }
 
-// The camera stops following the wolf and centers on this grid point.
+// The camera, unpinned, centers on this grid point.
 function centerCameraOn(gx, gy) {
-  camera.followsWolf = false;
+  pinned = null;
   centerShiftOn(gx, gy);
   render();
 }
 
-// The camera centers on the player's wolf and keeps following it.
-function followWolf() {
-  camera.followsWolf = true;
+// The camera follows critter a (or its corpse).
+function pinCamera(a) {
+  pinned = a;
   render();
+}
+
+// The camera stops following anything and stays where it is.
+function unpinCamera() {
+  pinned = null;
+}
+
+function followWolf() {
+  pinCamera(sim.pcWolf);
+}
+
+// The critter or corpse drawn at a screen position (clientX/Y), or null: of the sprites
+// there, the one whose middle is nearest (a sprite's frame is larger than its drawing).
+function critterAtScreen(clientX, clientY) {
+  let best = null, bestL2 = Infinity;
+  for (const s of sprites.values()) {
+    const r = s.node.getBoundingClientRect();
+    if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
+    const l2 = (clientX - (r.left + r.right) / 2) ** 2 + (clientY - (r.top + r.bottom) / 2) ** 2;
+    if (l2 < bestL2) { best = s.critter; bestL2 = l2; }
+  }
+  return best;
 }
 
 // The movement pad's knob and lit ring. vx, vy: the pointer's offset from the pad's
@@ -823,6 +847,7 @@ function attach(theSim) {
   window.addEventListener("resize", () => { measureViewport(); render(); });
   showArrowMode(false);
   updateZoomButtons();
+  pinned = sim.pcWolf;
 
   sim.onFrame(render);
   render();
@@ -831,12 +856,12 @@ function attach(theSim) {
 return {
   attach, render,
   // view changes, for controls.js
-  zoomIn, zoomOut, setZoom, panCamera, centerCameraOn, followWolf, redrawTerrain,
-  showMovePad, showArrowMode, showCursorCoords,
+  zoomIn, zoomOut, setZoom, panCamera, centerCameraOn, pinCamera, unpinCamera, followWolf,
+  redrawTerrain, showMovePad, showArrowMode, showCursorCoords,
   // reading the view
-  screenToGrid, screenDirToGridDir, screenVecToGridVec, isoProject,
+  screenToGrid, screenDirToGridDir, screenVecToGridVec, isoProject, critterAtScreen,
   get camera() {
-    return { ...camera, viewportWidth, viewportHeight, worldRadPX, zoomMin, zoomMax };
+    return { ...camera, pinned, viewportWidth, viewportHeight, worldRadPX, zoomMin, zoomMax };
   },
   // for tests and debugging
   spriteEl: a => sprites.get(a.uid)?.node,

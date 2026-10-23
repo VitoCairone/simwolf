@@ -37,7 +37,7 @@ const deerFullAt = 0.99;         // ...and grazes until it is this full
 // holds. Grass regrows a little every second, so without it deer go back for the crumbs
 // on tiles they have just cropped.
 const deerBiteShare = 0.1;
-const deerGrazeLookTiles = 6;    // looks this far for grass first, then as far as it sees
+const deerGrazeLookShare = 0.25; // looks this share of its sight for grass first, then all of it
 const wolfHuntBelow = 0.75;      // a wolf hunts only with its food meter below this
 const wolfFullAt = 0.99;         // ...and eats until it is this full
 const wolfForgetPreyS = 20;      // gives up on prey it last saw this long ago
@@ -284,8 +284,8 @@ function decideDeer(a, m, now) {
 
 // DEER graze from when the food meter falls below deerGrazeBelow until full: eat the
 // tile underfoot if worth it (and crop it bare once started), else walk to the nearest
-// tile worth it, preferring ones at least half full. Looks deerGrazeLookTiles around,
-// or as far as it sees when nothing there is worth it. An intent, or null if not
+// tile worth it, preferring ones at least half full. Looks deerGrazeLookShare of its
+// sight around, or as far as it sees when nothing there is worth it. An intent, or null if not
 // grazing or no grass worth it is in sight.
 function graze(a, m, now) {
   if (a.pose === "swim") return null;
@@ -293,9 +293,9 @@ function graze(a, m, now) {
   if (!m.grazing && a.food < deerGrazeBelow) m.grazing = true;
   if (!m.grazing) return null;
   const worth = deerBiteShare * sim.grassMaxKg * 0.999; // (grass is stored as 32-bit floats)
-  let grass = senses.grassAround(a, deerGrazeLookTiles);
+  let grass = senses.grassAround(a, deerGrazeLookShare);
   const goingFar = m.grazeTo && !grass.some(g => g.i === m.grazeTo[0] && g.j === m.grazeTo[1]);
-  if (goingFar || !grass.some(g => g.kg >= worth)) grass = senses.grassAround(a, senses.sightRangeTiles);
+  if (goingFar || !grass.some(g => g.kg >= worth)) grass = senses.grassAround(a);
   const i = Math.floor(a.gx), j = Math.floor(a.gy);
   const here = grass.find(g => g.i === i && g.j === j);
   const onIt = m.cropping && m.cropping[0] === i && m.cropping[1] === j;
@@ -383,7 +383,14 @@ function decideWolf(a, m, now) {
   if (!target) { m.mode = "calm"; m.searching = false; return calm(a, m, now); }
 
   m.plan = null;
-  if (target.swimming) return waitAshore(a, m, target, now);
+  if (target.swimming) {
+    // waiting for it: once out of sight, it is lost, and the wolf looks for other prey
+    if (now - target.seenTick > 0) {
+      target.lost = true; m.target = null; m.watch = null;
+      return decideWolf(a, m, now);
+    }
+    return waitAshore(a, m, target, now);
+  }
   m.watch = null;
   m.mode = "chase";
   const age = now - target.seenTick;
@@ -403,7 +410,8 @@ function decideWolf(a, m, now) {
 
 // A wolf doesn't follow prey k into the water (nor can it kill it there): it trots,
 // keeping dry, to where k seems to be swimming to (landingAhead), or failing that the
-// land nearest k, no farther from k than the wolf is; and waits there.
+// land nearest k, no farther from k than the wolf is; and waits there, while k stays in
+// sight.
 function waitAshore(a, m, k, now) {
   m.mode = "wait"; m.searching = false;
   const ki = Math.floor(k.gx), kj = Math.floor(k.gy);

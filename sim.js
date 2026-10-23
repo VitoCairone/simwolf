@@ -142,7 +142,7 @@ const REALISTIC = {
 
 // GAMIFIED shrinks real times by one factor per area: lives so the wolf's greatest age
 // is 90 minutes, food so a wolf's full meter lasts 20 minutes, and exertion (draining
-// and refilling) 10 times as fast.
+// and refilling) 10 times as fast, and a deer's swimming twice that.
 const gameLifeScale = (90 * 60) / Math.min(...Object.values(realForcedMortalityMaxS));
 const gameFoodScale = (20 * 60) / realFoodFullS.wolf;
 const gameExertionSpeedup = 10;
@@ -158,7 +158,11 @@ const GAMIFIED = {
     wolf: { walk: 5, trot: 9, gallop: 55, swim: 3.5, swimBurst: 6 },
     deer: { walk: 5, trot: 15, gallop: 65, swim: 5, swimBurst: 10 },
   },
-  exertion: scaledTimes(REALISTIC.exertion, 1 / gameExertionSpeedup),
+  exertion: (() => {
+    const ex = scaledTimes(REALISTIC.exertion, 1 / gameExertionSpeedup);
+    ex.deer.swimTimeS /= 2; // deer tire twice as fast swimming, so they don't linger in water
+    return ex;
+  })(),
   windRefillHalfLifeSByPose: scaledTimes(REALISTIC.windRefillHalfLifeSByPose, 1 / gameExertionSpeedup),
   staminaFullRefillSByPose: scaledTimes(REALISTIC.staminaFullRefillSByPose, 1 / gameExertionSpeedup),
   gallopStaminaCostFactor: 2,

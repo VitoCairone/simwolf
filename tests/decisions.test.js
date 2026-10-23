@@ -1,5 +1,5 @@
 // Senses and decisions (senses.js, mind.js):
-//  - sight: every creature within senses.sightRangeTiles (20), nothing further
+//  - sight: every creature within the game view's rectangle at 2x zoom, nothing further
 //  - a deer flees a wolf it sees; a wolf chases a deer it sees
 //  - memory: a deer keeps fleeing a wolf it can no longer see, and a wolf keeps after a
 //    deer it can no longer see, toward where the deer was heading
@@ -58,17 +58,21 @@ async function main(browser, r) {
     await p.evaluate(`window.setup = ${setup.toString()}`);
   };
 
-  // 1. sight: within sightRangeTiles only
+  // 1. sight: within the rectangle only
   const sight = await p.evaluate(() => {
     sim.pause();
-    const w = sim.internals.wolves[1], [d1, d2] = sim.internals.deer, k = senses.sightRangeTiles / 10;
-    d1.gx = w.gx + 6 * k; d1.gy = w.gy + 7.9 * k;     // 0.998 of the range away
-    d2.gx = w.gx - 7 * k; d2.gy = w.gy + 7.2 * k;     // 1.004 of it
+    const w = sim.internals.wolves[1], [d1, d2, d3, d4] = sim.internals.deer;
+    const W = senses.sightHalfWidthTiles, H = senses.sightHalfHeightTiles;
+    // offsets for a point (u across the screen, v down it): dx = (u + v) / 2, dy = (v - u) / 2
+    const put = (d, u, v) => { d.gx = w.gx + (u + v) / 2; d.gy = w.gy + (v - u) / 2; };
+    put(d1, 0.99 * W, 0); put(d2, 1.01 * W, 0); put(d3, 0, 0.99 * H); put(d4, 0, -1.01 * H);
     const seen = senses.perceive(w).map(o => o.uid);
-    return { range: senses.sightRangeTiles, near: seen.includes(d1.uid), far: seen.includes(d2.uid) };
+    return { W, H, side: seen.includes(d1.uid), pastSide: seen.includes(d2.uid),
+      top: seen.includes(d3.uid), pastTop: seen.includes(d4.uid) };
   });
-  r.check(sight.range === 20 && sight.near && !sight.far,
-    `sight reaches ${sight.range} tiles and no further (${(0.998 * sight.range).toFixed(2)}: ${sight.near}, ${(1.004 * sight.range).toFixed(2)}: ${sight.far})`);
+  r.check(sight.side && !sight.pastSide && sight.top && !sight.pastTop,
+    `sight is the game view's rectangle: |dx - dy| up to ${sight.W}, |dx + dy| up to ${sight.H} ` +
+    `(just inside: ${sight.side}, ${sight.top}; just outside: ${sight.pastSide}, ${sight.pastTop})`);
 
   // 2. a deer flees a wolf in sight
   await fresh();

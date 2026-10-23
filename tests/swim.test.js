@@ -2,7 +2,7 @@
 // and back to land poses on shore. In water a critter swims at its species' swim speed,
 // or sprints (swimBurst) when asked to gallop with the wind for it; it never stands still
 // in water (told to stand or eat, or after a stun, it swims on); swimming uses stamina (a
-// full reserve lasts swimTimeS: GAMIFIED 12 minutes for a wolf, 6 for a deer), a sprint
+// full reserve lasts swimTimeS: GAMIFIED 12 minutes for a wolf, 3 for a deer), a sprint
 // also wind; out of wind a sprint drops to swimming, out of stamina a swimmer can't move.
 
 const path = require("path");
@@ -59,8 +59,8 @@ async function main(browser, r) {
   r.check(w1.reserves[0] === w1.reservesAtEntry[0] && Math.abs(used / expectUsed - 1) < 0.02,
     `swimming uses stamina, not wind: ${(used * 100).toFixed(3)}% of it in 2 s ` +
     `(a full reserve lasts ${(sp.ex.wolf.swimTimeS / 60).toFixed(0)} minutes)`);
-  r.check(sp.name !== "gamified" || (sp.ex.wolf.swimTimeS === 12 * 60 && sp.ex.deer.swimTimeS === 6 * 60),
-    `gamified, a full stamina swims a wolf 12 minutes and a deer 6 (${sp.ex.wolf.swimTimeS / 60}, ${sp.ex.deer.swimTimeS / 60})`);
+  r.check(sp.name !== "gamified" || (sp.ex.wolf.swimTimeS === 12 * 60 && sp.ex.deer.swimTimeS === 3 * 60),
+    `gamified, a full stamina swims a wolf 12 minutes and a deer 3 (${sp.ex.wolf.swimTimeS / 60}, ${sp.ex.deer.swimTimeS / 60})`);
   r.check(w1.cls === "critter wolf-swim" && w1.sheet.includes("wolf-swim.png") && w1.size.join() === "64px,64px",
     `wolf uses its swim sheet (class "${w1.cls}", ${w1.size.join(" x ")})`);
 
