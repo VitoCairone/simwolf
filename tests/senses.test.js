@@ -8,7 +8,8 @@
 //  - SMELL: on the wind, a critter downwind smells another far beyond sight, not upwind or
 //    across the wind; any within a few tiles, whatever the wind; carcasses with meat too
 //  - TRAILS: critters on land leave scent that fades with time; a hungry wolf that knows of
-//    no deer follows a deer's trail the way the deer went
+//    no deer follows a deer's trail the way the deer went, never back, and gives it up
+//    where it ends (at a kill, say)
 //  - MEMORY: what only sight tells (sex, age, partner) is kept when a critter is only heard
 //    or smelled afterwards
 
@@ -135,15 +136,31 @@ async function main(browser, r) {
     S.setWind(Math.PI * 1.5);
     put(wolfA, hx - 4.5, hy - 5); wolfA.food = 0.3; mind.forget(wolfA); mind.ignore(wolfA, false);
     const modes = new Set();
-    for (let k = 0; k < 6 / sim.tempo; k++) { S.tick(); modes.add(mind.stateOf(wolfA)?.mode); }
+    out.moved = [0, 0];
+    for (let k = 0; k < 6 / sim.tempo; k++) {
+      S.tick(); modes.add(mind.stateOf(wolfA)?.mode);
+      // the farthest it got along the trail, tracking
+      const along = wolfA.gy - (hy - 5);
+      if (mind.stateOf(wolfA)?.mode === "track" && along > out.moved[1]) out.moved = [wolfA.gx - (hx - 4.5), along];
+    }
     out.modes = [...modes];
-    out.moved = [wolfA.gx - (hx - 4.5), wolfA.gy - (hy - 5)];
+    // where the trail ends (as at a kill), it gives it up rather than pace about there
+    let nearEnd = 0, samples = 0;
+    for (let k = 0; k < 30 / sim.tempo; k++) {
+      wolfA.food = 0.3; S.tick();
+      if (k % 30) continue;
+      samples++;
+      if (Math.hypot(wolfA.gx - end[0], wolfA.gy - end[1]) < 2.5) nearEnd++;
+    }
+    out.nearEnd = nearEnd / samples;
     mind.ignore(wolfA);
     return out;
   });
   r.check(trail.fades && trail.modes.includes("track") && trail.moved[1] > 4 && Math.abs(trail.moved[0]) < 3,
     `a deer leaves a trail, older where it passed first; a hungry wolf finding it follows it the way the deer went ` +
     `(${trail.moved.map(v => v.toFixed(1)).join(", ")} tiles, modes ${trail.modes.join(", ")})`);
+  r.check(trail.nearEnd < 0.25,
+    `where the trail ends, it gives it up instead of pacing about there (near the end ${(trail.nearEnd * 100).toFixed(0)}% of the next 30 s)`);
 
   // MEMORY: sight's details kept when only heard or smelled
   const memory = await p.evaluate(() => {

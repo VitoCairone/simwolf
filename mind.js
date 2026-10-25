@@ -57,6 +57,7 @@ const grazeLosChecks = 40;       // ...checking line of sight to at most this ma
 const wolfHuntBelow = 0.75;      // a wolf hunts only with its food meter below this
 const wolfFullAt = 0.99;         // ...and eats until it is this full
 const wolfForgetPreyS = 20;      // gives up on prey it last saw this long ago
+const trailEndKeepS = 4 * 3600;  // remembers a trail's dead end this long (longer than any trail lasts)
 const wolfLeadMaxS = 2;          // expects unseen prey to carry on this long, at most
 const wolfGallopWithinTiles = 12; // gallops at prey in sight this close; trots otherwise
 const wolfCommitS = 5;           // keeps to a chosen prey at least this long
@@ -130,6 +131,7 @@ function memoryOf(a) {
       targetUntil: -Infinity, // ...kept until this tick at least
       flee: null,             // a deer's way to flee: { dx, dy, until, since }
       searching: false,       // a wolf has reached where its unseen prey should be
+      trailEnds: new Map(),   // deer uid -> the game time its trail was given up at (see track)
       watch: null,            // a wolf waiting ashore: { i, j, way (its prey's tile and way), spot }
       shore: null,            // a tired swimmer's land: { gx, gy, blockedTurns }
       grazing: false,         // a deer grazing (from hungry until full)
@@ -156,7 +158,9 @@ function memoryOf(a) {
 // (k.seenTick, by k.by: where, which way and how fast, whether alive, swimming, the meat
 // left on a carcass, and, from when it was last seen, its sex, age and partner and whether
 // in heat), kept after losing track of it until too old to matter; its kin's (partner,
-// parents, young) for good.
+// parents, young) for good. A carcass it would smell (within senses.sniffTiles) but
+// doesn't is forgotten: it is gone. Up close it smells whether any meat is left, so it
+// stops going to a bare one.
 // WESTERMARCK: it never forgets those of its species it met while it or they were
 // infants (m.familiar), and never mates with them.
 function remember(a, m, now) {
@@ -175,9 +179,12 @@ function remember(a, m, now) {
       sightedTick: before && before.seenTick === m.lastTurn ? before.sightedTick : now });
     if (seen && o.species === a.species && (selfInfant || o.infant)) m.familiar.add(o.uid);
   }
-  const longest = ticks(Math.max(deerAlarmS, wolfForgetPreyS));
+  const longest = ticks(Math.max(deerAlarmS, wolfForgetPreyS)), sniff2 = senses.sniffTiles ** 2;
   for (const [uid, k] of m.known) {
     if (now - k.seenTick > longest && !isKin(a, uid)) m.known.delete(uid);
+    // a carcass not smelled where it was, up close, is gone
+    else if (senses.use.smell && !k.alive && k.species === "deer" && k.seenTick !== now
+      && (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2 <= sniff2) m.known.delete(uid);
   }
 }
 
@@ -478,16 +485,26 @@ function decideWolf(a, m, now) {
 }
 
 // TRACKING: a hungry wolf with no prey in mind follows deer trails (senses.trailsAround):
-// it trots to the freshest deer scent within its nose's reach (but its own tile), so along
-// a trail it goes the way the deer went, until it perceives one. null if it smells none.
+// it trots to the freshest deer scent within its nose's reach that is fresher than the
+// scent underfoot, so along a trail it goes the way the deer went, never back, until it
+// perceives one. Where a trail ends (nothing fresher about: the deer was killed there,
+// say, or went into the water), it gives that deer's trail up, as far as that end
+// (m.trailEnds), and looks for another. null if it smells none worth following.
 function track(a, m, now) {
-  const i = Math.floor(a.gx), j = Math.floor(a.gy);
+  const i = Math.floor(a.gx), j = Math.floor(a.gy), t0 = sim.now;
+  for (const [uid, at] of m.trailEnds) if (t0 - at > trailEndKeepS) m.trailEnds.delete(uid);
+  const worth = t => !(t0 - t.ageS <= (m.trailEnds.get(t.uid) ?? -Infinity));
+  const trails = senses.trailsAround(a, "deer").filter(worth);
+  const here = trails.find(t => t.i === i && t.j === j);
   let best = null;
-  for (const t of senses.trailsAround(a, "deer")) {
-    if (t.i === i && t.j === j) continue;
+  for (const t of trails) {
+    if (t === here || (here && t.ageS >= here.ageS)) continue;
     if (!best || t.ageS < best.ageS) best = t;
   }
-  if (!best) return null;
+  if (!best) {
+    if (here) m.trailEnds.set(here.uid, t0 - here.ageS); // a dead end
+    return null;
+  }
   m.mode = "track"; m.plan = null;
   return move(a, m, best.i + 0.5 - a.gx, best.j + 0.5 - a.gy, "trot", now);
 }

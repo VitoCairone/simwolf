@@ -25,7 +25,8 @@
 //   carried on the wind (sim.wind): every live creature, and a carcass with meat, gives off
 //   scent that drifts downwind. A critter smells one within airScentRangeTiles (by its
 //   species) that lies within airScentHalfAngle of straight upwind of it, and any within
-//   sniffTiles whatever the wind. It tells species, whether alive, and a carcass's meat.
+//   sniffTiles whatever the wind. It tells species, whether alive, and a carcass's meat;
+//   a carcass with no meat left is smelled only within sniffTiles.
 //   on the ground: trails (sim.scentAt), which trailsAround lists for the mind to follow,
 //   as faint as the critter's nose can still smell (trailMinStrength).
 // TOUCH: a mother feels which of her young is suckling from her (nursingOnMe), and
@@ -209,8 +210,9 @@ function perceive(a) {
           const heard = hearingRange(b);
           if (heard && d2 <= heard * heard) by = "hearing";
         }
+        // a bare carcass gives off no scent on the wind, but up close smells of no meat
         if (!by && smells && (alive || b.carcass) && smellsOnWind(a, dx, dy, d2, wind)
-          && (alive || sim.carcassMeatKg(b) > 0)) by = "smell";
+          && (alive || d2 <= sniffTiles * sniffTiles || sim.carcassMeatKg(b) > 0)) by = "smell";
       }
       const suckling = b.nursingOn === a.uid; // touching it
       if (!by && suckling) by = "touch";
@@ -256,7 +258,7 @@ function attach(theSim) {
 
 return {
   attach, perceive, grassAround, trailsAround, inSight, canSee, canSeeTile, use,
-  sightHalfWidthTiles, sightHalfHeightTiles, hearingRangeTiles, airScentRangeTiles, eyeLevelsBySpecies,
+  sightHalfWidthTiles, sightHalfHeightTiles, hearingRangeTiles, airScentRangeTiles, eyeLevelsBySpecies, sniffTiles,
 };
 
 })();

@@ -12,6 +12,8 @@
 //    in 9 layers (a shadow, and each piece as meat until it is eaten, then as bones)
 //  - every wolf starts just hungry enough to hunt and eat (just under mind.js's wolfHuntBelow)
 //  - the player's wolf eats when it stands still by a carcass; its meter is shown in red
+//  - corpses don't block the way, are gone two weeks (a wolf's full meter) after the
+//    death, and a bare carcass, or one no longer where it was, draws no wolf
 // Saves screenshots of a carcass being eaten to tests/output/food/.
 
 const path = require("path");
@@ -309,6 +311,64 @@ async function main(browser, r) {
   }, eat.at);
   await p.screenshot({ path: path.join(outDir, "carcasses.png") });
   r.check(shoot, `carcass screenshot saved`);
+
+  // corpses: walked over, gone after corpseLastsS, and a bare one of no interest to wolves
+  await moveToOpenLand(p, { radius: 8, clearOthers: true });
+  const corpses = await p.evaluate(() => {
+    const S = sim.internals, pc = sim.pcWolf, home = [pc.gx, pc.gy], out = {};
+    sim.allCorpses.forEach(c => { c.gx = c.gy = -600 - c.uid; });
+    pc.gx = pc.nextGX = pc.gy = pc.nextGY = -450; mind.ignore(pc);
+    const w = sim.allCritters.find(c => c.species === "wolf" && c !== pc && sim.isLiveCritter(c) && sim.isGrown(c));
+    const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
+    const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; S.setCritterIdle(c); };
+    const run = (s, f = () => {}) => { for (let k = 0; k < s / sim.tempo; k++) { S.tick(); f(); } };
+    put(d, home[0] + 2, home[1]); d.food = 1; S.startCritterDeath(d);
+    run(sim.deathDurationSBySpecies.deer + 0.1);
+    out.corpse = sim.allCorpses.includes(d);
+    // walked over: a wolf walking straight along through it
+    put(w, home[0] - 1, home[1]); mind.ignore(w); w.food = 1; w.wind = w.stamina = 1; w.lifespanS = 1e9;
+    sim.setIntent(w, { dx: 1, dy: 0, gait: "walk" });
+    let stunned = 0;
+    for (let k = 0; k < 10 / sim.tempo && w.gx < d.gx + 1.5; k++) { S.tick(); if (w.stunnedUntil > sim.tickCount) stunned++; }
+    out.over = { passed: w.gx >= d.gx + 1.5, stunned };
+    // a hungry wolf sees a carcass with meat and goes for it...
+    const meat = { ...d.carcass };
+    const modes = () => mind.stateOf(w).mode;
+    const memo = () => mind.stateOf(w).known.find(k => k.uid === d.uid);
+    put(w, d.gx - 6, d.gy); w.food = 0.3; mind.forget(w); mind.ignore(w, false);
+    run(0.3); out.goes = modes();
+    // ...but seeing it eaten bare meanwhile, leaves it be
+    sim.carcassPieces.forEach(([name]) => { d.carcass[name] = 0; });
+    let fed = 0; run(3, () => { if (modes() === "feed") fed++; });
+    out.bare = { fedTicksAfter: fed, rememberedMeat: memo() && memo().meat };
+    // remembered with meat, but gone when it gets there: forgotten
+    Object.assign(d.carcass, meat);
+    put(w, d.gx - 6, d.gy); w.food = 0.3; mind.forget(w);
+    run(0.3); out.goes2 = modes();
+    const at = sim.allCorpses.indexOf(d); sim.allCorpses.splice(at, 1);
+    let lastFeed = -1; run(8, () => { if (modes() === "feed") lastFeed = sim.now; });
+    out.gone = { forgot: !memo(), stillFeeding: modes() === "feed", near: Math.hypot(w.gx - d.gx, w.gy - d.gy) };
+    sim.allCorpses.push(d);
+    mind.ignore(w);
+    // it lasts corpseLastsS from the death
+    animat.render();
+    out.drawn = !!animat.spriteEl(d);
+    d.deathTime = sim.now - S.SPEEDS.corpseLastsS + 0.5;
+    run(0.25); out.before = sim.allCorpses.includes(d);
+    run(0.5); animat.render(); out.after = sim.allCorpses.includes(d); out.drawnAfter = !!animat.spriteEl(d);
+    out.lasts = S.SPEEDS.corpseLastsS; out.wolfMeter = S.SPEEDS.foodFullS.wolf;
+    out.real = S.REALISTIC.corpseLastsS / 86400;
+    return out;
+  });
+  r.check(corpses.corpse && corpses.over.passed && corpses.over.stunned === 0,
+    `a wolf walks straight over a corpse, like the ground (${JSON.stringify(corpses.over)})`);
+  r.check(corpses.goes === "feed" && corpses.bare.fedTicksAfter < 0.3 / (1 / 60) && corpses.bare.rememberedMeat === 0,
+    `a hungry wolf goes for a carcass it sees, and leaves it be once it sees it bare (${JSON.stringify(corpses.bare)})`);
+  r.check(corpses.goes2 === "feed" && corpses.gone.forgot && !corpses.gone.stillFeeding,
+    `a carcass it remembers with meat but doesn't find where it was is forgotten (${JSON.stringify(corpses.gone)})`);
+  r.check(corpses.drawn && corpses.before && !corpses.after && !corpses.drawnAfter
+    && corpses.lasts === corpses.wolfMeter && corpses.real === 14,
+    `a corpse is gone ${(corpses.lasts / 60).toFixed(0)} game minutes after the death (a wolf's full meter; REALISTIC ${corpses.real} days)`);
 
   r.noProblems(p);
   await p.close();

@@ -39,6 +39,7 @@ const gridHeightN = 414;
 //                          to a walk (see SWIMMING); real time in both, like travel
 //   stunMinS, stunMaxS     how long a blocked move stuns a critter (see INTENTS)
 //   deathDurationSBySpecies   the death pose's length (animat.js fits its animation to it)
+//   corpseLastsS           how long after its death a corpse is gone (two weeks)
 //   lifeStageAgesS         ages a young critter can see, hear, walk, eat, run, is weaned
 //                          and can mate
 //   growthAgesS            ages at which a well-fed young critter's skeleton has grown
@@ -211,6 +212,7 @@ const REALISTIC = {
   stunMinS: 0.1,
   stunMaxS: 0.5,
   deathDurationSBySpecies: { deer: 2 / 3, wolf: 1.1 },
+  corpseLastsS: 14 * dayS,
   lifeStageAgesS: realLifeStageAgesS,
   growthAgesS: realGrowthAgesS,
   breeding: realBreeding,
@@ -263,6 +265,7 @@ const GAMIFIED = {
   stunMinS: 0.1,
   stunMaxS: 0.5,
   deathDurationSBySpecies: { deer: 2 / 3, wolf: 1.1 },
+  corpseLastsS: 14 * dayS * gameFoodScale, // as long as a wolf's full meter lasts
   lifeStageAgesS: scaledAges(realLifeStageAgesS, gameLifeScale),
   growthAgesS: scaledTimes(realGrowthAgesS, gameLifeScale),
   breeding: (() => {
@@ -777,7 +780,8 @@ function startCritterDeath(a) {
 //
 // CARCASSES: a dead deer's meat is its body's food at its death (edibleKg: its fat and lean
 // tissue, so a starved deer is a poor meal), c.carcassFullKg, in 8 pieces, each kg of it
-// worth c.carcassMJPerKg. Wolves eat one piece until it is gone,
+// worth c.carcassMJPerKg. Like any corpse, it is gone SPEEDS.corpseLastsS after the death,
+// and never blocks the way (see COLLISIONS). Wolves eat one piece until it is gone,
 // then another picked at random from those left (c.eatingPiece is shared by every wolf
 // at the carcass). The view shows each piece as meat until all of it is eaten.
 const carcassPieces = [ // name, share of the meat
@@ -1326,7 +1330,7 @@ function giveBirth(f) {
 // vector again reuses it. The sprite faces the nearest of 8 directions
 // (a.currentDirection) but keeps its facing while the heading is within facingKeepCos of
 // it, so a heading near a boundary doesn't flip the sprite.
-// STUNNED: a move that fails (another critter, a corpse, a boulder, a cliff, the map's
+// STUNNED: a move that fails (another live critter, a boulder, a cliff, the map's
 // edge, or water for a tired critter) leaves the critter at its last legal position,
 // stopped, for stunMinS to stunMaxS; its intent waits. a.blockedTick and a.stunnedUntil
 // record when, for whoever decides.
@@ -1694,11 +1698,14 @@ function updateAllCritters() {
     }
   });
 
-  moveAllTogether(allCritters, allCorpses);
+  moveAllTogether(allCritters.filter(isLiveCritter));
   pastLifespan.forEach(a => startCritterDeath(a));
   starved.forEach(a => { if (isLiveCritter(a) && allCritters.includes(a)) startCritterDeath(a); });
   allCritters.filter(a => a.pregnancy && g_now >= a.pregnancy.dueAt && isLiveCritter(a)
     && !isMating(a) && !isInWater(a)).forEach(giveBirth);
+  for (let k = allCorpses.length - 1; k >= 0; k--) {
+    if (g_now - allCorpses[k].deathTime >= SPEEDS.corpseLastsS) allCorpses.splice(k, 1);
+  }
   markScent();
   if (g_tick % Math.round(SPEEDS.windChangeEveryS / tempo) === 0) shiftWind();
   if (g_tick % grassGrowEveryTicks === 0) {
@@ -1706,13 +1713,13 @@ function updateAllCritters() {
   }
 }
 
-// COLLISIONS: every mover's next position is checked against blocked tiles and every
-// other critter and corpse at once. A wolf touching a live deer on land kills it; any
+// COLLISIONS: every live critter's next position is checked against blocked tiles and
+// every other live critter at once (the dying and corpses are walked over like ground). A wolf touching a live deer on land kills it; any
 // other collider is stunned where it is. This is the only place positions change.
 // TODO: kill only when the wolf bites, front-on; and let a critter bumped from behind
 // carry on when the space ahead is open.
-function moveAllTogether(movers, statics = []) {
-  const allColliders = movers.concat(statics);
+function moveAllTogether(movers) {
+  const allColliders = movers;
   const collidePairs = findCollidingPairs(allColliders);
   const didCollide = {};
   collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
