@@ -2,8 +2,12 @@
 //
 // On its turn, each critter (but the player's wolf while the player steers it) takes in
 // what it perceives (senses.js), updates its memory, and hands the simulation an intent
-// (sim.setIntent). It decides only on what it perceives now and remembers, never on the
-// simulation's own state of other critters.
+// (sim.setIntent). NO MAGICAL KNOWLEDGE (see admin/design_notes.md): of the world outside
+// itself it knows only what its senses tell it, now or in memory: where other critters
+// are (prey, threats, carcasses, mates, parents, young alike), what they are, and the
+// terrain and grass in sight. Its own state (meters, age, whether in heat, whom it is
+// paired with or born of) is always its to read, as is the ground under its next steps
+// (sim.canStepTo: it feels its footing).
 //
 // Everything it offers is on the one global it defines, `mind`. Connect it with
 // mind.attach(sim, senses).
@@ -451,10 +455,10 @@ function waitAshore(a, m, k, now) {
   const ki = Math.floor(k.gx), kj = Math.floor(k.gy);
   const way = k.vx || k.vy ? sim.getDir(k.vx, k.vy, 0) : -1;
   if (!m.watch || m.watch.i !== ki || m.watch.j !== kj || m.watch.way !== way) {
-    let spot = way >= 0 ? landingAhead(k) : null;
+    let spot = way >= 0 ? landingAhead(a, k) : null;
     if (!spot) {
       const reach = Math.ceil(Math.max(Math.abs(a.gx - k.gx), Math.abs(a.gy - k.gy))) + 1;
-      const land = findNearestLand(k.gx, k.gy, reach);
+      const land = findNearestLand(a, k.gx, k.gy, reach);
       spot = land ? [land.tile[0] + 0.5, land.tile[1] + 0.5] : [a.gx, a.gy];
     }
     m.watch = { i: ki, j: kj, way, spot };
@@ -464,10 +468,11 @@ function waitAshore(a, m, k, now) {
   return move(a, m, dx, dy, "trot", now, true);
 }
 
-// Where swimmer k would come ashore if it carried on: the center of the first tile along
-// its way it could climb onto, within shoreLookAheadTiles; null if none, or if it would
-// meet land too steep to climb (it will have to turn).
-function landingAhead(k) {
+// Where swimmer k would come ashore if it carried on, as far as critter a can see: the
+// center of the first tile along its way it could climb onto, within shoreLookAheadTiles;
+// null if none in a's sight, or if it would meet land too steep to climb (it will have to
+// turn).
+function landingAhead(a, k) {
   const s = 0.5 / Math.max(Math.abs(k.vx), Math.abs(k.vy)); // half-tile steps, no square root
   const sx = k.vx * s, sy = k.vy * s;
   let pi = NaN, pj = NaN;
@@ -475,6 +480,7 @@ function landingAhead(k) {
     const i = Math.floor(k.gx + sx * n), j = Math.floor(k.gy + sy * n);
     if (i === pi && j === pj) continue;
     pi = i; pj = j;
+    if (!senses.inSight(i + 0.5 - a.gx, j + 0.5 - a.gy)) return null;
     if (sim.isLandTile(i, j)) return [i + 0.5, j + 0.5];
     if (sim.getTerrainAt(i, j) !== "water") return null;
   }
@@ -575,12 +581,12 @@ function social(a, m, now, romanceOnly = false) {
 }
 
 // A swimmer short of stamina (below sim.swimMinStamina) heads for the nearest land it
-// can climb onto, whatever else it would do.
+// can see and climb onto, whatever else it would do; with none in sight, it swims on.
 function toShore(a, m, now) {
   m.mode = "ashore"; m.plan = null;
   const blocked = a.blockedTick > m.lastTurn;
   if (!m.shore || (blocked && ++m.shore.blockedTurns > shoreRetryTurns)) {
-    const land = findNearestLand(a.gx, a.gy);
+    const land = findNearestLand(a, a.gx, a.gy);
     m.shore = land ? { gx: land.tile[0] + 0.5, gy: land.tile[1] + 0.5, blockedTurns: 0 } : null;
   }
   if (!m.shore) return calm(a, m, now);
@@ -604,7 +610,7 @@ function calm(a, m, now) {
 
   const until = now + 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
   if (a.pose === "swim") {
-    const land = findNearestLand(a.gx, a.gy);
+    const land = findNearestLand(a, a.gx, a.gy);
     // certain at returnToLandSureTiles; compared squared to avoid a square root
     const roll = Math.random() * returnToLandSureTiles;
     if (land && roll * roll < land.distL2) {
@@ -630,9 +636,12 @@ function calm(a, m, now) {
   return m.plan.intent;
 }
 
-// The nearest land tile to (gx, gy) a swimmer can climb onto, within maxR tiles:
-// { tile: [i, j], distL2 (squared distance to the tile's nearest point) }, or null.
-function findNearestLand(gx, gy, maxR = Math.max(sim.gridWidthN, sim.gridHeightN)) {
+// The nearest land tile to (gx, gy) a swimmer can climb onto that critter a can see,
+// within maxR tiles: { tile: [i, j], distL2 (squared distance to the tile's nearest
+// point) }, or null.
+function findNearestLand(a, gx, gy, maxR = Infinity) {
+  const sightReach = Math.ceil((senses.sightHalfWidthTiles + senses.sightHalfHeightTiles) / 2) + 1;
+  maxR = Math.min(maxR, sightReach + Math.ceil(Math.max(Math.abs(gx - a.gx), Math.abs(gy - a.gy))));
   const ci = Math.floor(gx), cj = Math.floor(gy);
   const sq = v => v * v;
   const distToTileL2 = (i, j) => sq(Math.max(i - gx, 0, gx - (i + 1)))
@@ -643,7 +652,7 @@ function findNearestLand(gx, gy, maxR = Math.max(sim.gridWidthN, sim.gridHeightN
     if (best && r >= 1 && best.distL2 <= sq(r - 1)) break;
     for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
       if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue;
-      if (!sim.isLandTile(i, j)) continue;
+      if (!senses.inSight(i + 0.5 - a.gx, j + 0.5 - a.gy) || !sim.isLandTile(i, j)) continue;
       const d = distToTileL2(i, j);
       if (!best || d < best.distL2) best = { tile: [i, j], distL2: d };
     }
