@@ -3,7 +3,9 @@
 //  - stone ground is passable like grass and dirt; a boulder blocks a walking wolf, which
 //    is stunned: stopped at its last legal position for 0.1 - 0.5 s, then tries again
 //    (its intent waits while it is stunned)
-// Saves a screenshot of a barrier to tests/output/obstacles/.
+//  - boulders and land critters are drawn back to front together: a critter behind a
+//    boulder is hidden by it, one in front covers it
+// Saves screenshots of a barrier and of critters around a boulder to tests/output/obstacles/.
 
 const path = require("path");
 const { openGame, runStandalone, ensureOutputDir } = require("./helpers");
@@ -121,6 +123,38 @@ async function main(browser, r) {
   r.check(drawn.shown > 10, `boulders are drawn (${drawn.shown} in view)`);
   const outDir = ensureOutputDir("obstacles");
   await p.screenshot({ path: path.join(outDir, "barrier.png") });
+
+  // 4. critters behind a boulder are drawn behind it, those in front over it
+  const depth = await p.evaluate(() => {
+    const S = sim.internals;
+    const free = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.isBlockedTile(i, j);
+    let b = null;
+    for (let i = 3; i < sim.gridWidthN - 3 && !b; i++) for (let j = 3; j < sim.gridHeightN - 3 && !b; j++) {
+      if (sim.obstacleAt(i, j) !== "boulder") continue;
+      const lv = sim.tileCorners(i, j)[0];
+      let ok = true;
+      for (let di = -2; di <= 2; di++) for (let dj = -2; dj <= 2; dj++)
+        if ((di || dj) && (!free(i + di, j + dj) || sim.tileCorners(i + di, j + dj).some(c => c !== lv))) ok = false;
+      if (ok) b = [i, j];
+    }
+    if (!b) return null;
+    sim.allCritters.forEach(c => { c.gx = c.gy = c.nextGX = c.nextGY = -500 - c.uid; mind.ignore(c); });
+    const deer = sim.allCritters.filter(c => c.species === "deer").slice(0, 3);
+    const wolf = sim.allCritters.find(c => c.species === "wolf" && c !== sim.pcWolf);
+    const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; S.setCritterIdle(c); };
+    put(wolf, b[0] - 0.4, b[1] - 0.4);       // right behind it
+    put(deer[0], b[0] - 0.5, b[1] + 0.5);    // behind, up-screen to the left
+    put(deer[1], b[0] + 1.6, b[1] + 1.6);    // in front
+    put(deer[2], b[0] + 1.5, b[1] + 0.5);    // in front, down-screen to the right
+    animat.setZoom(4); animat.centerCameraOn(b[0] + 0.5, b[1] + 0.5); animat.render();
+    const z = el => +el.style.zIndex;
+    const rock = z(animat.tileEl(b[0], b[1]).boulder);
+    return { rock, behind: [wolf, deer[0]].map(c => z(animat.spriteEl(c)) < rock),
+      front: [deer[1], deer[2]].map(c => z(animat.spriteEl(c)) > rock) };
+  });
+  r.check(depth && depth.behind.every(Boolean) && depth.front.every(Boolean),
+    `critters behind a boulder are drawn behind it, those in front over it (${JSON.stringify(depth)})`);
+  await p.screenshot({ path: path.join(outDir, "depth.png") });
   r.noProblems(p);
   await p.close();
   console.log(`      screenshot saved to ${path.relative(process.cwd(), outDir) || outDir}`);

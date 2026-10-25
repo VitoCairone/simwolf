@@ -215,6 +215,7 @@ function frameColumn(a, fd, sinceTick = a.poseTick ?? 0) {
 //   land tiles       1000 + 100 * depth  interleaved with swimmers, so land in front of
 //   swimmers         1000 + 100 * depth  a swimmer covers it
 //   land critters    100000 + 100 * depth  above all tiles
+//   boulders         100000 + 100 * depth  among the land critters, by its tile's center
 // A land tile's depth is its center's (i + j + 1); a swimmer counts half a tile further
 // back, so only land clearly in front of it covers it.
 const zSwimLandBase = 1000;
@@ -223,6 +224,10 @@ const zLandCritterBase = 100000;
 function tileZIndex(i, j, terrain) {
   if (terrain === "water") return i + j;
   return zSwimLandBase + (i + j + 1) * 100;
+}
+
+function boulderZIndex(i, j) {
+  return zLandCritterBase + (i + j + 1) * 100;
 }
 
 function spriteZIndex(a) {
@@ -305,9 +310,19 @@ function drawCamera() {
 const renderedTiles = new Map();
 
 function clearAllRenderedTiles() {
-  for (const tile of renderedTiles.values()) tileLayer.removeChild(tile);
+  for (const tile of renderedTiles.values()) removeTile(tile);
   renderedTiles.clear();
   shoreTiles.clear();
+}
+
+// A tile's element, and its boulder's (drawn in the critters' order: see DRAWING ORDER).
+function addTile(tile) {
+  tileLayer.appendChild(tile);
+  if (tile.boulder) tileLayer.appendChild(tile.boulder);
+}
+function removeTile(tile) {
+  tileLayer.removeChild(tile);
+  if (tile.boulder) tileLayer.removeChild(tile.boulder);
 }
 
 // TODO: cache this; tiles coming into view ask for the same terrain again.
@@ -339,7 +354,7 @@ function renderVisibleTiles() {
   for (const [key, tile] of renderedTiles) {
     const [i, j] = key.split('_').map(Number);
     if (i < iMin || i > iMaxRaised || j < jMin || j > jMaxRaised) {
-      tileLayer.removeChild(tile);
+      removeTile(tile);
       renderedTiles.delete(key);
       shoreTiles.delete(tile);
     }
@@ -350,7 +365,7 @@ function renderVisibleTiles() {
       const key = `${i}_${j}`;
       if (renderedTiles.has(key)) continue;
       const tile = makeTileElement(i, j);
-      tileLayer.appendChild(tile);
+      addTile(tile);
       renderedTiles.set(key, tile);
     }
   }
@@ -581,7 +596,8 @@ function drawGrass() {
     const key = `${i}_${j}`, old = renderedTiles.get(key);
     if (!old || (!tiles && sim.grassHeightAt(i, j) < 0)) continue;
     const tile = makeTileElement(i, j);
-    tileLayer.replaceChild(tile, old);
+    removeTile(old);
+    addTile(tile);
     renderedTiles.set(key, tile);
   }
 }
@@ -670,6 +686,7 @@ function makeTileElement(i, j) {
     tile.appendChild(groundPiece(riserCol, row, k * levelHeightPY));
   }
   if (sim.obstacleAt(i, j) === "boulder") {
+    // its own element, beside the column, drawn among the critters (see DRAWING ORDER)
     const boulder = document.createElement("div");
     boulder.className = "tile boulder";
     const [col, row] = boulderSpriteAt(i, j, terrain);
@@ -677,9 +694,10 @@ function makeTileElement(i, j) {
     // the tile's center on its surface, relative to the column's origin
     const centerAboveBase = (corners[0] + corners[1] + corners[2] + corners[3]) / 4 - base;
     const centerY = isoProject(0.5, 0.5)[1] - centerAboveBase * levelHeightPY;
-    boulder.style.left = "0px";
-    boulder.style.top = `${centerY - boulderFootCenterY}px`;
-    tile.appendChild(boulder);
+    boulder.style.left = tile.style.left;
+    boulder.style.top = `${py - base * levelHeightPY + centerY - boulderFootCenterY}px`;
+    boulder.style.zIndex = boulderZIndex(i, j);
+    tile.boulder = boulder;
   }
   return tile;
 }

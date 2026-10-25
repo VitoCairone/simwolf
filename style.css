@@ -156,7 +156,8 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   height: 48px;
 }
 /* Land tiles: a .ground-column per tile holding its .ground pieces (its shape's sprite and
-   any cliff risers below) and any boulder (.tile.boulder). See GROUND in animat.js. */
+   any cliff risers below); a boulder (.tile.boulder) is its own element beside it, drawn
+   among the critters. See GROUND and DRAWING ORDER in animat.js. */
 .ground-column { position: absolute; }
 .ground {
   position: absolute;

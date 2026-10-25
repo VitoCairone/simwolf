@@ -27,7 +27,7 @@ function setup({ deerAt, deer2At = null, wolfThinks = true, deerThinks = true })
   const liveDeer = sim.internals.deer.filter(c => sim.isLiveCritter(c));
   const d = liveDeer[0], d2 = deer2At ? liveDeer[1] : null;
   sim.allCritters.filter(c => c !== w && c !== d && c !== d2).forEach(c => {
-    c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
+    c.gx = c.gy = c.nextGX = c.nextGY = -500 - c.uid * 3; c.speed = 0; mind.ignore(c);
   });
   const R = 6;
   const dry = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.isBlockedTile(i, j);
@@ -108,7 +108,7 @@ async function main(browser, r) {
     const [w, d] = [__w, __d];
     for (let n = 0; n < mind.turnTicks; n++) sim.internals.tick(); // its turn: sees the wolf
     const wolfWas = [w.gx, w.gy];
-    w.gx = w.gy = w.nextGX = w.nextGY = -90;                // the wolf vanishes from sight
+    w.gx = w.gy = w.nextGX = w.nextGY = -900;               // the wolf vanishes from sight
     const from0 = Math.hypot(d.gx - wolfWas[0], d.gy - wolfWas[1]);
     for (let n = 0; n < 120; n++) sim.internals.tick();     // 2 s
     const s2 = mind.stateOf(d);
@@ -130,7 +130,7 @@ async function main(browser, r) {
     sim.internals.setCritterMoving(d, sim.DIR_E, "trot");    // the deer heads east...
     for (let n = 0; n < mind.turnTicks; n++) sim.internals.tick(); // ...the wolf sees it
     const seen = [d.gx, d.gy];
-    d.gx = d.gy = d.nextGX = d.nextGY = -90; d.speed = 0;    // ...and loses it
+    d.gx = d.gy = d.nextGX = d.nextGY = -900; d.speed = 0;   // ...and loses it
     const w0 = [w.gx, w.gy];
     for (let n = 0; n < 60; n++) sim.internals.tick();       // 1 s
     const s = mind.stateOf(w), w1 = [w.gx, w.gy];
