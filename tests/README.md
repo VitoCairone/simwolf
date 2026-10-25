@@ -44,7 +44,7 @@ Set `CHROMIUM_PATH` to use a specific Chromium build instead of Playwright's.
 | File | Checks |
 | --- | --- |
 | `bugfixes.test.js` *(slow)* | First-round fixes: spawning at tile centers, no overlapping spawns, idle deer can be killed, dying deer stay dead, death animation timing and corpse frame, wind/stamina refill at rest and capped at full, sprite z-index. Ends with a 10 s soak run. |
-| `camera.test.js` | Camera: starts on the player's wolf a step in from the widest zoom; clicking a critter pins the camera to it, and it stays on its corpse; arrows to the wolf pin it back on the wolf, arrows to the camera unpin it in place; arrow panning is slower zoomed in, by the zoom factor. |
+| `camera.test.js` | Camera: starts on the player's wolf a step in from the widest zoom; clicking a critter pins the camera to it, and it stays on its corpse; arrows to the wolf pin it back on the wolf, arrows to the camera unpin it in place; arrow panning is slower zoomed in; at every zoom panning goes exactly as far as the map's edges, by the zoom factor. |
 | `accel.test.js` | Speed changes: a wolf reaches a full gallop from standing in 2.5 s, a deer in 1.5 s, and stops from one in as long, keeping its gait until stopped, then idling; a stun stops it dead. |
 | `arrowkeys.test.js` | Wolf mode: each arrow key and two-key diagonal moves the wolf in that screen direction; opposite keys cancel; releasing stops; camera mode still pans. |
 | `movepad.test.js` | Movement pad rings, direction (any heading, exactly where the pointer is, not snapped to 8), leaving the pad, camera mode vs wolf mode for the arrow keys, pad fixed under zoom. |

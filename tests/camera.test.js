@@ -3,6 +3,8 @@
 //  - toggling the arrows to the wolf pins it back to the player's wolf; toggling them to
 //    the camera unpins it where it is
 //  - arrow-key panning is slower zoomed in, by the zoom factor
+//  - at every zoom, panning goes exactly as far as brings each of the map's corners to the
+//    viewport's edge
 
 const { openGame, moveToOpenLand, runStandalone } = require("./helpers");
 
@@ -62,6 +64,31 @@ async function main(browser, r) {
   };
   const d1 = await pan(1), d8 = await pan(8);
   r.check(d1 > 0 && Math.abs(d1 / d8 - 8) < 0.01, `arrow panning is 8 times slower at zoom 8 (${d1} vs ${d8} world px in 10 ticks)`);
+
+  // panning to the map's corners, at each zoom: where the map's leftmost, rightmost, top
+  // and bottom points land on screen, against the viewport's edges
+  const edges = await p.evaluate(() => {
+    const wrap = document.getElementById("field-wrapper").getBoundingClientRect();
+    const c = animat.camera, R = c.worldRadPX, D = document.getElementById("tile-layer");
+    const probe = document.createElement("div");
+    probe.style.position = "absolute"; probe.style.width = probe.style.height = "0px";
+    D.appendChild(probe);
+    const at = (x, y) => { probe.style.left = `${x}px`; probe.style.top = `${y}px`; const b = probe.getBoundingClientRect(); return [b.left, b.top]; };
+    const out = {};
+    for (const z of [1, 2, 4, 8]) {
+      animat.setZoom(z);
+      const off = [];
+      animat.panCamera(-1e6, 0); animat.render(); off.push(at(-R, 0)[0] - wrap.left);
+      animat.panCamera(2e6, 0); animat.render(); off.push(at(R, 0)[0] - wrap.right);
+      animat.panCamera(0, -1e6); animat.render(); off.push(at(0, 0)[1] - wrap.top);
+      animat.panCamera(0, 2e6); animat.render(); off.push(at(0, animat.camera.worldBottomPY)[1] - wrap.bottom);
+      out[z] = off.map(v => +v.toFixed(2));
+    }
+    probe.remove();
+    return out;
+  });
+  r.check(Object.values(edges).every(off => off.every(v => Math.abs(v) < 0.5)),
+    `at every zoom, panning stops with the map's left, right, top and bottom at the viewport's edges (off by px, by zoom: ${JSON.stringify(edges)})`);
 
   r.noProblems(p);
   await p.close();

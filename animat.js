@@ -264,8 +264,8 @@ function setStyle(node, cache, prop, value) {
 // scales about the viewport's center. It can be pinned to a critter (the player's wolf
 // at first), following it, and its corpse if it dies; if it is gone altogether, the
 // camera stays where it was. Pinned to the player's wolf (or its corpse), it moves to the
-// player's next wolf when there is one. Panning unpins it.
-// TODO: the pan limits assume zoom 1, so zoomed in you can't pan to the map's edges.
+// player's next wolf when there is one. Panning unpins it. At any zoom it pans as far as
+// brings the map's edges to the viewport's edges (panLimits).
 const zoomMin = 1;
 const zoomMax = 8;
 const camera = { shiftPX: 0, shiftPY: 0, zoom: 2 }; // starts a step in from the widest
@@ -286,6 +286,18 @@ function centerShiftOn(gx, gy) {
   camera.shiftPY = py - viewportHeight / 2;
 }
 
+// The shifts that put the map's edges at the viewport's: zoom scales about the viewport's
+// center, so the world in view is that center's, plus or minus half the viewport over
+// the zoom.
+function panLimits() {
+  const halfW = viewportWidth / 2, halfH = viewportHeight / 2;
+  const seenW = halfW / camera.zoom, seenH = halfH / camera.zoom;
+  return {
+    minX: -worldRadPX - halfW + seenW, maxX: worldRadPX - halfW - seenW,
+    minY: -halfH + seenH, maxY: worldDiamPY + tileRiserPY - halfH - seenH,
+  };
+}
+
 function drawCamera() {
   if (sim.pcWolf !== playerWolf) { // the player has a new wolf
     if (pinned === playerWolf) pinned = sim.pcWolf;
@@ -293,8 +305,9 @@ function drawCamera() {
   }
   if (pinned && !sim.allCritters.includes(pinned) && !sim.allCorpses.includes(pinned)) pinned = null;
   if (pinned) centerShiftOn(pinned.gx, pinned.gy);
-  camera.shiftPX = boundVal(camera.shiftPX, -worldRadPX, worldRadPX - viewportWidth);
-  camera.shiftPY = boundVal(camera.shiftPY, 0, (worldDiamPY + tileRiserPY) - viewportHeight);
+  const lim = panLimits();
+  camera.shiftPX = boundVal(camera.shiftPX, lim.minX, lim.maxX);
+  camera.shiftPY = boundVal(camera.shiftPY, lim.minY, lim.maxY);
 
   const key = [camera.shiftPX, camera.shiftPY, camera.zoom, viewportWidth, viewportHeight].join();
   if (key === drawnCameraKey) return;
@@ -1000,7 +1013,7 @@ return {
   // reading the view
   screenToGrid, screenDirToGridDir, screenVecToGridVec, isoProject, critterAtScreen,
   get camera() {
-    return { ...camera, pinned, viewportWidth, viewportHeight, worldRadPX, zoomMin, zoomMax };
+    return { ...camera, pinned, viewportWidth, viewportHeight, worldRadPX, worldBottomPY: worldDiamPY + tileRiserPY, zoomMin, zoomMax };
   },
   // for tests and debugging
   spriteEl: a => sprites.get(a.uid)?.node,
