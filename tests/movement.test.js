@@ -48,5 +48,5 @@ async function main(browser, r) {
   r.check(frozen === 0, `critters that never moved in 50 game-seconds: ${frozen} of ${total} (${LOADS} loads)`);
 }
 
-module.exports = { name: "no frozen critters", main };
+module.exports = { name: "no frozen critters", main, slow: true }; // (see SPEED in run-all.js)
 if (require.main === module) runStandalone(module.exports.name, main);

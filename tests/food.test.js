@@ -1,11 +1,14 @@
 // Food (see FOOD in sim.js, graze and feed in mind.js):
-//  - every critter has a food meter (0 - 1) that empties from full over SPEEDS.foodFullS
-//    (REALISTIC 14 days); a wolf's or deer's meter reaching 0 kills it (not the player's)
+//  - every critter has a food meter (0 - 1), the energy its body holds, that empties from
+//    full over SPEEDS.foodFullS (REALISTIC: wolf 14 days, deer ~32); a wolf's or deer's
+//    meter reaching 0 kills it
+//  - a body weighs its skeleton plus its fat and lean tissue, less as its meter falls
 //  - every grass tile holds grass (kg, at most SPEEDS.grassMaxKg), starting short (a tenth
 //    of that), that grows back slowly to that limit; its height (bare, short, medium, tall) is drawn with that ground sprite
 //  - a hungry deer grazes: eats the grass of its tile, taking its food, down to bare (for now)
-//  - a dead deer is a carcass of 8 pieces; a hungry wolf eats them, straight after its kill,
-//    until it is full: one at a time, each picked at random from those left; it is drawn
+//  - a dead deer is a carcass of 8 pieces, its body's food at its death (a starved deer's
+//    far less, each kg worth less); a hungry wolf eats them, straight after its kill, until
+//    it is full: one at a time, each picked at random from those left; it is drawn
 //    in 9 layers (a shadow, and each piece as meat until it is eaten, then as bones)
 //  - every wolf starts just hungry enough to hunt and eat (just under mind.js's wolfHuntBelow)
 //  - the player's wolf eats when it stands still by a carcass; its meter is shown in red
@@ -45,7 +48,7 @@ async function main(browser, r) {
     const S = sim.internals, max = sim.grassMaxKg;
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     sim.allCritters.filter(c => c !== d).forEach(c => {
-      c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
+      c.gx = c.gy = c.nextGX = c.nextGY = -500 - c.uid * 3; c.speed = 0; mind.ignore(c); // (far beyond smell)
     });
     // a flat grass tile with grass all around it (so the deer has no reason to move off)
     const t = S.allLandTiles.find(([i, j]) => {
@@ -170,13 +173,34 @@ async function main(browser, r) {
   r.check(!starve.deerLive && starve.deerPose === "death" && !starve.wolfLive && starve.wolfPose === "death",
     `at 0 a deer or a wolf starves (to its death animation: ${starve.deerPose}, ${starve.wolfPose})`);
 
+  // a body's weight, and a starved deer as a carcass
+  const body = await p.evaluate(() => {
+    const S = sim.internals;
+    const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c) && sim.isGrown(c));
+    const save = [d.food, d.skeletonKg];
+    d.skeletonKg = d.adultSkeletonKg;
+    const at = f => { d.food = f; S.updateBody(d); return { kg: d.weightKg, meat: sim.edibleKg(d) }; };
+    const full = at(1), half = at(0.5), empty = at(0);
+    const b = sim.bodySharesBySpecies.deer;
+    d.food = save[0]; d.skeletonKg = save[1]; S.updateBody(d);
+    return { full, half, empty, adultKg: d.adultKg, skeletonKg: d.adultSkeletonKg, share: b.skeleton,
+      fullMJ: sim.internals.energyRangeMJ(d) };
+  });
+  r.check(Math.abs(body.full.kg - body.adultKg) < 1e-9 && body.half.kg < body.full.kg && body.empty.kg < body.half.kg
+    && body.empty.kg > body.skeletonKg && Math.abs(body.skeletonKg / body.adultKg - body.share) < 1e-9,
+    `a grown deer weighs ${body.full.kg.toFixed(0)} kg full, ${body.half.kg.toFixed(0)} at half, ${body.empty.kg.toFixed(0)} starved ` +
+    `(its skeleton ${body.skeletonKg.toFixed(0)}, the rest its fat and lean tissue)`);
+  r.check(body.empty.meat < 0.65 * body.full.meat,
+    `a starved deer would be ${body.empty.meat.toFixed(0)} kg of meat, a full one ${body.full.meat.toFixed(0)}`);
+
   // 4. the player's wolf eats a carcass, a piece at a time in a random order, by standing still next to it
   const tile = await moveToOpenLand(p, { radius: 3, clearOthers: true });
   const eat = await p.evaluate(() => {
     const S = sim.internals, w = sim.pcWolf;
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     d.gx = d.nextGX = w.gx + 1; d.gy = d.nextGY = w.gy; d.speed = 0; S.setCritterIdle(d);
-    d.weightKg = d.adultKg; // fully grown: a carcass of deerMeatKg
+    d.skeletonKg = d.adultSkeletonKg; d.food = 1; S.updateBody(d); // grown and full
+    const deerMeat = sim.edibleKg(d), deerWeight = d.weightKg;
     S.startCritterDeath(d, w);
     const deathTicks = Math.ceil(sim.deathDurationSBySpecies.deer / sim.tempo) + 2;
     w.food = 1; // not hungry while it dies
@@ -189,65 +213,76 @@ async function main(browser, r) {
     const bonesOf = () => colsOf().filter(c => c > 0 && c % 2 === 0).length;
     const full = { cls: el.className, layers: layersOf(), bones: bonesOf(), shadowLast: colsOf().at(-1) === 0,
       meat: sim.carcassMeatKg(d) };
-    const shares = Object.fromEntries(sim.carcassPieces.map(([name, share]) => [name, share * sim.deerMeatKg]));
+    const shares = Object.fromEntries(sim.carcassPieces.map(([name, share]) => [name, share * deerMeat]));
     // eats a carcass to the bones (keeping the wolf hungry): the order the pieces went in,
     // and the most pieces ever partly eaten at once
     const eatUp = c => {
       const order = []; let most = 0;
-      for (let k = 0; k < 20 * 60 && sim.carcassMeatKg(c) > 0; k++) {
+      for (let k = 0; k < 60 * 60 && sim.carcassMeatKg(c) > 0; k++) {
         w.food = 0;
         const left = sim.carcassPieces.map(([name]) => c.carcass[name] > 0);
         S.tick();
         sim.carcassPieces.forEach(([name], k) => { if (left[k] && !(c.carcass[name] > 0)) order.push(name); });
-        most = Math.max(most, sim.carcassPieces.filter(([name]) => c.carcass[name] > 0 && c.carcass[name] < shares[name] - 1e-9).length);
+        most = Math.max(most, sim.carcassPieces.filter(([name, share]) => c.carcass[name] > 0 && c.carcass[name] < share * c.carcassFullKg - 1e-9).length);
       }
       return { order, most };
     };
-    // stand still (as the controls do with no input), hungry: eat
+    // stand still (as the controls do with no input), empty: eat until full...
     w.food = 0;
     sim.setPlayerIntent({ gait: "eat" });
     const order = [], layersSeen = [], bonesSeen = [];
     let n = 0, most = 0;
-    for (; n < 20 * 60 && sim.carcassMeatKg(d) > 0; n++) {
+    const meat0 = sim.carcassMeatKg(d);
+    const step = () => {
       const left = sim.carcassPieces.map(([name]) => d.carcass[name] > 0);
       S.tick();
       sim.carcassPieces.forEach(([name], k) => { if (left[k] && !(d.carcass[name] > 0)) order.push(name); });
       most = Math.max(most, sim.carcassPieces.filter(([name]) => d.carcass[name] > 0 && d.carcass[name] < shares[name] - 1e-9).length);
-      if (n % 10 === 0) { animat.render(); layersSeen.push(layersOf()); bonesSeen.push(bonesOf()); }
-    }
+    };
+    for (; n < 20 * 60 && w.food < 0.99; n++) step();
     animat.render();
     const fill = document.getElementById("food-meter-fill");
     const afterFull = { food: w.food, s: n * sim.tempo, meter: parseFloat(fill.style.width),
-      meterColor: getComputedStyle(fill).backgroundColor };
+      meterColor: getComputedStyle(fill).backgroundColor, ateKg: meat0 - sim.carcassMeatKg(d),
+      wantKg: S.energyRangeMJ(w) / d.carcassMJPerKg, meals: S.energyRangeMJ(w) > 0 && deerMeat * d.carcassMJPerKg / S.energyRangeMJ(w) };
+    // ...then kept hungry, to the bones
+    for (n = 0; n < 60 * 60 && sim.carcassMeatKg(d) > 0; n++) {
+      w.food = 0;
+      step();
+      if (n % 10 === 0) { animat.render(); layersSeen.push(layersOf()); bonesSeen.push(bonesOf()); }
+    }
+    animat.render();
     const bones = { layers: layersOf(), bones: bonesOf(), meat: sim.carcassMeatKg(d), cls: el.className };
     // a full wolf eats no more: a second carcass
     const d2 = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     d2.gx = d2.nextGX = w.gx; d2.gy = d2.nextGY = w.gy + 1; d2.speed = 0; S.setCritterIdle(d2);
-    d2.weightKg = d2.adultKg;
+    d2.skeletonKg = d2.adultSkeletonKg; d2.food = 1; S.updateBody(d2);
     S.startCritterDeath(d2, w);
     for (let k = 0; k < deathTicks; k++) { w.food = 1; S.tick(); }
     const meatFull = sim.carcassMeatKg(d2);
     w.food = 1; S.tick();
     const ateWhenFull = meatFull - sim.carcassMeatKg(d2);
-    const usedATick = S.SPEEDS.foodCapacityKg.wolf * sim.tempo / S.SPEEDS.foodFullS.wolf;
+    const usedATick = S.energyRangeMJ(w) * sim.tempo / S.SPEEDS.foodFullS.wolf / d2.carcassMJPerKg;
     // hungry again: another order
     const second = eatUp(d2);
     sim.setPlayerIntent(null); S.tick();
     return { full, afterFull, ateWhenFull, order, most, second, pieces: sim.carcassPieces.map(p => p[0]),
-      bones, layersSeen, bonesSeen, usedATick, at: [d.gx, d.gy], deerMeat: sim.deerMeatKg };
+      bones, layersSeen, bonesSeen, usedATick, at: [d.gx, d.gy], deerMeat, deerWeight };
   });
   r.check(eat.full.cls === "critter deer-carcass" && eat.full.layers === 9 && eat.full.bones === 0 && eat.full.shadowLast
-    && Math.abs(eat.full.meat - eat.deerMeat) < 1e-6,
-    `a dead deer is a whole carcass: ${eat.full.meat.toFixed(1)} kg in 8 pieces, all meat, over a shadow (${eat.full.layers} layers)`);
+    && Math.abs(eat.full.meat - eat.deerMeat) < 1e-6 && eat.deerMeat < eat.deerWeight,
+    `a dead deer is a whole carcass: ${eat.full.meat.toFixed(1)} kg (of its ${eat.deerWeight.toFixed(0)} kg) in 8 pieces, all meat, over a shadow (${eat.full.layers} layers)`);
   const more = eat.bonesSeen.every((x, k) => k === 0 || x >= eat.bonesSeen[k - 1]);
-  r.check(eat.afterFull.food >= 0.99 && more && eat.layersSeen.every(x => x === 9) && eat.bonesSeen.length > 3,
-    `the player's wolf, empty and standing still beside it, eats the whole deer in ${eat.afterFull.s.toFixed(1)} s: ` +
-    `its meter is full (${eat.afterFull.food.toFixed(3)}, less what it used while eating); the pieces go as they're eaten ` +
+  r.check(eat.afterFull.food >= 0.99 && Math.abs(eat.afterFull.ateKg / eat.afterFull.wantKg - 1) < 0.05,
+    `the player's wolf, empty and standing still beside it, eats until full in ${eat.afterFull.s.toFixed(1)} s: ` +
+    `${eat.afterFull.ateKg.toFixed(1)} kg, its meter's worth (${eat.afterFull.wantKg.toFixed(1)} kg); a whole deer is ${eat.afterFull.meals.toFixed(1)} meters' worth`);
+  r.check(more && eat.layersSeen.every(x => x === 9) && eat.bonesSeen.length > 3,
+    `kept hungry, it eats the whole deer; the pieces go as they're eaten ` +
     `(always 9 layers; pieces drawn as bones: ${[...new Set(eat.bonesSeen)].join(" ")})`);
   const perm = o => o.length === 8 && [...o].sort().join() === [...eat.pieces].sort().join();
   r.check(perm(eat.order) && perm(eat.second.order) && eat.order.join() !== eat.second.order.join()
     && eat.most <= 1 && eat.second.most <= 1,
-    `one piece at a time, in a random order: ${eat.order.join(", ")}; then another carcass: ${eat.second.order.join(", ")}`);
+    `one piece at a time, in a random order: ${eat.order.join(", ")}; then another carcass: ${eat.second.order.join(", ")} (most partly eaten at once: ${eat.most}, ${eat.second.most})`);
   r.check(eat.bones.meat === 0 && eat.bones.layers === 9 && eat.bones.bones === 8 && eat.bones.cls === "critter deer-carcass",
     `all eaten, every piece drawn as its bones (${eat.bones.bones} of ${eat.bones.layers - 1})`);
   r.check(eat.ateWhenFull <= eat.usedATick + 1e-9,

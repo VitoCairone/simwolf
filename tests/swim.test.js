@@ -129,6 +129,8 @@ async function main(browser, r) {
     sim.pcWolf.wind = 1; sim.pcWolf.stamina = 1;
     for (let n = 0; n < 1200 && sim.internals.isInWater(sim.pcWolf); n++) sim.internals.tick();
     sim.internals.tick();
+    // (up a bank higher than a step it first walks for a moment: see shorewait.test.js)
+    for (let n = 0; n < 200 && sim.pcWolf.climbingUntil >= sim.tickCount; n++) sim.internals.tick();
     animat.render();
     const el = animat.spriteEl(sim.pcWolf);
     return { inWater: sim.internals.isInWater(sim.pcWolf), pose: sim.pcWolf.pose, cls: el.className,

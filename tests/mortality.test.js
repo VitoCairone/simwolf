@@ -108,5 +108,5 @@ async function main(browser, r) {
     `with REALISTIC chosen: lifespans in years (wolves ${Math.min(...rr.wolfLife).toFixed(1)}-${Math.max(...rr.wolfLife).toFixed(1)}), adults to start`);
 }
 
-module.exports = { name: "game speeds and forced mortality", main };
+module.exports = { name: "game speeds and forced mortality", main, slow: true }; // (see SPEED in run-all.js)
 if (require.main === module) runStandalone(module.exports.name, main);

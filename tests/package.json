@@ -3,7 +3,9 @@
   "private": true,
   "description": "Browser tests for SimWolf: drive index.html in headless Chromium via Playwright.",
   "scripts": {
-    "test": "node run-all.js",
+    "test": "node run-all.js fast",
+    "test:slow": "node run-all.js slow",
+    "test:all": "node run-all.js all",
     "setup": "npm install && npx playwright install chromium"
   },
   "devDependencies": {

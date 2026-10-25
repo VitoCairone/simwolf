@@ -85,5 +85,5 @@ async function main(browser, r) {
   await p2.close();
 }
 
-module.exports = { name: "game loop timing + pause", main };
+module.exports = { name: "game loop timing + pause", main, slow: true }; // (see SPEED in run-all.js)
 if (require.main === module) runStandalone(module.exports.name, main);

@@ -66,7 +66,10 @@ async function main(browser, r) {
     // offsets for a point (u across the screen, v down it): dx = (u + v) / 2, dy = (v - u) / 2
     const put = (d, u, v) => { d.gx = w.gx + (u + v) / 2; d.gy = w.gy + (v - u) / 2; };
     put(d1, 0.99 * W, 0); put(d2, 1.01 * W, 0); put(d3, 0, 0.99 * H); put(d4, 0, -1.01 * H);
-    const seen = senses.perceive(w).map(o => o.uid);
+    // the rectangle alone (line of sight is tested in senses.test.js)
+    senses.use.lineOfSight = false;
+    const seen = senses.perceive(w).filter(o => o.by === "sight").map(o => o.uid);
+    senses.use.lineOfSight = true;
     return { W, H, side: seen.includes(d1.uid), pastSide: seen.includes(d2.uid),
       top: seen.includes(d3.uid), pastTop: seen.includes(d4.uid) };
   });
@@ -132,13 +135,17 @@ async function main(browser, r) {
     for (let n = 0; n < 60; n++) sim.internals.tick();       // 1 s
     const s = mind.stateOf(w), w1 = [w.gx, w.gy];
     const seesDeer = senses.perceive(w).some(o => o.species === "deer");
+    const tgt = s.target !== null && sim.internals.critterByUid.get(s.target);
+    const chasing = tgt ? { same: tgt === d, at: [tgt.gx - w0[0], tgt.gy - w0[1]].map(v => +v.toFixed(1)), age: +(sim.now - tgt.birthTime).toFixed(1), alive: sim.isLiveCritter(tgt) } : null;
     for (let n = 0; n < 21 * 60; n++) sim.internals.tick();  // 21 s more
-    return { seen, w0, w1, mode: s.mode, seesDeer, modeLater: mind.stateOf(w).mode };
+    return { seen, w0, w1, mode: s.mode, seesDeer, modeLater: mind.stateOf(w).mode, chasing };
   })()`);
   const east = wolfMem && wolfMem.w1[0] - wolfMem.w0[0];
   r.check(wolfMem && !wolfMem.seesDeer && wolfMem.mode === "chase" && east > 1,
-    `out of sight, a wolf keeps after a deer, the way it was heading (moved ${east && east.toFixed(1)} tiles east in 1 s, ${wolfMem && wolfMem.mode})`);
-  r.check(wolfMem && wolfMem.modeLater === "calm", `...and gives up later (22 s on: ${wolfMem && wolfMem.modeLater})`);
+    `out of sight, a wolf keeps after a deer, the way it was heading (moved ${east && east.toFixed(1)} tiles east in 1 s, ${wolfMem && wolfMem.mode}; after ${JSON.stringify(wolfMem && wolfMem.chasing)})`);
+  // (a hungry wolf may then follow the trails deer left on the map: see senses.test.js)
+  r.check(wolfMem && (wolfMem.modeLater === "calm" || wolfMem.modeLater === "track"),
+    `...and gives up the chase later (22 s on: ${wolfMem && wolfMem.modeLater})`);
 
   // 6. two deer about as near, in opposite directions: the wolf picks the one it faces
   // (though the other is a little nearer) and keeps to it
@@ -178,7 +185,7 @@ async function main(browser, r) {
     const modes = new Set();
     for (let k = 0; k < 120; k++) { sim.internals.tick(); modes.add(mind.stateOf(w).mode); }
     return { s: n / 60, pose: d.pose, wolfMode: mind.stateOf(w).mode, modes: [...modes].join(","),
-      ate: w.food - foodAtKill, meatLeft: d.carcass ? sim.carcassMeatKg(d) / sim.deerMeatKg : null };
+      ate: w.food - foodAtKill, meatLeft: d.carcass ? sim.carcassMeatKg(d) / d.carcassFullKg : null };
   })()`);
   r.check(kill && (kill.pose === "death" || kill.pose === "dead"),
     `a hungry wolf runs down a tired deer (killed after ${kill && kill.s.toFixed(1)} s)`);
@@ -254,7 +261,8 @@ async function main(browser, r) {
     for (let n = 0; n < 60 * 60; n++) {
       sim.internals.tick();
       for (const c of sim.allCritters) {
-        if (c.pose !== "gallop" || c === sim.pcWolf && sim.playerHasControl()) continue;
+        // (a critter told to stop keeps its gait's pose while it slows)
+        if (c.pose !== "gallop" || !(c.targetSpeed > 0) || c === sim.pcWolf && sim.playerHasControl()) continue;
         const mode = mind.stateOf(c)?.mode;
         byMode[mode] = (byMode[mode] || 0) + 1;
       }

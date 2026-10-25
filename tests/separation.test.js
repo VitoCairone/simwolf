@@ -84,5 +84,5 @@ async function main(browser, r) {
   await p.close();
 }
 
-module.exports = { name: "separation (sim / senses / mind / animat / controls)", main };
+module.exports = { name: "separation (sim / senses / mind / animat / controls)", main, slow: true }; // (see SPEED in run-all.js)
 if (require.main === module) runStandalone(module.exports.name, main);

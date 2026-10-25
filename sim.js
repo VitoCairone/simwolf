@@ -17,10 +17,10 @@ let g_now = 0;                 // game seconds so far; changed only by tick()
 let g_next_uid = 0;
 let isPaused = false;
 
-// The map is square, sized for its grass to feed 50 deer: a deer eats ~639 kg of grass a
-// year and a tile grows back 0.4 kg a year (see FOOD), so 50 deer need ~79,850 grass
-// tiles; 414 x 414 has 80,169. The sea's rings scale with the map; land features are
-// sized in tiles.
+// The map is square. Its grass feeds about 59 deer: a deer eats ~639 kg of grass a year
+// and a tile grows back 0.4 kg a year (see FOOD), so a deer needs ~1,600 grass tiles;
+// 414 x 414 has 94,881. The sea's ring scales with the map; land features are sized in
+// tiles.
 const gridWidthN = 414;
 const gridHeightN = 414;
 
@@ -35,17 +35,26 @@ const gridHeightN = 414;
 //   windStartFrac, staminaStartFrac   refilling the reserves, and starting a gait
 //   swimMinStaminaFrac     stamina needed to go into the water (see SWIMMING)
 //   accelToGallopS         from standing to a full gallop, and back (see SPEED CHANGES)
+//   climbOutSlowS          how long a critter climbing out of the water up a bank is held
+//                          to a walk (see SWIMMING); real time in both, like travel
 //   stunMinS, stunMaxS     how long a blocked move stuns a critter (see INTENTS)
 //   deathDurationSBySpecies   the death pose's length (animat.js fits its animation to it)
 //   lifeStageAgesS         ages a young critter can see, hear, walk, eat, run, is weaned
 //                          and can mate
-//   growthAgesS            ages at which a young critter weighs growthSharesBySpecies of
-//                          the way to adult weight (see BREEDING)
+//   growthAgesS            ages at which a well-fed young critter's skeleton has grown
+//                          growthSharesBySpecies of the way to an adult's (see BODY)
 //   breeding               gestation, how often a female can conceive, the oldest a
 //                          critter is fertile, and the mating act (see BREEDING)
 //   forcedMortalityMaxS, mortalityRatio   how long critters live (see FORCED MORTALITY)
-//   foodFullS, foodCapacityKg, eatKgPerS, deerMeatKg, grassMaxKg, grassRegrowKgPerS
+//   foodFullS, eatKgPerS, grassMaxKg, grassRegrowKgPerS
 //                          food meters, eating and grass (see FOOD)
+//   infantFoodFullS, nurseFullS   how long an infant's meter lasts, and how long it takes
+//                          to suckle it full (see BREEDING); GAMIFIED's are chosen for
+//                          play, not scaled from REALISTIC's
+//   growthCostShare        the share of growth's real cost in food that it costs (see BODY)
+//   scentHalfLifeS, windChangeEveryS   scent trails fading, and the wind shifting (see
+//                          SCENT AND WIND); the same in both: they go with travel, which
+//                          is at real speeds in both
 const hourS = 60 * 60;
 const dayS = 24 * hourS;
 const yearS = dayS * 365;
@@ -72,8 +81,8 @@ const realLifeStageAgesS = {
     mate:   { min: 16 * monthS, avg: 24 * monthS,  max: 36 * monthS },
   }
 };
-// Growth: the ages at which a young critter has grown growthSharesBySpecies (see BREEDING)
-// of the way from its birth weight to its adult weight. Wolves gain about linearly to
+// Growth: the ages at which a well-fed young critter has grown growthSharesBySpecies (see
+// BODY) of the way from its birth weight to its adult weight. Wolves gain about linearly to
 // ~30 kg at 10-12 months, then slowly (Canadian Field-Naturalist 2003: 8-10 kg at 3
 // months); red deer: about 40% of a hind's weight at weaning, 50% at a year (estimates).
 const realGrowthAgesS = {
@@ -113,15 +122,49 @@ const mortalityRatio = {
   wolf: { mean: 0.70, sd: 0.10, min: 0.45, max: 1 },
   deer: { mean: 0.55, sd: 0.10, min: 0.30, max: 1 },
 };
+// Bodies (see BODY):
+//   Weights, kg: at birth and adult (well fed: see BODY), by sex. Wolf: 0.3-0.5 kg at
+//   birth (San Diego Zoo Wildlife Alliance); adults average 41 (female) and 50 (male) in
+//   Yellowstone (NPS). Red deer calves: about 6 kg (female) and 6.5 (male) (Arman et al.,
+//   via wildlifeonline.me.uk); adults: estimates for European red deer.
+//   Shares of a well-fed body: white-tailed deer in early winter are 62% water, 12% fat,
+//   20.5% protein and 4.5% ash (DelGiudice et al. 1990, J. Wildlife Management). The
+//   skeleton is taken as 10% (its ash, with its own protein and water: estimate), the
+//   rest of the water as the lean tissue's. Wolf: estimates, likewise (fasting wolves'
+//   loss is about 55% water: Kreeger et al. 1997).
+//   Energy: 37.7 MJ a kg of fat, 16.7 of protein (Atwater's 9 and 4 kcal a gram). A
+//   starving mammal dies with about two thirds of its protein left (estimate).
+const bodyKgBySpecies = {
+  wolf: { birth: { female: 0.4, male: 0.4 }, female: 41, male: 50 },
+  deer: { birth: { female: 6, male: 6.5 }, female: 100, male: 160 },
+};
+const bodySharesBySpecies = {
+  wolf: { fat: 0.10, protein: 0.19, skeleton: 0.10 },
+  deer: { fat: 0.12, protein: 0.18, skeleton: 0.10 },
+};
+const fatMJPerKg = 37.7, proteinMJPerKg = 16.7;
+const lethalProteinShare = 2 / 3;
 // Food, as real animals eat:
-//   Wolf: a full meter is one deer's ~60 kg of edible meat and lasts 14 days (an adult
-//   wolf can go almost two weeks without food: New York Wolf Center); it eats ~0.5 kg a
-//   minute.
-//   Deer: red deer eat ~1.75 kg of dry grass a day (Forestry and Land Scotland), so a
-//   14-day meter holds 24.5 kg; they graze ~0.2 kg an hour.
+//   Wolf: a full meter lasts 14 days (an adult wolf can go almost two weeks without food:
+//   New York Wolf Center); it eats ~0.5 kg of meat a minute, and can gorge on up to 20%
+//   of its weight at a time (International Wolf Center).
+//   Deer: red deer eat ~1.75 kg of dry grass a day (Forestry and Land Scotland), of ~10
+//   MJ a kg (estimate), so a full meter lasts as long as that takes to spend; they graze
+//   ~0.2 kg an hour.
 //   Grass: an ungrazed field holds ~0.2-0.4 kg of dry matter a square metre (0.3 here)
 //   and unfertilized grassland regrows ~0.4 kg a square metre a year.
-const realFoodFullS = { wolf: 14 * dayS, deer: 14 * dayS };
+//   Nursing (red deer, via wildlifeonline.me.uk): bouts of 45 s to 4 minutes, of 150-600
+//   ml of milk, 5-10 a day at first; a hind gives up to ~2 kg a day. At ~6 MJ a kg (its
+//   fat and protein), that is ~12 MJ a day, a newborn's full meter (see BODY) in about 3
+//   days, and its meter full in about 40 minutes of suckling. A hind turns food into milk
+//   at about 65% (as livestock: estimate). Wolf pups: no figures found; as calves.
+const grassMJPerKg = 10;
+const milkEfficiency = 0.65;
+const realFoodFullS = {
+  wolf: 14 * dayS,
+  // (a hind's full meter, over what she spends a day)
+  deer: dayS * bodyKgBySpecies.deer.female * bodySharesBySpecies.deer.skeleton * energyRangePerKg("deer") / (1.75 * grassMJPerKg),
+};
 const realEatKgPerS = { wolf: 0.5 / 60, deer: 0.2 / hourS };
 const realGrassRegrowKgPerS = 0.4 / yearS;
 
@@ -164,6 +207,7 @@ const REALISTIC = {
   staminaStartFrac: 0.1,      // stamina needed to start a trot or gallop
   swimMinStaminaFrac: 0.25,
   accelToGallopS: { wolf: 2.5, deer: 1.5 },
+  climbOutSlowS: { wolf: 1.5, deer: 1.5 }, // estimate: scrambling up a bank
   stunMinS: 0.1,
   stunMaxS: 0.5,
   deathDurationSBySpecies: { deer: 2 / 3, wolf: 1.1 },
@@ -173,9 +217,13 @@ const REALISTIC = {
   forcedMortalityMaxS: realForcedMortalityMaxS,
   mortalityRatio,
   foodFullS: realFoodFullS,
-  foodCapacityKg: { wolf: 60, deer: 24.5 },
+  // Estimates: dogs follow trails hours old; breezes shift every minute or so.
+  scentHalfLifeS: 30 * 60,
+  windChangeEveryS: 60,
   eatKgPerS: realEatKgPerS,
-  deerMeatKg: 60,
+  infantFoodFullS: { wolf: 3 * dayS, deer: 3 * dayS },
+  growthCostShare: 1,
+  nurseFullS: { wolf: 40 * 60, deer: 40 * 60 },
   grassMaxKg: 0.3,
   grassRegrowKgPerS: realGrassRegrowKgPerS,
 };
@@ -211,6 +259,7 @@ const GAMIFIED = {
   staminaStartFrac: 0.1,
   swimMinStaminaFrac: 0.25,
   accelToGallopS: { wolf: 2.5, deer: 1.5 },
+  climbOutSlowS: { wolf: 1.5, deer: 1.5 }, // estimate: scrambling up a bank
   stunMinS: 0.1,
   stunMaxS: 0.5,
   deathDurationSBySpecies: { deer: 2 / 3, wolf: 1.1 },
@@ -227,9 +276,17 @@ const GAMIFIED = {
   },
   mortalityRatio,
   foodFullS: { wolf: realFoodFullS.wolf * gameFoodScale, deer: realFoodFullS.deer * gameFoodScale },
-  foodCapacityKg: { wolf: 60, deer: 24.5 },
+  // Estimates: dogs follow trails hours old; breezes shift every minute or so.
+  scentHalfLifeS: 30 * 60,
+  windChangeEveryS: 60,
   eatKgPerS: { wolf: realEatKgPerS.wolf / gameFoodScale, deer: realEatKgPerS.deer / gameFoodScale },
-  deerMeatKg: 60,
+  // Chosen for play, not scaled (scaled, a bout would last a few ticks): the young get
+  // hungry every 15 s or so, and a bout (0.8 to full) takes a few seconds, to be seen.
+  infantFoodFullS: { wolf: 86, deer: 86 },
+  // Lives shrink far more than meals: growing at full cost, the young would need to eat
+  // over a hundred times what they use. Growth costs what it would have at food's scale.
+  growthCostShare: gameLifeScale / gameFoodScale,
+  nurseFullS: { wolf: 14, deer: 14 },
   grassMaxKg: 0.3,
   grassRegrowKgPerS: realGrassRegrowKgPerS / gameFoodScale,
 };
@@ -287,25 +344,20 @@ function wave(x) {
   return t * t * (3 - 2 * t);
 }
 
-// SEA: rings around the map's center (sea in the middle, a ring of land, a ring of sea,
-// land in the corners) from a triangle wave of the squared distance from the center, q.
-// Four slow waves in four directions push the coasts in and out so the rings aren't
-// circles. Inside the land ring's crest (q < 1/2), q is remapped to shrink the inner sea
-// without moving anything from the crest outward; innerSeaShrink must stay within 0..1
-// for the field to stay continuous.
+// SEA: rings around the map's center (a ring of sea, land in the corners) from a
+// triangle wave of the squared distance from the center, q. Inside the land ring's crest
+// (seaCrestQ) the field holds at the crest's value, so the middle of the map is all land
+// (no inner sea; lakes come from the relief). Four slow waves in four directions push the
+// coasts in and out so the ring isn't a circle.
 const seaBelow = 0.2;
-const innerSeaShrink = 0.5;
+const seaCrestQ = 0.5; // jag(q) peaks here
 const mapCenterX = gridWidthN / 2;
 const mapCenterY = gridHeightN / 2;
 const mapCornerDist = Math.sqrt(mapCenterX * mapCenterX + mapCenterY * mapCenterY);
 
 function seaFieldAt(x, y) {
   const [rx, ry] = [x - mapCenterX, y - mapCenterY].map(v => v * 1.25 / mapCornerDist);
-  let q = rx * rx + ry * ry;
-  if (q < 0.5) {
-    const t = 2 * q;
-    q = 0.5 * t * (1 + innerSeaShrink * (1 - t));
-  }
+  const q = Math.max(seaCrestQ, rx * rx + ry * ry);
   return jag(q) - 0.7 + (
     jag(x / 103) + jag(y / 109) + jag ((x + y) / 127) + jag((x - y) / 199)
   ) * 0.25
@@ -434,9 +486,15 @@ function isBlockedTile(gx, gy) {
   return obstacleAt(gx, gy) !== null;
 }
 
-// Whether the tile blocks the line of sight.
-function blocksSight(i, j) {
-  return obstacleAt(i, j) !== null;
+// How high each kind of obstacle stands above the ground at its tile's center, in levels
+// (see TERRAIN HEIGHT). The boulders' rocks are drawn 1.5 to 3 levels tall (12-25 px);
+// taken as 3, above a wolf's or a deer's eye, so a boulder hides what is behind it.
+const obstacleHeightLevels = { boulder: 3 };
+
+// How high the obstacle on tile (i, j) stands above its ground, in levels (0: none).
+function obstacleHeightAt(i, j) {
+  const o = obstacleAt(i, j);
+  return o ? obstacleHeightLevels[o] : 0;
 }
 
 // TERRAIN HEIGHT, in whole levels at tile corners; a tile's surface blends its four
@@ -576,9 +634,8 @@ function initCritter(a, species, isNewborn = false) {
   const adultS = Math.min(canAtAgeBySpecies[species].mate, a.lifespanS / 2);
   a.birthTime = g_now - (isNewborn ? 0 : randBetween(adultS, a.lifespanS / 2));
   a.uid = g_next_uid++;
-  a.isMale = Math.random() < 0.5;
-  a.adultKg = bodyKgBySpecies[species][a.isMale ? "male" : "female"];
-  updateWeight(a);
+  a.food = 1;
+  setSex(a, Math.random() < 0.5);
   a.mateUid = null;        // its partner (see BREEDING)
   a.matingWith = null;     // ...or whoever it is mating with now
   a.parentUids = [];       // the mother first, if known
@@ -589,7 +646,9 @@ function initCritter(a, species, isNewborn = false) {
   a.targetSpeed = 0;
   a.wind = 1;
   a.stamina = 1;
+  a.nursingOn = null;      // the mother it is suckling from (see BREEDING)
   a.food = isNewborn ? 1 : species === "wolf" ? wolfStartFood : randBetween(0.5, 1);
+  updateBody(a);
   randomlyPlaceCritter(a);
   critterByUid.set(a.uid, a);
   return a;
@@ -695,29 +754,30 @@ function startCritterDeath(a) {
   a.nextGX = a.gx;
   a.nextGY = a.gy;
   a.eating = false;
+  a.nursingOn = null;
   if (a.species === "deer") { // (wolves aren't eaten)
     a.carcass = newCarcass(a);
     a.carcassFullKg = carcassMeatKg(a);
+    a.carcassMJPerKg = bodyEnergyMJ(a) / a.carcassFullKg;
   }
   setPose(a, "death");
   enqDelayed("decontrol", deathDurationSBySpecies[a.species], { a: a });
 }
 
 // FOOD
-// Every critter has a food meter, a.food, 0 (empty) to 1 (full). It empties over
-// SPEEDS.foodFullS and fills by eating: a deer the grass on its tile, a wolf a carcass in
-// reach, once old enough to "eat" (and an infant by nursing: see BREEDING). An adult's
-// full meter holds SPEEDS.foodCapacityKg (meat for a wolf, dry grass for a deer); a young
-// critter's, that by its share of adult weight. A critter whose meter empties dies of
-// hunger.
+// Every critter has a food meter, a.food, 0 (empty) to 1 (full): the energy its body holds
+// (see BODY). It empties over SPEEDS.foodFullS and fills by eating: a deer the grass on its
+// tile (grassMJPerKg), a wolf a carcass in reach, once old enough to "eat" (and an infant
+// by nursing: see BREEDING). A critter whose meter empties dies of hunger.
 //
 // GRASS: every grass tile holds grass, in kg: at most SPEEDS.grassMaxKg, starting at
 // grassStartShare of that, regrowing at SPEEDS.grassRegrowKgPerS. Its HEIGHT (bare,
 // short, medium, tall) is for the view; tiles whose height changes are logged
 // (grassChangesSince) so the view redraws only those.
 //
-// CARCASSES: a dead deer's meat (SPEEDS.deerMeatKg for an adult, by weight for a young
-// one; c.carcassFullKg) is in 8 pieces. Wolves eat one piece until it is gone,
+// CARCASSES: a dead deer's meat is its body's food at its death (edibleKg: its fat and lean
+// tissue, so a starved deer is a poor meal), c.carcassFullKg, in 8 pieces, each kg of it
+// worth c.carcassMJPerKg. Wolves eat one piece until it is gone,
 // then another picked at random from those left (c.eatingPiece is shared by every wolf
 // at the carcass). The view shows each piece as meat until all of it is eaten.
 const carcassPieces = [ // name, share of the meat
@@ -736,7 +796,7 @@ const grassStartShare = 1 / 10; // the least that is still drawn short
 const grassTallFrom = 2 / 3, grassMediumFrom = 1 / 3, grassShortFrom = 1 / 10; // shares of the most
 
 function newCarcass(a) {
-  const kg = SPEEDS.deerMeatKg * a.weightKg / a.adultKg;
+  const kg = edibleKg(a);
   return Object.fromEntries(carcassPieces.map(([name, share]) => [name, share * kg]));
 }
 
@@ -826,42 +886,184 @@ function carcassInReach(a) {
 // One tick of a's meter: it empties a little, and fills if a is eating. True if a starved.
 function updateFood(a) {
   if (!isLiveCritter(a)) return false;
-  a.food = Math.max(0, a.food - tempo / SPEEDS.foodFullS[a.species]);
-  if (isInfant(a)) nurse(a);
-  if (a.eating && _can(a, "eat")) {
-    const capacity = foodCapacityKg(a);
-    let room = (1 - a.food) * capacity, bite = SPEEDS.eatKgPerS[a.species] * tempo;
+  const lasts = isInfant(a) ? SPEEDS.infantFoodFullS : SPEEDS.foodFullS;
+  a.food = Math.max(0, a.food - tempo / lasts[a.species]);
+  a.nursingOn = a.eating && isInfant(a) ? nurse(a) : null;
+  if (a.eating && a.nursingOn === null && _can(a, "eat")) {
+    const room = roomMJ(a);
+    let bite = SPEEDS.eatKgPerS[a.species] * tempo;
     if (a.species === "deer") {
       const i = Math.floor(a.gx), j = Math.floor(a.gy), k = i * gridHeightN + j;
       const kg = grassFoodAt(i, j);
-      const take = Math.min(bite, kg, room);
+      const take = Math.min(bite, kg, room / grassMJPerKg);
       if (take > 0 && !isInWater(a)) {
         setGrassKg(k, kg - take);
-        a.food += take / capacity;
+        feed(a, take * grassMJPerKg);
       }
     } else {
       const c = carcassInReach(a);
-      while (c && bite > 0 && room > 0) {
+      let roomKg = c ? room / c.carcassMJPerKg : 0;
+      while (c && bite > 0 && roomKg > 0) {
         if (!(c.carcass[c.eatingPiece] > 0)) {
           const left = carcassPieces.filter(([name]) => c.carcass[name] > 0);
           if (!left.length) break;
           c.eatingPiece = left[Math.floor(Math.random() * left.length)][0];
         }
-        const name = c.eatingPiece, take = Math.min(bite, c.carcass[name], room);
+        const name = c.eatingPiece, take = Math.min(bite, c.carcass[name], roomKg);
         c.carcass[name] -= take;
         if (c.carcass[name] < 1e-9) c.carcass[name] = 0;
-        a.food += take / capacity;
-        bite -= take; room -= take;
+        feed(a, take * c.carcassMJPerKg);
+        bite -= take; roomKg -= take;
       }
     }
-    a.food = Math.min(1, a.food);
   }
+  growFromFood(a, tempo);
+  updateBody(a);
   return a.food <= 0;
 }
 
-// A full meter's kg, by weight.
-function foodCapacityKg(a) {
-  return SPEEDS.foodCapacityKg[a.species] * a.weightKg / a.adultKg;
+// BODY: a critter is its skeleton (a.skeletonKg) and the food its body holds, fat and
+// protein (dry kg), each carrying water: fat none, protein the rest of the body's
+// (leanWaterPerKg). At a full meter it holds bodySharesBySpecies of each, as a share of a
+// whole body, for its skeleton; so its weight (a.weightKg) at a full meter is its
+// skeleton over the skeleton's share, and less as it goes hungry. Published adult
+// weights (a.adultKg) are taken as full meters. Its food value is their energy (fatMJPerKg,
+// proteinMJPerKg). Its meter is the share of the energy it holds above the lethal point
+// (no fat, lethalProteinShare of its protein): fat and protein are spent, and laid down
+// again, together.
+// GROWTH: the skeleton only grows by eating: from its birth weight's share to its adult
+// weight's, it takes a share of the energy of all it eats or suckles (skeletonMJPerKg a kg
+// of bone), so that a critter eating as it uses, and as it grows, follows a well-fed
+// critter's growth (growthSharesBySpecies at SPEEDS.growthAgesS). It never shrinks. Its
+// new tissue holds food as full as the rest: that too comes from what it eats, at
+// SPEEDS.growthCostShare (with skeletonMJPerKg). What it eats for growing is laid down
+// over time (a.growingKg, still to grow), at most growFastestRatio times as fast as a
+// well-fed critter grows (growFromFood), so a meal never makes it grow at a stroke.
+const skeletonMJPerKg = 4; // estimate: bone's protein, and laying down its mineral
+const growFastestRatio = 2; // the fastest it grows, over a well-fed critter's pace (estimate)
+const bodyPerSkeletonKg = Object.fromEntries(Object.entries(bodySharesBySpecies).map(([sp, b]) => [sp, {
+  fat: b.fat / b.skeleton, protein: b.protein / b.skeleton,
+  leanWaterPerKg: (1 - b.fat - b.protein - b.skeleton) / b.protein,
+}]));
+
+// MJ a kg of skeleton holds, from empty to full and at empty (the lethal point).
+function energyRangePerKg(species) {
+  const b = bodySharesBySpecies[species];
+  return (b.fat * fatMJPerKg + b.protein * (1 - lethalProteinShare) * proteinMJPerKg) / b.skeleton;
+}
+function energyFloorPerKg(species) {
+  const b = bodySharesBySpecies[species];
+  return b.protein * lethalProteinShare * proteinMJPerKg / b.skeleton;
+}
+
+function energyRangeMJ(a) { return energyRangePerKg(a.species) * a.skeletonKg; }
+function roomMJ(a) { return (1 - a.food) * energyRangeMJ(a); }
+
+// Its fat and protein, dry kg.
+function fatKg(a) { return a.food * bodyPerSkeletonKg[a.species].fat * a.skeletonKg; }
+function proteinKg(a) {
+  return (lethalProteinShare + (1 - lethalProteinShare) * a.food) * bodyPerSkeletonKg[a.species].protein * a.skeletonKg;
+}
+// Its fat and lean tissue (with their water), kg: what a wolf eats of it, dead.
+function edibleKg(a) { return fatKg(a) + proteinKg(a) * (1 + bodyPerSkeletonKg[a.species].leanWaterPerKg); }
+function bodyWeightKg(a) { return edibleKg(a) + a.skeletonKg; }
+function bodyEnergyMJ(a) { return fatKg(a) * fatMJPerKg + proteinKg(a) * proteinMJPerKg; }
+
+// Its sex, and the skeletons that go with it: a newborn's, or its age's (well fed).
+function setSex(a, isMale) {
+  a.isMale = isMale;
+  const sex = isMale ? "male" : "female", kg = bodyKgBySpecies[a.species], share = bodySharesBySpecies[a.species].skeleton;
+  a.adultKg = kg[sex];
+  a.birthSkeletonKg = kg.birth[sex] * share;
+  a.adultSkeletonKg = kg[sex] * share;
+  setSkeletonByAge(a);
+}
+
+// Critter a takes in mj of food: a share grows its skeleton, the rest fills its meter (up
+// to full; the rest is lost).
+function feed(a, mj) {
+  if (a.skeletonKg < a.adultSkeletonKg) {
+    // a well-fed critter's skeleton growth now (kg a second), and what it eats meanwhile
+    const v = growthKgPerS(a);
+    const range = energyRangePerKg(a.species), floor = energyFloorPerKg(a.species);
+    const lasts = isInfant(a) ? SPEEDS.infantFoodFullS : SPEEDS.foodFullS;
+    const share = SPEEDS.growthCostShare;
+    const eats = range * a.skeletonKg / lasts[a.species] + v * (range + floor + skeletonMJPerKg) * share;
+    const grow = Math.min(mj * v / eats, a.adultSkeletonKg - a.skeletonKg - a.growingKg);
+    if (grow > 0) { // its new bone, and the food it will hold as full as the rest
+      a.growingKg += grow;
+      mj -= grow * (floor + a.food * range + skeletonMJPerKg) * share;
+    }
+  }
+  a.food = Math.min(1, a.food + mj / energyRangeMJ(a));
+}
+
+// dt seconds of a laying down what it ate for growing.
+function growFromFood(a, dt) {
+  if (!(a.growingKg > 0)) return;
+  const kg = Math.min(a.growingKg, growFastestRatio * growthKgPerS(a) * dt);
+  a.skeletonKg += kg;
+  a.growingKg -= kg;
+}
+
+// How fast a well-fed critter's skeleton grows at a's size, kg a second.
+function growthKgPerS(a) {
+  const ages = SPEEDS.growthAgesS[a.species], shares = growthSharesBySpecies[a.species];
+  const p = growthProgress(a);
+  let k = 1;
+  while (k < shares.length - 1 && shares[k] <= p) k++;
+  return (shares[k] - shares[k - 1]) / (ages[k] - ages[k - 1]) * (a.adultSkeletonKg - a.birthSkeletonKg);
+}
+
+// SCENT AND WIND
+// SCENT TRAILS: every live critter on dry land marks the tile under it with its species'
+// scent each tick: the tile keeps when it was last marked by each species, and by whom.
+// Scent fades: at age t its strength is 2^(-t / SPEEDS.scentHalfLifeS) (senses.js decides
+// how faint a scent each critter can still smell). Water holds no scent.
+// WIND: one breeze over the whole map, blowing toward the unit vector (windX, windY); every
+// SPEEDS.windChangeEveryS it turns by up to windTurnMaxRad either way. It carries critters'
+// scent downwind (see senses.js).
+const scentSpecies = ["wolf", "deer"];
+const windTurnMaxRad = Math.PI / 6;
+let scentTime = null, scentUid = null; // by species: by tile index, game time and uid of the last mark
+let windAngle = Math.random() * 2 * Math.PI;
+let windX = Math.cos(windAngle), windY = Math.sin(windAngle);
+
+function initScent() {
+  scentTime = {}; scentUid = {};
+  for (const sp of scentSpecies) {
+    scentTime[sp] = new Float64Array(gridWidthN * gridHeightN).fill(-Infinity);
+    scentUid[sp] = new Int32Array(gridWidthN * gridHeightN).fill(-1);
+  }
+}
+
+function markScent() {
+  for (const a of allCritters) {
+    if (!isLiveCritter(a) || isInWater(a)) continue;
+    const i = Math.floor(a.gx), j = Math.floor(a.gy);
+    if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) continue;
+    const k = i * gridHeightN + j;
+    scentTime[a.species][k] = g_now;
+    scentUid[a.species][k] = a.uid;
+  }
+}
+
+// The latest scent of species on tile (i, j): { ageS, uid }, or null if none.
+function scentAt(i, j, species) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return null;
+  const k = i * gridHeightN + j, t = scentTime[species][k];
+  return t === -Infinity ? null : { ageS: g_now - t, uid: scentUid[species][k] };
+}
+
+function shiftWind() {
+  setWind(windAngle + (Math.random() * 2 - 1) * windTurnMaxRad);
+}
+
+// The wind blows toward angle (radians, from grid E toward grid S).
+function setWind(angle) {
+  windAngle = angle;
+  windX = Math.cos(windAngle);
+  windY = Math.sin(windAngle);
 }
 
 // BREEDING
@@ -878,21 +1080,18 @@ function foodCapacityKg(a) {
 // conceives, and after gestationS, once on land, gives birth beside herself:
 // a litter (litterBySpecies) whose parents are her, the father and her partner, while
 // alive; young that don't fit within birthSearchTiles of her are stillborn.
-// GROWTH: a critter weighs a.weightKg, going from its species' birth weight to its sex's
-// adult weight (a.adultKg) by growthSharesBySpecies at SPEEDS.growthAgesS.
-// NURSING: an infant (not yet weaned) within nurseReachTiles of its mother, neither in
-// water, fills its meter from hers at the species' eating rate.
+// GROWTH: see BODY.
+// NURSING: an infant's (not yet weaned) meter empties in SPEEDS.infantFoodFullS. Eating
+// (the EAT intent) while touching its mother (boxes within nurseContactTiles), neither in
+// water, it suckles instead of eating anything else: its meter fills in SPEEDS.nurseFullS,
+// and a.nursingOn is her uid (else null). The milk's energy leaves her meter, over
+// milkEfficiency; her share still falls by far less than its share rises (her meter
+// holds far more). She keeps nurseMotherMinFood of her own.
 // The mind (mind.js) decides who courts whom; the simulation only checks that a pairing
 // is possible (canPair).
 
-// Body weights, kg: at birth, and adult by sex. Wolf: 0.3-0.5 kg at birth (San Diego Zoo
-// Wildlife Alliance); adults average 41 (female) and 50 (male) in Yellowstone (NPS). Red
-// deer: estimates for European red deer.
-const bodyKgBySpecies = {
-  wolf: { birth: 0.4, female: 41, male: 50 },
-  deer: { birth: 8, female: 100, male: 160 },
-};
-// Shares of the way from birth to adult weight at SPEEDS.growthAgesS (see GAME SPEEDS).
+// Shares of the way from birth to adult skeleton at SPEEDS.growthAgesS, for a well-fed
+// critter (see BODY and GAME SPEEDS).
 const growthSharesBySpecies = {
   wolf: [0, 0.06, 0.19, 0.73, 1],
   deer: [0, 0.35, 0.5, 0.75, 1],
@@ -904,7 +1103,8 @@ const litterBySpecies = {
   deer: { base: 1, tries: 1, chance: 0.005 },
 };
 const mateReachTiles = 1.5;   // center to center
-const nurseReachTiles = 1.5;
+const nurseContactTiles = 0.15; // the most gap between boxes that still counts as touching
+const nurseMotherMinFood = 0.25;
 const birthSearchTiles = 3;
 const critterByUid = new Map(); // every critter in play (not corpses)
 
@@ -939,15 +1139,24 @@ function growthShare(species, age) {
   return shares[k - 1] + (shares[k] - shares[k - 1]) * (age - ages[k - 1]) / (ages[k] - ages[k - 1]);
 }
 
-function updateWeight(a) {
-  const birthKg = bodyKgBySpecies[a.species].birth;
-  a.weightKg = birthKg + (a.adultKg - birthKg) * growthShare(a.species, Math.max(0, ageS(a)));
+// Its skeleton as a well-fed critter's of its age (for critters placed at the start, and
+// tests).
+function setSkeletonByAge(a) {
+  a.skeletonKg = a.birthSkeletonKg + (a.adultSkeletonKg - a.birthSkeletonKg) * growthShare(a.species, Math.max(0, ageS(a)));
+  a.growingKg = 0;
+  updateBody(a);
+}
+
+// Its weight and collision box, after its meter or skeleton changed.
+function updateBody(a) {
+  a.weightKg = bodyWeightKg(a);
   const stage = youngStage(a);
   a.boxRad = stage && stage <= smallBoxStages ? critterBoxRad * youngScales[stage - 1] : critterBoxRad;
 }
 
-// SIZES: a critter's size is the cube root of its share of adult weight, in one of 5
-// classes: adult (0), or young stages 1 (smallest) to 4, sized youngScales of an adult.
+// SIZES: by its skeleton's share of the way from birth to adult (growthProgress), taken as
+// its size cubed, in one of 5 classes: young stages 1 (smallest, every newborn) to 4,
+// sized youngScales of an adult, or adult (0).
 // Each stage starts halfway (in size) from the one below; the thresholds are cubed, so no
 // cube root is taken. The view draws each class from its own sprite set (animat.js, YOUNG
 // STAGES). The smallest smallBoxStages stages have collision boxes (a.boxRad) shrunk to
@@ -958,20 +1167,28 @@ const smallBoxStages = 2;
 
 // 1 (smallest) to 4, or 0 for adult size.
 function youngStage(a) {
-  const share = a.weightKg / a.adultKg;
+  const share = growthProgress(a);
   for (let k = 0; k < youngStageBelowShare.length; k++) if (share < youngStageBelowShare[k]) return k + 1;
   return 0;
 }
 
+// 0 at birth to 1 grown.
+function growthProgress(a) {
+  return (a.skeletonKg - a.birthSkeletonKg) / (a.adultSkeletonKg - a.birthSkeletonKg);
+}
+
+// One tick of infant a suckling, if it is touching its mother: her uid, or null.
 function nurse(a) {
   const mother = critterByUid.get(a.parentUids[0]);
-  if (!mother || !isLiveCritter(mother) || isInWater(a) || isInWater(mother)) return;
-  if ((mother.gx - a.gx) ** 2 + (mother.gy - a.gy) ** 2 > nurseReachTiles * nurseReachTiles) return;
-  const capacity = foodCapacityKg(a), motherCapacity = foodCapacityKg(mother);
-  const take = Math.min(SPEEDS.eatKgPerS[a.species] * tempo, (1 - a.food) * capacity, mother.food * motherCapacity);
-  if (!(take > 0)) return;
-  a.food = Math.min(1, a.food + take / capacity);
-  mother.food = Math.max(0, mother.food - take / motherCapacity);
+  if (!mother || !isLiveCritter(mother) || isInWater(a) || isInWater(mother)) return null;
+  const reach = a.boxRad + mother.boxRad + nurseContactTiles;
+  if (Math.abs(mother.gx - a.gx) > reach || Math.abs(mother.gy - a.gy) > reach) return null;
+  const mj = Math.min(energyRangeMJ(a) * tempo / SPEEDS.nurseFullS[a.species], roomMJ(a),
+    (mother.food - nurseMotherMinFood) * energyRangeMJ(mother) * milkEfficiency);
+  if (!(mj > 0)) return null;
+  mother.food -= mj / milkEfficiency / energyRangeMJ(mother);
+  feed(a, mj);
+  return mother.uid;
 }
 
 // Starts every mating that both critters intend and that can happen now.
@@ -1222,6 +1439,7 @@ function setCritterHeading(a, hx, hy, newPose = "walk", facing = undefined) {
     if (newPose === "trot" && !canUseGait(a, "trot", a.pose === "trot"))
       newPose = "walk";
     a.landPose = newPose;
+    if (a.climbingUntil > g_tick && newPose !== "idle") newPose = "walk"; // still scrambling up a bank
   }
   const speed = newPose === "swim" ? swimSpeed(a) : travelSpeedBySpeciesAndPose[a.species][newPose];
   // A swimmer can change speed (sprinting or not) in the same pose, and a stunned one
@@ -1324,7 +1542,10 @@ function applyExertion(a) {
 // a swimmer out of stamina can't move.
 // A critter below SPEEDS.swimMinStaminaFrac stamina may not enter the water, except the
 // player's wolf while the player steers it: such a move is blocked like a boulder.
-// a.landPose is the land gait last asked for, resumed on climbing out.
+// a.landPose is the land gait last asked for, resumed on climbing out. A critter climbing
+// out up a bank higher than one step (bankAboveStep) is held to a walk for
+// SPEEDS.climbOutSlowS (until a.climbingUntil). Out of the water, any critter speeds up
+// as on land (SPEED CHANGES), from its swimming speed.
 // TODO: rescue (or drown) a swimmer out of stamina; for now it can only starve.
 
 // a.waterState caches the answer for one position. moveAllTogether fills it from what
@@ -1364,6 +1585,8 @@ function updateTerrainPose(a) {
     a.targetSpeed = swimSpeed(a);
   } else if (!inWater && a.pose === "swim") {
     a.swimBurst = false;
+    const slow = SPEEDS.climbOutSlowS[a.species];
+    if (slow && bankAboveStep(a)) a.climbingUntil = g_tick + Math.round(slow / tempo);
     const resume = a.landPose || "walk";
     if (a.targetSpeed > 0 && resume !== "idle") {
       setPose(a, null); // so setCritterHeading applies the gait and its checks
@@ -1372,6 +1595,16 @@ function updateTerrainPose(a) {
       setCritterIdle(a);
     }
   }
+}
+
+// Whether the land critter a is climbing onto rises more than one step above the water:
+// the water's surface is a level below level-0 land, so a tile (of those its box touches)
+// with any corner above level 0 is a bank higher than the smallest step.
+function bankAboveStep(a) {
+  return getOccupiedTiles(a.gx, a.gy, a.boxRad).some(tile => {
+    const c = tileCorners(...tile.split("_").map(Number));
+    return c[0] > 0 || c[1] > 0 || c[2] > 0 || c[3] > 0;
+  });
 }
 
 // Whether critter a could go straight to (gx, gy): inside the map, its box touching no
@@ -1429,6 +1662,9 @@ function updateAllCritters() {
   allCritters.forEach(a => { if (updateFood(a)) starved.push(a); });
 
   allCritters.forEach(a => {
+    // done scrambling up a bank: back to the gait it was asked for
+    if (a.climbingUntil === g_tick && a.pose === "walk" && a.landPose !== "walk" && a.targetSpeed > 0)
+      setCritterHeading(a, a.hx, a.hy, a.landPose);
     applyExertion(a);
     if (a.pose === "swim" && a.targetSpeed === 0 && !(a.stunnedUntil > g_tick)) a.targetSpeed = swimSpeed(a);
     changeSpeed(a);
@@ -1463,9 +1699,10 @@ function updateAllCritters() {
   starved.forEach(a => { if (isLiveCritter(a) && allCritters.includes(a)) startCritterDeath(a); });
   allCritters.filter(a => a.pregnancy && g_now >= a.pregnancy.dueAt && isLiveCritter(a)
     && !isMating(a) && !isInWater(a)).forEach(giveBirth);
+  markScent();
+  if (g_tick % Math.round(SPEEDS.windChangeEveryS / tempo) === 0) shiftWind();
   if (g_tick % grassGrowEveryTicks === 0) {
     growGrass(grassGrowEveryTicks * tempo);
-    allCritters.forEach(updateWeight);
   }
 }
 
@@ -1750,6 +1987,7 @@ function init() {
   if (isInitialized) return alert("sim.init called twice");
   isInitialized = true;
   initGrass();
+  initScent();
   wolves.forEach(wolf => { allCritters.push(initCritter(wolf, "wolf")); });
   deer.forEach(aDeer => { allCritters.push(initCritter(aDeer, "deer")); });
   // half of each species male, at random (but the player's wolf, either)
@@ -1760,9 +1998,7 @@ function init() {
       [sexes[k], sexes[r]] = [sexes[r], sexes[k]];
     }
     list.forEach((a, k) => {
-      a.isMale = sexes[k];
-      a.adultKg = bodyKgBySpecies[a.species][a.isMale ? "male" : "female"];
-      updateWeight(a);
+      setSex(a, sexes[k]);
     });
   }
   forbidOverlapsOnStart();
@@ -1781,8 +2017,8 @@ function start({ consoleOnly = false } = {}) {
 // Views and controllers read critters' fields directly (gx, gy, pose, poseTick,
 // currentDirection (the facing), hx, hy (the heading), speed, targetSpeed, species, wind,
 // stamina, food, eating, carcass, carcassFullKg, uid, blockedTick, stunnedUntil, isMale,
-// birthTime, deathTime, weightKg, adultKg, boxRad, mateUid, matingWith, parentUids, youngUids,
-// pregnancy)
+// birthTime, deathTime, weightKg, adultKg, skeletonKg, boxRad, mateUid, matingWith, parentUids, youngUids,
+// pregnancy, nursingOn)
 // but change the world only through these functions.
 return {
   // lifecycle and time
@@ -1796,7 +2032,10 @@ return {
   // the world
   gridWidthN, gridHeightN, getTerrainAt, obstacleAt,
   tileCorners, heightAt, get maxLevel() { return maxLevel; },
-  isBlockedTile, isLandTile, isWaterAt, canStepTo, blocksSight, isLiveCritter,
+  isBlockedTile, isLandTile, isWaterAt, canStepTo, obstacleHeightAt, isLiveCritter,
+  // scent and wind
+  scentAt, get wind() { return { x: windX, y: windY }; },
+  get scentHalfLifeS() { return SPEEDS.scentHalfLifeS; },
   allCritters, allCorpses, deathDurationSBySpecies,
   get pcWolf() { return pcWolf; },    // the player's wolf, or its corpse (see THE PLAYER'S WOLF)
   get speeds() { return SPEEDS.name; },
@@ -1804,9 +2043,11 @@ return {
   // food
   grassFoodAt, grassHeightAt, grassChangesSince, carcassPieces, carcassMeatKg, eatReachTiles,
   get grassMaxKg() { return SPEEDS.grassMaxKg; },
-  get deerMeatKg() { return SPEEDS.deerMeatKg; },
+  edibleKg, bodySharesBySpecies,
   // ages and breeding
   can: _can, isGrown, isInfant, isFertile, inHeat, mateReachTiles, youngStage, youngScales,
+  adultBoxRad: critterBoxRad, nurseContactTiles, nurseMotherMinFood,
+  get nurseFullS() { return SPEEDS.nurseFullS; },
   mateActSBySpecies: Object.fromEntries(Object.entries(SPEEDS.breeding).map(([sp, b]) => [sp, b.mateActS])),
 
   // intents
@@ -1820,8 +2061,8 @@ return {
     forbidOverlapsOnStart, critterBoxRad, travelSpeedBySpeciesAndPose,
     REALISTIC, GAMIFIED, SPEEDS, drawLifespanS, startCritterDeath, growGrass, setGrassKg, stun,
     windRefillHalfLifeSByPose, staminaFullRefillSByPose, maxStepLevels,
-    critterByUid, bodyKgBySpecies, growthShare, updateWeight, litterSize, birthSpots, giveBirth,
-    conceive, pair, foodCapacityKg, canPair,
+    critterByUid, bodyKgBySpecies, growthShare, litterSize, birthSpots, giveBirth,
+    conceive, pair, energyRangeMJ, feed, growFromFood, milkEfficiency, canPair, setWind, growthProgress, growthKgPerS, setSkeletonByAge, updateBody,
     get loopHandle() { return loopHandle; },
   },
 };

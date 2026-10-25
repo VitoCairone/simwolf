@@ -75,7 +75,7 @@ async function makeStags(page) {
     c.pregnancy = null;
     c.lifespanS = 1e9;
     c.birthTime = Math.min(c.birthTime, sim.now - sim.internals.SPEEDS.lifeStageAgesS.deer.mate.max);
-    sim.internals.updateWeight(c);
+    sim.internals.setSkeletonByAge(c);
   }));
 }
 

@@ -122,5 +122,5 @@ async function main(browser, r) {
   await soak.close();
 }
 
-module.exports = { name: "bug fixes (round 1)", main };
+module.exports = { name: "bug fixes (round 1)", main, slow: true }; // (see SPEED in run-all.js)
 if (require.main === module) runStandalone(module.exports.name, main);

@@ -20,11 +20,15 @@
 // DECISIONS, in order of priority:
 //   a tired swimmer heads for land (toShore)
 //   a deer flees wolves it remembers (decideDeer)
-//   a wolf eats a carcass it knows of while not full (decideWolf)
+//   a wolf eats a carcass it knows of while not full (decideWolf), but an infant suckles
+//     first
+//   a mother stands still while young suckle from her; an infant suckles while hungry
+//     (nursing)
 //   while its meter is above romanceAbove, a grown critter courts and mates, or mates
 //     with its partner in heat (social, romance only)
 //   a deer grazes while hungry (graze); a wolf hunts while hungry and weaned, waiting on
-//     the shore for prey in the water (waitAshore)
+//     the shore for prey in the water (waitAshore), or with no prey in mind follows deer
+//     trails (track)
 //   mates and family (social): courting and mating as above, at any hunger; keeping near
 //     a partner or infants; the young keep near a parent
 //   anything else wanders (calm)
@@ -49,6 +53,7 @@ const deerFullAt = 0.99;         // ...and grazes until it is this full
 // on tiles they have just cropped.
 const deerBiteShare = 0.1;
 const deerGrazeLookShare = 0.25; // looks this share of its sight for grass first, then all of it
+const grazeLosChecks = 40;       // ...checking line of sight to at most this many, best first
 const wolfHuntBelow = 0.75;      // a wolf hunts only with its food meter below this
 const wolfFullAt = 0.99;         // ...and eats until it is this full
 const wolfForgetPreyS = 20;      // gives up on prey it last saw this long ago
@@ -68,6 +73,11 @@ const mateCloseTiles = 1.2;      // stands ready to mate this near (center to ce
 const courtGiveUpS = 30;         // gives up courting one that hasn't mated after this long...
 const courtRetryS = 120;         // ...and leaves it be this long
 const pairStayTiles = 6;         // a paired male keeps within this of his partner
+const suckleBelow = 0.8;         // an infant goes to suckle with its meter below this...
+const suckleFullAt = 0.99;       // ...and suckles until it is this full
+const suckleTouchTiles = 0.1;    // stops this near touching its mother (box to box)
+const suckleGraceS = 0.6;        // getting nothing this long (longer than a stun)...
+const suckleRetryS = 5;          // ...it tries again after this long
 const motherStayTiles = 4;       // a mother keeps within this of her infants
 const followParentTiles = 3;     // the young keep within this of a parent
 const kinLostTiles = 2;          // kin not where last seen, this near: lost until seen again
@@ -115,7 +125,7 @@ function memoryOf(a) {
       familiar: new Set(),    // uids of its species met while it or they were infants
       court: null,            // the critter it is courting: { uid, since }
       refused: new Map(),     // uid -> courting it again only after this tick
-      mode: "calm",           // calm | flee | chase | wait | feed | graze | ashore | court | mate | family
+      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | ashore | court | mate | family | nurse
       target: null,           // a wolf's prey (uid)
       targetUntil: -Infinity, // ...kept until this tick at least
       flee: null,             // a deer's way to flee: { dx, dy, until, since }
@@ -123,6 +133,9 @@ function memoryOf(a) {
       watch: null,            // a wolf waiting ashore: { i, j, way (its prey's tile and way), spot }
       shore: null,            // a tired swimmer's land: { gx, gy, blockedTurns }
       grazing: false,         // a deer grazing (from hungry until full)
+      suckle: null,           // an infant suckling: { food (its meter at its last turn
+                              // touching her, or null), since (the last tick it rose), retry
+                              // (not again before this tick) }
       grazeTo: null,          // ...the tile it is walking to, [i, j]
       cropping: null,         // ...the tile it is eating, [i, j]
       plan: null,             // a calm critter's plan: { kind, until, intent, ... }
@@ -139,22 +152,28 @@ function memoryOf(a) {
   return m;
 }
 
-// MEMORY: the latest sighting of every creature a critter has perceived (where, which
-// way and how fast, whether alive, swimming, the meat left on a carcass, its sex, age
-// and partner, whether in heat, and when), kept after losing sight of it until too old
-// to matter; its kin's (partner, parents, young) for good.
+// MEMORY: the latest perception of every creature a critter has seen, heard or smelled
+// (k.seenTick, by k.by: where, which way and how fast, whether alive, swimming, the meat
+// left on a carcass, and, from when it was last seen, its sex, age and partner and whether
+// in heat), kept after losing track of it until too old to matter; its kin's (partner,
+// parents, young) for good.
 // WESTERMARCK: it never forgets those of its species it met while it or they were
 // infants (m.familiar), and never mates with them.
 function remember(a, m, now) {
   const selfInfant = sim.isInfant(a);
   for (const o of senses.perceive(a)) {
     const before = m.known.get(o.uid);
+    // what only sight tells is kept from the last time it was seen
+    const seen = o.by === "sight", old = before || {};
     m.known.set(o.uid, { species: o.species, alive: o.alive, gx: o.gx, gy: o.gy,
-      vx: o.vx, vy: o.vy, swimming: o.swimming, meat: o.meat, seenTick: now,
-      isMale: o.isMale, infant: o.infant, grown: o.grown, mateUid: o.mateUid, inHeat: o.inHeat,
-      // in sight since now, unless it was in sight at its last turn too
+      vx: o.vx, vy: o.vy, swimming: o.swimming ?? old.swimming, meat: o.meat ?? old.meat,
+      seenTick: now, by: o.by,
+      isMale: seen ? o.isMale : old.isMale, infant: seen ? o.infant : old.infant,
+      grown: seen ? o.grown : old.grown, mateUid: seen ? o.mateUid : old.mateUid,
+      inHeat: seen ? o.inHeat : old.inHeat, nursingOnMe: !!o.nursingOnMe,
+      // perceived since now, unless it was at its last turn too
       sightedTick: before && before.seenTick === m.lastTurn ? before.sightedTick : now });
-    if (o.species === a.species && (selfInfant || o.infant)) m.familiar.add(o.uid);
+    if (seen && o.species === a.species && (selfInfant || o.infant)) m.familiar.add(o.uid);
   }
   const longest = ticks(Math.max(deerAlarmS, wolfForgetPreyS));
   for (const [uid, k] of m.known) {
@@ -292,6 +311,8 @@ function decideDeer(a, m, now) {
   }
   if (!threats) {
     m.flee = null;
+    const nursing = nurseOrSuckle(a, m, now);
+    if (nursing) return nursing;
     const romance = a.food > romanceAbove && social(a, m, now, true);
     if (romance) return romance;
     const grazing = graze(a, m, now);
@@ -338,21 +359,23 @@ function graze(a, m, now) {
   m.cropping = null;
   const at = m.grazeTo && grass.find(g => g.i === m.grazeTo[0] && g.j === m.grazeTo[1] && g.kg >= worth);
   if (!at) {
-    let best = null, bestScore = Infinity;
+    // the best it can see (in line of sight: checked for the best few, nearest first)
+    const options = [];
     for (const g of grass) {
       if (g.kg < worth) continue;
       const d2 = (g.i + 0.5 - a.gx) ** 2 + (g.j + 0.5 - a.gy) ** 2;
-      const score = d2 + (g.kg >= sim.grassMaxKg / 2 ? 0 : 1e6);
-      if (score < bestScore) { best = g; bestScore = score; }
+      options.push({ g, score: d2 + (g.kg >= sim.grassMaxKg / 2 ? 0 : 1e6) });
     }
+    options.sort((p, q) => p.score - q.score);
+    const best = options.slice(0, grazeLosChecks).find(o => senses.canSeeTile(a, o.g.i, o.g.j));
     if (!best) { m.grazeTo = null; return null; }
-    m.grazeTo = [best.i, best.j];
+    m.grazeTo = [best.g.i, best.g.j];
   }
   return move(a, m, m.grazeTo[0] + 0.5 - a.gx, m.grazeTo[1] + 0.5 - a.gy, "walk", now);
 }
 
 // WOLVES eat first: while not full (and old enough to eat), the nearest carcass with meat
-// it saw within wolfForgetPreyS. Otherwise they hunt while hungry, once weaned (pups stay
+// it perceived within wolfForgetPreyS (seen, or smelled on the wind). Otherwise they hunt while hungry, once weaned (pups stay
 // with their family and eat what it kills). Of the deer it knows, a wolf picks
 // the nearest, or among those about as near, the one most straight ahead; then keeps to
 // it for wolfCommitS (unless a deer in sight is much nearer) and after that changes only
@@ -360,6 +383,9 @@ function graze(a, m, now) {
 // where it should be by now, then on the way it went, searching. A deer searched for and
 // not found is lost until seen again.
 function decideWolf(a, m, now) {
+  // an infant suckles rather than goes to a carcass
+  const suckling = sim.isInfant(a) && nurseOrSuckle(a, m, now);
+  if (suckling) return suckling;
   if (a.food < wolfFullAt && sim.can(a, "eat")) {
     let carcass = null, bestD2 = Infinity;
     for (const k of m.known.values()) {
@@ -373,6 +399,8 @@ function decideWolf(a, m, now) {
       return move(a, m, carcass.gx - a.gx, carcass.gy - a.gy, "trot", now);
     }
   }
+  const nursing = nurseOrSuckle(a, m, now);
+  if (nursing) { m.target = null; m.searching = false; m.watch = null; return nursing; }
   const romance = a.food > romanceAbove && social(a, m, now, true);
   if (romance) { m.target = null; m.searching = false; m.watch = null; return romance; }
   if (a.food >= wolfHuntBelow || sim.isInfant(a)) {
@@ -418,7 +446,10 @@ function decideWolf(a, m, now) {
     } else if (choice.d2 < wolfSwitchRatio * d2) choose(choice);
   }
   target = m.target !== null ? m.known.get(m.target) : undefined;
-  if (!target) { m.searching = false; return settle(a, m, now); }
+  if (!target) {
+    m.searching = false;
+    return track(a, m, now) || settle(a, m, now);
+  }
 
   m.plan = null;
   if (target.swimming) {
@@ -438,12 +469,27 @@ function decideWolf(a, m, now) {
   if (age > 0 && dx * dx + dy * dy < 4) m.searching = true;
   if (m.searching) {
     if (target.vx === 0 && target.vy === 0) { // it was standing still, and isn't here
-      target.lost = true; m.target = null; m.searching = false; m.mode = "calm"; return calm(a, m, now);
+      target.lost = true; m.target = null; m.searching = false; m.mode = "calm"; return track(a, m, now) || calm(a, m, now);
     }
     dx = target.vx; dy = target.vy;
   }
   const close = age === 0 && dx * dx + dy * dy < wolfGallopWithinTiles * wolfGallopWithinTiles;
   return move(a, m, dx, dy, close ? "gallop" : "trot", now);
+}
+
+// TRACKING: a hungry wolf with no prey in mind follows deer trails (senses.trailsAround):
+// it trots to the freshest deer scent within its nose's reach (but its own tile), so along
+// a trail it goes the way the deer went, until it perceives one. null if it smells none.
+function track(a, m, now) {
+  const i = Math.floor(a.gx), j = Math.floor(a.gy);
+  let best = null;
+  for (const t of senses.trailsAround(a, "deer")) {
+    if (t.i === i && t.j === j) continue;
+    if (!best || t.ageS < best.ageS) best = t;
+  }
+  if (!best) return null;
+  m.mode = "track"; m.plan = null;
+  return move(a, m, best.i + 0.5 - a.gx, best.j + 0.5 - a.gy, "trot", now);
 }
 
 // A wolf doesn't follow prey k into the water (nor can it kill it there): it trots,
@@ -480,7 +526,7 @@ function landingAhead(a, k) {
     const i = Math.floor(k.gx + sx * n), j = Math.floor(k.gy + sy * n);
     if (i === pi && j === pj) continue;
     pi = i; pj = j;
-    if (!senses.inSight(i + 0.5 - a.gx, j + 0.5 - a.gy)) return null;
+    if (!senses.canSeeTile(a, i, j)) return null;
     if (sim.isLandTile(i, j)) return [i + 0.5, j + 0.5];
     if (sim.getTerrainAt(i, j) !== "water") return null;
   }
@@ -488,6 +534,43 @@ function landingAhead(a, k) {
 }
 
 // With nothing more pressing: mates and family, else wander.
+// NURSING: a mother that feels young suckling from her (by touch) stands still, carrying
+// on eating if she was. An infant suckles from when its meter falls below suckleBelow
+// until suckleFullAt: goes to its mother where it knows her to be (trotting while 3 tiles
+// off) and, touching her (box within suckleTouchTiles of hers) and perceiving her now,
+// eats, which the simulation makes suckling. Getting nothing for suckleGraceS (its meter
+// not rising: she has none to spare, say), it leaves off for suckleRetryS. An intent, or null.
+function nurseOrSuckle(a, m, now) {
+  if (!a.isMale && a.youngUids.some(uid => { const k = m.known.get(uid); return k && k.nursingOnMe && k.seenTick === now; })) {
+    m.mode = "nurse"; m.plan = null;
+    return m.intent === EAT ? EAT : IDLE;
+  }
+  if (!sim.isInfant(a) || a.pose === "swim") { m.suckle = null; return null; }
+  const s = m.suckle;
+  if (s && (a.food >= suckleFullAt || s.retry > now)) { if (a.food >= suckleFullAt) m.suckle = null; return null; }
+  if (!s && a.food >= suckleBelow) return null;
+  if (!s) m.suckle = { food: null, since: null, retry: -Infinity };
+  const k = a.parentUids.length ? m.known.get(a.parentUids[0]) : undefined;
+  if (!k || !k.alive || k.lost || k.swimming) { m.suckle.food = null; return null; }
+  const dx = k.gx - a.gx, dy = k.gy - a.gy, d2 = dx * dx + dy * dy;
+  const reach = a.boxRad + sim.adultBoxRad + suckleTouchTiles;
+  if (k.seenTick === now && Math.abs(dx) <= reach && Math.abs(dy) <= reach) {
+    if (m.suckle.food !== null && !(a.food > m.suckle.food)) {
+      if (now - m.suckle.since > ticks(suckleGraceS)) {
+        m.suckle = { food: null, since: null, retry: now + ticks(suckleRetryS) };
+        return null;
+      }
+    } else m.suckle.since = now;
+    m.suckle.food = a.food;
+    m.mode = "nurse"; m.plan = null;
+    return EAT;
+  }
+  m.suckle.food = null;
+  if (k.seenTick !== now && d2 <= kinLostTiles * kinLostTiles) { k.lost = true; return null; }
+  m.mode = "nurse"; m.plan = null;
+  return move(a, m, dx, dy, d2 > 9 ? "trot" : "walk", now);
+}
+
 function settle(a, m, now) {
   const s = social(a, m, now);
   if (s) return s;
@@ -652,7 +735,7 @@ function findNearestLand(a, gx, gy, maxR = Infinity) {
     if (best && r >= 1 && best.distL2 <= sq(r - 1)) break;
     for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
       if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue;
-      if (!senses.inSight(i + 0.5 - a.gx, j + 0.5 - a.gy) || !sim.isLandTile(i, j)) continue;
+      if (!sim.isLandTile(i, j) || !senses.canSeeTile(a, i, j)) continue;
       const d = distToTileL2(i, j);
       if (!best || d < best.distL2) best = { tile: [i, j], distL2: d };
     }
