@@ -2,6 +2,9 @@
 """The deer carcass: its 8 pieces of meat, each drawn either whole or as its bones, and a
 shadow under it.
 
+PLACEHOLDER: derived from the AI-generated deer death (make_deer_death.py), not canonical
+(admin/design_notes.md).
+
     images/stag-walk-idle-run.png  ->  images/deer-carcass.png
 
 Usage (from anywhere; needs Python 3 with Pillow):

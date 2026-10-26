@@ -38,3 +38,21 @@ available to it:
 The simulation (`sim.js`) may use the whole world's state to apply physics (collisions,
 eating what is in reach, nursing, a mating both critters intend), but it never decides
 for a critter. Decisions belong to the mind, which sees only through the senses.
+
+## Placeholder art (not canonical)
+
+Some sprites were not drawn by the artist (Scrabling, see ART_CREDIT.txt) and must be
+replaced. Don't treat them as canonical: don't copy their style, and don't derive new
+art from them.
+
+- **Deer death.** The artist drew no death frames for deer. The death animation in
+  `images/stag-death.png` (and `hind-death.png`, `young/hind-death-stage*.png`) was
+  AI-generated (`spritecraft/make_deer_death.py`).
+- **Derived from it:** the deer carcass (`deer-carcass.png`, `hind-carcass.png`,
+  `young/hind-carcass-stage*.png`, from the death's last frame:
+  `make_deer_carcass.py`), and the deer's sleeping pose (the death's third frame, used as
+  is: `sleep` in animat.js).
+- **Wolf sleep.** The wolf's sleeping frames (columns 48-49 of `wolf-land.png` and the
+  young sheets) are the artist's corpse frame, edited (mouth and eye closed, a breathing
+  frame): `extract_wolf_sheet.py`. A stopgap until real lying-down frames are drawn.
+

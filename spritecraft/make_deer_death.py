@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """The deer's death animation, hand-drawn, and the script that renders it.
 
+PLACEHOLDER: AI-generated (the artist drew no deer death), not canonical: to be replaced,
+and not to be used as a base for new art (admin/design_notes.md).
+
     images/stag-walk-idle-run.png  ->  images/stag-death.png
 
 Usage (from anywhere; needs Python 3 with Pillow):

@@ -24,6 +24,7 @@
 //     first
 //   a mother stands still while young suckle from her; an infant suckles while hungry
 //     (nursing)
+//   sleep at its species' time of rest when its wakeful meter is low (sleep)
 //   while its meter is above romanceAbove, a grown critter courts and mates, or mates
 //     with its partner in heat (social, romance only)
 //   a deer grazes while hungry (graze); a wolf hunts while hungry and weaned, waiting on
@@ -46,6 +47,10 @@ const deerCommitS = 0.75;        // keep to a chosen way to flee at least this l
 const deerCaughtBetween = 0.3;   // the pulls of wolves cancel to below this share: break sideways
 // Above this share of a full meter, courting and mating come before eating.
 const romanceAbove = 0.5;
+const sleepBelow = 0.5;          // sleeps at its time of rest with its wakeful meter below this...
+const sleepAnyTimeBelow = 0.15;  // ...or at any time below this
+const sleepFedAbove = 0.4;       // ...(at its time of rest, only if no hungrier than this)
+const sleepFullAt = 0.98;        // ...and sleeps until this
 const deerGrazeBelow = 0.8;      // a deer starts grazing with its food meter below this
 const deerFullAt = 0.99;         // ...and grazes until it is this full
 // A tile is worth walking to and starting on with at least this share of the most a tile
@@ -99,6 +104,7 @@ const decideEveryS = 0.1;
 
 const IDLE = { gait: "idle" };
 const EAT = { gait: "eat" };
+const SLEEP = { gait: "sleep" };
 
 const memories = new Map(); // critter -> its memory
 const ignored = new Set();  // critters left alone (tests, debugging)
@@ -133,7 +139,8 @@ function memoryOf(a) {
       familiar: new Set(),    // uids of its species met while it or they were infants
       court: null,            // the critter it is courting: { uid, since }
       refused: new Map(),     // uid -> courting it again only after this tick
-      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | ashore | court | mate | family | nurse
+      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | ashore | court | mate | family | nurse | sleep
+      sleeping: false,        // asleep (see sleep)
       target: null,           // a wolf's prey (uid)
       targetUntil: -Infinity, // ...kept until this tick at least
       flee: null,             // a deer's way to flee: { dx, dy, until, since }
@@ -331,6 +338,8 @@ function decideDeer(a, m, now) {
     m.flee = null;
     const nursing = nurseOrSuckle(a, m, now);
     if (nursing) return nursing;
+    const sleeping = sleep(a, m, now);
+    if (sleeping) return sleeping;
     const romance = a.food > romanceAbove && social(a, m, now, true);
     if (romance) return romance;
     const grazing = graze(a, m, now);
@@ -462,6 +471,8 @@ function decideWolf(a, m, now) {
   }
   const nursing = nurseOrSuckle(a, m, now);
   if (nursing) { m.target = null; m.searching = false; m.watch = null; return nursing; }
+  const sleeping = sleep(a, m, now);
+  if (sleeping) { m.target = null; m.searching = false; m.watch = null; return sleeping; }
   const romance = a.food > romanceAbove && social(a, m, now, true);
   if (romance) { m.target = null; m.searching = false; m.watch = null; return romance; }
   if (a.food >= wolfHuntBelow || sim.isInfant(a)) {
@@ -643,6 +654,27 @@ function nurseOrSuckle(a, m, now) {
   if (k.seenTick !== now && d2 <= kinLostTiles * kinLostTiles) { k.lost = true; return null; }
   m.mode = "nurse"; m.plan = null;
   return move(a, m, dx, dy, d2 > 9 ? "trot" : "walk", now);
+}
+
+// SLEEP: a critter lies down to sleep when its wakeful meter (a.wake, its own) is below
+// sleepBelow at its species' time for rest, if it isn't hungry (food at least
+// sleepFedAbove): a wolf while the sun is up (wolves rest by day), a deer in the dark or
+// around midday (senses.sky); and below sleepAnyTimeBelow, at any time. It sleeps until
+// the meter is sleepFullAt, unless something more pressing comes first (a deer fleeing,
+// a wolf going to a carcass). Never in the water. (At empty it collapses anyway: see
+// SLEEP in sim.js.)
+function sleep(a, m, now) {
+  if (m.intent !== SLEEP) m.sleeping = false; // woken by something more pressing
+  if (a.pose === "swim") { m.sleeping = false; return null; }
+  if (m.sleeping && a.wake >= sleepFullAt) m.sleeping = false;
+  if (!m.sleeping) {
+    const sky = senses.sky();
+    const restTime = a.species === "wolf" ? sky.sunUp : sky.light < 0.5 || sky.midday;
+    if (a.wake < sleepAnyTimeBelow || (a.wake < sleepBelow && restTime && a.food >= sleepFedAbove)) m.sleeping = true;
+  }
+  if (!m.sleeping) return null;
+  m.mode = "sleep"; m.plan = null;
+  return SLEEP;
 }
 
 function settle(a, m, now) {

@@ -53,6 +53,9 @@ const gridHeightN = 414;
 //                          to suckle it full (see BREEDING); GAMIFIED's are chosen for
 //                          play, not scaled from REALISTIC's
 //   growthCostShare        the share of growth's real cost in food that it costs (see BODY)
+//   dayLengthS             a day and night; a year is 365 of them (see DAY AND NIGHT)
+//   wakeLastsS, sleepFillS how long a full wakeful meter lasts awake, and how long sleep
+//                          takes to fill an empty one (see SLEEP)
 //   scentHalfLifeS, windChangeEveryS   scent trails fading, and the wind shifting (see
 //                          SCENT AND WIND); the same in both: they go with travel, which
 //                          is at real speeds in both
@@ -168,6 +171,18 @@ const realFoodFullS = {
 };
 const realEatKgPerS = { wolf: 0.5 / 60, deer: 0.2 / hourS };
 const realGrassRegrowKgPerS = 0.4 / yearS;
+// Sleep:
+//   Grey wolves sleep about a third of the time, mostly by day: in winter daylight, 34%
+//   asleep and 31% resting (Mech 1992, J. Mammalogy, 405 radio-collared wolves); most
+//   active at dawn and dusk. A wolf can keep going a whole day (estimate).
+//   Red deer sleep in several short bouts, by night and around midday: reindeer, the
+//   nearest measured, sleep about 6.3 hours a day (5.4 h non-REM, 0.9 h REM: Furrer et
+//   al. 2023, Current Biology); a full meter lasts 8 hours awake (estimate).
+//   Sleep fills the meter as fast as the day's sleep makes up for the day awake.
+const realSleepShare = { wolf: 8 / 24, deer: 6.3 / 24 };
+const realWakeLastsS = { wolf: 24 * hourS, deer: 8 * hourS };
+const realSleepFillS = Object.fromEntries(Object.entries(realWakeLastsS).map(([sp, s]) =>
+  [sp, s * realSleepShare[sp] / (1 - realSleepShare[sp])]));
 
 const REALISTIC = {
   name: "realistic",
@@ -222,6 +237,9 @@ const REALISTIC = {
   // Estimates: dogs follow trails hours old; breezes shift every minute or so.
   scentHalfLifeS: 30 * 60,
   windChangeEveryS: 60,
+  dayLengthS: dayS,
+  wakeLastsS: realWakeLastsS,
+  sleepFillS: realSleepFillS,
   eatKgPerS: realEatKgPerS,
   infantFoodFullS: { wolf: 3 * dayS, deer: 3 * dayS },
   growthCostShare: 1,
@@ -237,6 +255,7 @@ const REALISTIC = {
 const gameLifeScale = (90 * 60) / Math.min(...Object.values(realForcedMortalityMaxS));
 const gameFoodScale = (20 * 60) / realFoodFullS.wolf;
 const gameExertionSpeedup = 10;
+const gameDayS = 10 * 60;
 const scaledAges = (table, k) => Object.fromEntries(Object.entries(table).map(([sp, caps]) =>
   [sp, Object.fromEntries(Object.entries(caps).map(([cap, t]) =>
     [cap, { min: t.min * k, avg: t.avg * k, max: t.max * k }]))]));
@@ -282,6 +301,11 @@ const GAMIFIED = {
   // Estimates: dogs follow trails hours old; breezes shift every minute or so.
   scentHalfLifeS: 30 * 60,
   windChangeEveryS: 60,
+  // A day and night lasts 10 minutes (chosen for play; a year, 61 hours), and sleep goes
+  // with it. TODO: one scale for all of GAMIFIED (this is far from food's, and lives').
+  dayLengthS: gameDayS,
+  wakeLastsS: scaledTimes(realWakeLastsS, gameDayS / dayS),
+  sleepFillS: scaledTimes(realSleepFillS, gameDayS / dayS),
   eatKgPerS: { wolf: realEatKgPerS.wolf / gameFoodScale, deer: realEatKgPerS.deer / gameFoodScale },
   // Chosen for play, not scaled (scaled, a bout would last a few ticks): the young get
   // hungry every 15 s or so, and a bout (0.8 to full) takes a few seconds, to be seen.
@@ -650,6 +674,9 @@ function initCritter(a, species, isNewborn = false) {
   a.wind = 1;
   a.stamina = 1;
   a.nursingOn = null;      // the mother it is suckling from (see BREEDING)
+  a.wake = isNewborn ? 1 : randBetween(0.4, 1); // (see SLEEP)
+  a.wantsSleep = false;
+  a.sleepForced = false;
   a.food = isNewborn ? 1 : species === "wolf" ? wolfStartFood : randBetween(0.5, 1);
   updateBody(a);
   randomlyPlaceCritter(a);
@@ -1045,6 +1072,90 @@ function growthKgPerS(a) {
   return (shares[k] - shares[k - 1]) / (ages[k] - ages[k - 1]) * (a.adultSkeletonKg - a.birthSkeletonKg);
 }
 
+// DAY AND NIGHT: the map lies at latitudeDeg north. A day lasts SPEEDS.dayLengthS and a
+// year 365 days; the game starts at startHour on the spring equinox. The sun's height
+// follows the Earth's tilt (tiltDeg) by the day of the year, so days are long in summer
+// and short in winter (at 45 degrees north, about 15.4 and 8.6 hours from sunrise to
+// sunset). The LIGHT is 1 while the sun is up, 0 once it is twilightDeg below the horizon
+// (the end of civil twilight), and between in the twilight. All of it is worked out once a
+// tick (clock); comparing sines takes no inverse trig.
+// GRASS grows only while the sun is up, faster by 1 / meanDaylightShare, so a year's
+// growth is as before.
+const latitudeDeg = 45, tiltDeg = 23.44, twilightDeg = 6;
+const yearDays = 365;
+const equinoxDay = 79;   // the spring equinox, as a day of the year (0 = 1 January)
+const startHour = 8;
+const degree = Math.PI / 180;
+const sinLat = Math.sin(latitudeDeg * degree), cosLat = Math.cos(latitudeDeg * degree);
+const sinTwilight = Math.sin(-twilightDeg * degree);
+const clock = { day: 0, dayOfYear: equinoxDay, hour: startHour, light: 1, sunUp: true, daylightHours: 12 };
+
+// The sun's declination on day d of the year, and how many hours it is up that day.
+function declinationAt(d) { return tiltDeg * degree * Math.sin(2 * Math.PI * (d - equinoxDay) / yearDays); }
+function daylightHoursAt(d) {
+  const x = -Math.tan(latitudeDeg * degree) * Math.tan(declinationAt(d));
+  return x <= -1 ? 24 : x >= 1 ? 0 : 24 * Math.acos(x) / Math.PI;
+}
+// the share of a whole year the sun is up (about a half)
+const meanDaylightShare = Array.from({ length: yearDays }, (_, d) => daylightHoursAt(d)).reduce((p, q) => p + q) / (24 * yearDays);
+
+// For tests: hold the clock at an hour of the starting day (null: let it run), and turn
+// the need for sleep off (every meter kept full) or on.
+let heldHour = null, needSleep = true;
+function holdClock(hour) { heldHour = hour; updateClock(); }
+function setNeedSleep(on) {
+  needSleep = on;
+  if (on) return;
+  for (const a of allCritters) { // all awake, and staying so
+    a.wake = 1; a.wantsSleep = a.sleepForced = false;
+    if (a.pose === "sleep") setPose(a, "idle");
+  }
+}
+
+function updateClock() {
+  const days = heldHour !== null ? equinoxDay + heldHour / 24 : (equinoxDay + startHour / 24) + g_now / SPEEDS.dayLengthS;
+  const dayOfYear = days % yearDays, hour = 24 * (days % 1);
+  const decl = declinationAt(dayOfYear);
+  const sinEl = sinLat * Math.sin(decl) + cosLat * Math.cos(decl) * Math.cos(2 * Math.PI * (hour - 12) / 24);
+  clock.day = Math.floor(days - equinoxDay); // days since the first midnight
+  clock.dayOfYear = dayOfYear;
+  clock.hour = hour;
+  clock.sunUp = sinEl > 0;
+  clock.light = sinEl >= 0 ? 1 : sinEl <= sinTwilight ? 0 : 1 - sinEl / sinTwilight;
+  if (Math.floor(dayOfYear) !== clock.daylightDay) {
+    clock.daylightDay = Math.floor(dayOfYear);
+    clock.daylightHours = daylightHoursAt(dayOfYear);
+  }
+}
+
+// SLEEP: every critter has a wakeful meter, a.wake, 0 to 1: how long until it must sleep.
+// Awake, it empties over SPEEDS.wakeLastsS; asleep (the "sleep" pose, lying down), it
+// fills over SPEEDS.sleepFillS. The SLEEP intent lies it down once stopped, on land; any
+// other intent gets it up. At empty it COLLAPSES: it stops and falls asleep where it is
+// (in the water, as soon as it is ashore), and sleeps on whatever its intent until the
+// meter is back to forcedWakeAt (a.sleepForced meanwhile).
+const forcedWakeAt = 0.3;
+
+function updateWake(a) {
+  if (!isLiveCritter(a)) return;
+  if (!needSleep) { a.wake = 1; return; }
+  if (a.pose === "sleep") {
+    a.wake = Math.min(1, a.wake + tempo / SPEEDS.sleepFillS[a.species]);
+    if (a.sleepForced && a.wake >= forcedWakeAt) a.sleepForced = false;
+    return;
+  }
+  a.wake = Math.max(0, a.wake - tempo / SPEEDS.wakeLastsS[a.species]);
+  if (a.wake <= 0 && !a.sleepForced && !isMating(a) && !isInWater(a)) {
+    a.sleepForced = true;
+    a.eating = false;
+    a.landPose = "idle"; a.targetSpeed = 0; // (as setCritterIdle, which a collapsed critter ignores)
+  }
+  if ((a.wantsSleep || a.sleepForced) && a.speed === 0 && a.pose === "idle" && !isInWater(a)) {
+    a.nextGX = a.gx; a.nextGY = a.gy;
+    setPose(a, "sleep");
+  }
+}
+
 // SCENT AND WIND
 // SCENT TRAILS: every live critter on dry land marks the tile under it with its species'
 // scent each tick: the tile keeps when it was last marked by each species, and by whom.
@@ -1350,6 +1461,7 @@ function giveBirth(f) {
 //   { gait: "eat", at }    a deer: the same, the grass under the boulder on tile at, [i, j],
 //                          when right beside it (see GRASS)
 //   { gait: "mate", with } stand still, ready to mate with critter uid `with` (see BREEDING)
+//   { gait: "sleep" }      stop, lie down and sleep (see SLEEP)
 //   { dx, dy, gait }       move along grid vector (dx, dy), any length, at walk, trot or
 //                          gallop, or the best gait wind and stamina allow
 //   { dir, gait }          the same along one of the 8 directions
@@ -1369,7 +1481,7 @@ const facingKeepCos = 0.866;     // cos 30 degrees
 
 // The intent with its heading (hx, hy) at unit length, reusing prev's for the same vector.
 function prepareIntent(intent, prev) {
-  if (!intent || intent.gait === "idle" || intent.gait === "eat" || intent.gait === "mate") return intent || null;
+  if (!intent || intent.gait === "idle" || intent.gait === "eat" || intent.gait === "mate" || intent.gait === "sleep") return intent || null;
   if (intent.dir !== undefined) {
     const [hx, hy] = moveVecByDir[intent.dir];
     return { dir: intent.dir, gait: intent.gait, hx, hy };
@@ -1397,7 +1509,12 @@ function playerHasControl() {
 }
 
 function applyIntent(a, intent) {
-  if (a.stunnedUntil > g_tick || isMating(a)) return;
+  if (a.stunnedUntil > g_tick || isMating(a) || a.sleepForced) return;
+  if (intent.gait === "sleep") { // lies down once stopped (see SLEEP)
+    if (!a.wantsSleep) { a.eating = false; setCritterIdle(a); a.wantsSleep = true; }
+    return;
+  }
+  a.wantsSleep = false;
   a.eating = intent.gait === "eat";
   a.eatAt = a.eating && intent.at || null;
   if (intent.gait === "idle" || intent.gait === "eat" || intent.gait === "mate") setCritterIdle(a);
@@ -1487,7 +1604,7 @@ function setCritterHeading(a, hx, hy, newPose = "walk", facing = undefined) {
 }
 
 function setCritterIdle(a) {
-  if (a.pose === "death" || a.pose === "dead" || isMating(a)) return;
+  if (a.pose === "death" || a.pose === "dead" || isMating(a) || a.sleepForced) return;
   a.landPose = "idle";
   a.swimBurst = false;
   if (isInWater(a)) { // nothing stands still in water: it swims on the way it faces
@@ -1512,7 +1629,7 @@ function changeSpeed(a) {
     const step = accelBySpecies[a.species];
     a.speed = a.speed < target ? Math.min(target, a.speed + step) : Math.max(target, a.speed - step);
   }
-  if (a.speed === 0 && target === 0 && a.pose !== "idle" && a.pose !== "swim" && !isMating(a) && isLiveCritter(a)) {
+  if (a.speed === 0 && target === 0 && a.pose !== "idle" && a.pose !== "swim" && a.pose !== "sleep" && !isMating(a) && isLiveCritter(a)) {
     a.nextGX = a.gx;
     a.nextGY = a.gy;
     setPose(a, "idle");
@@ -1549,9 +1666,10 @@ function applyExertion(a) {
     if (a.swimBurst) a.wind = Math.max(0, a.wind - dt / ex.gallopFullWindS);
     a.stamina = Math.max(0, a.stamina - (a.swimBurst ? gallopStaminaCostFactor : 1) * dt / ex.swimTimeS);
   }
-  const windHalfLifeS = windRefillHalfLifeSByPose[a.pose];
+  const restPose = a.pose === "sleep" ? "idle" : a.pose;
+  const windHalfLifeS = windRefillHalfLifeSByPose[restPose];
   if (windHalfLifeS) a.wind += (1 - a.wind) * (1 - Math.pow(0.5, dt / windHalfLifeS));
-  const staminaRefillS = staminaFullRefillSByPose[a.pose];
+  const staminaRefillS = staminaFullRefillSByPose[restPose];
   if (staminaRefillS) a.stamina = Math.min(1, a.stamina + dt / staminaRefillS);
 
   // out of a reserve: the next gait down
@@ -1693,6 +1811,7 @@ function updateAllCritters() {
   const pastLifespan = allCritters.filter(isPastLifespan);
   const starved = [];
   allCritters.forEach(a => { if (updateFood(a)) starved.push(a); });
+  allCritters.forEach(updateWake);
 
   allCritters.forEach(a => {
     // done scrambling up a bank: back to the gait it was asked for
@@ -1737,8 +1856,8 @@ function updateAllCritters() {
   }
   markScent();
   if (g_tick % Math.round(SPEEDS.windChangeEveryS / tempo) === 0) shiftWind();
-  if (g_tick % grassGrowEveryTicks === 0) {
-    growGrass(grassGrowEveryTicks * tempo);
+  if (g_tick % grassGrowEveryTicks === 0 && clock.sunUp) {
+    growGrass(grassGrowEveryTicks * tempo / meanDaylightShare);
   }
 }
 
@@ -1941,6 +2060,7 @@ function tick() {
     const tps = g_tick / ((Date.now() - startRealtime) / 1000)
     console.log("Begin tick=" + g_tick + " + tps=" + tps);
   }
+  updateClock();
   tickListeners.forEach(fn => fn());
   applyIntents();
   startMatings();
@@ -2054,7 +2174,7 @@ function start({ consoleOnly = false } = {}) {
 // currentDirection (the facing), hx, hy (the heading), speed, targetSpeed, species, wind,
 // stamina, food, eating, carcass, carcassFullKg, uid, blockedTick, stunnedUntil, isMale,
 // birthTime, deathTime, weightKg, adultKg, skeletonKg, boxRad, mateUid, matingWith, parentUids, youngUids,
-// pregnancy, nursingOn)
+// pregnancy, nursingOn, wake, sleepForced)
 // but change the world only through these functions.
 return {
   // lifecycle and time
@@ -2072,6 +2192,9 @@ return {
   // scent and wind
   scentAt, get wind() { return { x: windX, y: windY }; },
   get scentHalfLifeS() { return SPEEDS.scentHalfLifeS; },
+  // day and night, and sleep
+  get clock() { return clock; }, daylightHoursAt, meanDaylightShare, latitudeDeg, forcedWakeAt,
+  get dayLengthS() { return SPEEDS.dayLengthS; },
   allCritters, allCorpses, deathDurationSBySpecies,
   get pcWolf() { return pcWolf; },    // the player's wolf, or its corpse (see THE PLAYER'S WOLF)
   get speeds() { return SPEEDS.name; },
@@ -2098,7 +2221,7 @@ return {
     REALISTIC, GAMIFIED, SPEEDS, drawLifespanS, startCritterDeath, growGrass, setGrassKg, stun,
     windRefillHalfLifeSByPose, staminaFullRefillSByPose, maxStepLevels,
     critterByUid, bodyKgBySpecies, growthShare, litterSize, birthSpots, giveBirth,
-    conceive, pair, energyRangeMJ, feed, growFromFood, milkEfficiency, canPair, setWind, growthProgress, growthKgPerS, setSkeletonByAge, updateBody,
+    holdClock, setNeedSleep, updateWake, conceive, pair, energyRangeMJ, feed, growFromFood, milkEfficiency, canPair, setWind, growthProgress, growthKgPerS, setSkeletonByAge, updateBody,
     get loopHandle() { return loopHandle; },
   },
 };

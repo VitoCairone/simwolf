@@ -60,6 +60,7 @@ async function main(browser, r) {
   const p = await openGame(browser, { viewport: { width: 900, height: 650 } });
   const fresh = async () => {
     await p.reload(); await p.waitForTimeout(300);
+    await p.evaluate(() => { sim.internals.holdClock(12); sim.internals.setNeedSleep(false); }); // (as openGame)
     await p.evaluate(`window.setup = ${setup.toString()}`);
   };
 

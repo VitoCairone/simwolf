@@ -18,6 +18,9 @@
 // alone tells a creature's sex, age (an infant, grown), its partner, and whether a female
 // is in heat (as smell would, up close). Grass and land a critter can see are likewise
 // in the rectangle and in line of sight (canSeeTile).
+// AT NIGHT the rectangle shrinks (sightShare), from the whole of it in daylight
+// (sim.clock.light 1) to nightSightShare of it in the dark, through the twilight. ASLEEP
+// (the "sleep" pose), a critter sees nothing; it still hears and smells.
 // HEARING, once old enough to "hear": a creature moving on land, heard within a range set
 // by its gait and the ground under it (hearingRangeTiles: loudest galloping on stone), or
 // swimming. Standing still is silent. It tells its species, and where and how it moves.
@@ -51,6 +54,26 @@ const sightHalfHeightTiles = 25.3; // |dx + dy| at most this
 // its head), the deer's about 20. A young critter's is lower by its size (sim.youngScales).
 const eyeLevelsBySpecies = { wolf: 2.25, deer: 2.5 };
 
+// How much of its daylight sight a critter keeps in the dark (estimates). Both have eyes
+// built for dim light (many rods, a reflecting tapetum lucidum): deer gather some 18 times
+// the light a human eye does at night (K. Miller, University of Georgia), wolves some 5
+// times or more; both see less detail than by day. Moonlight is left out (TODO).
+const nightSightShare = { wolf: 0.4, deer: 0.5 };
+
+// The share of its sight rectangle critter a sees now: by the light, none asleep.
+function sightShare(a) {
+  if (a.pose === "sleep") return 0;
+  const n = nightSightShare[a.species], light = sim.clock.light;
+  return n + (1 - n) * light;
+}
+
+// What a critter can tell of the sky: how light it is, whether the sun is up, and whether
+// it is high (around midday: within middayHours of 13:00, the sun's highest, by sight).
+const middayHours = 1.5;
+function sky() {
+  const c = sim.clock;
+  return { light: c.light, sunUp: c.sunUp, midday: c.sunUp && Math.abs(c.hour - 13) < middayHours };
+}
 // Whether grid offset (dx, dy) is in the sight rectangle, or with k < 1, within that share of it.
 function inSight(dx, dy, k = 1) {
   return Math.abs(dx - dy) <= k * sightHalfWidthTiles && Math.abs(dx + dy) <= k * sightHalfHeightTiles;
@@ -112,7 +135,7 @@ function canSee(a, b) {
 // Whether critter a sees the ground at the center of tile (i, j) (in its sight rectangle
 // and line of sight).
 function canSeeTile(a, i, j) {
-  if (!sim.can(a, "see") || !inSight(i + 0.5 - a.gx, j + 0.5 - a.gy)) return false;
+  if (!sim.can(a, "see") || !inSight(i + 0.5 - a.gx, j + 0.5 - a.gy, sightShare(a))) return false;
   if (!use.lineOfSight) return true;
   return clearLine(a.gx, a.gy, sim.heightAt(a.gx, a.gy) + eyeLevels(a), i + 0.5, j + 0.5, sim.heightAt(i + 0.5, j + 0.5));
 }
@@ -196,13 +219,14 @@ function trailsAround(a, species) {
 //   mateUid: its partner's uid, or null
 function perceive(a) {
   const out = [];
-  const sees = sim.can(a, "see"), hears = use.hearing && sim.can(a, "hear"), smells = use.smell, wind = sim.wind;
+  const share = sim.can(a, "see") ? sightShare(a) : 0, sees = share > 0;
+  const hears = use.hearing && sim.can(a, "hear"), smells = use.smell, wind = sim.wind;
   for (const list of [sim.allCritters, sim.allCorpses]) {
     for (const b of list) {
       if (b === a) continue;
       const dx = b.gx - a.gx, dy = b.gy - a.gy, alive = sim.isLiveCritter(b);
       let by = null;
-      if (sees && inSight(dx, dy) && canSee(a, b)) by = "sight";
+      if (sees && inSight(dx, dy, share) && canSee(a, b)) by = "sight";
       else {
         // the cheap tests first: distance, then what it costs to find out more
         const d2 = dx * dx + dy * dy;
@@ -235,10 +259,11 @@ function perceive(a) {
   return out;
 }
 
-// The tiles with grass on them whose centers are in the sight rectangle of critter a, or
-// within share k of it: [{ i, j, kg }]. (Line of sight is left to the mind to check, with
+// The tiles with grass on them whose centers are in the sight rectangle of critter a (as
+// much of it as it sees now: sightShare), or within share k of that: [{ i, j, kg }]. (Line of sight is left to the mind to check, with
 // canSeeTile, for the few it considers: there are thousands.)
 function grassAround(a, k = 1) {
+  k *= sightShare(a);
   const out = [], ci = Math.floor(a.gx), cj = Math.floor(a.gy);
   const r = Math.ceil(k * (sightHalfWidthTiles + sightHalfHeightTiles) / 2) + 1;
   for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
@@ -257,7 +282,7 @@ function attach(theSim) {
 }
 
 return {
-  attach, perceive, grassAround, trailsAround, inSight, canSee, canSeeTile, use,
+  attach, perceive, grassAround, trailsAround, inSight, canSee, canSeeTile, use, sightShare, sky, nightSightShare,
   sightHalfWidthTiles, sightHalfHeightTiles, hearingRangeTiles, airScentRangeTiles, eyeLevelsBySpecies, sniffTiles,
 };
 

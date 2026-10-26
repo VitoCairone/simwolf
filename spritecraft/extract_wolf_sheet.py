@@ -31,7 +31,10 @@ for three things:
 THE SHEET (wolf-land.png): 64 x 64 frames; rows 0 facing up-right, 1 down-right, 2
 down-left, 3 up-left (as our old sheet), then 4 up, 5 right, 6 down, which the artist didn't
 draw: those rows have only the run and idle, from images/wolf-run-stand.png. Columns:
-    0-7 run, 8-11 idle, 12-20 howl, 21-32 death (32 the corpse), 33-47 bite
+    0-7 run, 8-11 idle, 12-20 howl, 21-32 death (32 the corpse), 33-47 bite, 48-49 sleep
+SLEEP (ours, rows 0-3 only; a placeholder, not canonical: admin/design_notes.md): the corpse lying on its side, its mouth and eye closed (the
+red of tongue and eye painted over in its coat's colour), then the same breathing in: the
+top of its outline a pixel lower.
 (animat.js frameDataBySpeciesAndPose: the wolf's frames and their timing, from this.)
 """
 
@@ -68,6 +71,31 @@ def shifted(frame, dx, dy):
     return out
 
 
+COAT = (57, 74, 80, 255)       # the corpse's commonest colour
+COAT_DARK = (32, 46, 55, 255)  # ...and its shading
+
+
+def sleeping(corpse):
+    """The corpse frame with its reds (tongue, mouth, open eye) painted over in its coat's colours."""
+    f = corpse.copy()
+    r, g, a = f[:, :, 0].astype(int), f[:, :, 1].astype(int), f[:, :, 3]
+    red = (a == 255) & (r > g + 20)
+    f[red & (r < 80)] = COAT_DARK
+    f[red & (r >= 80)] = COAT
+    return f
+
+
+def breathing(frame):
+    """The frame with the top of its outline a pixel lower (its back settling)."""
+    f = frame.copy()
+    opaque = f[:, :, 3] == 255
+    for x in range(F):
+        ys = np.nonzero(opaque[:, x])[0]
+        if len(ys) > 1 and opaque[ys[0] + 1, x]:
+            f[ys[0], x] = 0
+    return f
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--out-dir", type=Path, default=PROJECT / "images")
@@ -75,7 +103,7 @@ def main():
 
     artist = np.array(Image.open(PROJECT / "images_raw/wolf-all.png").convert("RGBA"))
     ours = np.array(Image.open(PROJECT / "images/wolf-run-stand.png").convert("RGBA"))
-    sheet = np.zeros((7 * F, 48 * F, 4), np.uint8)
+    sheet = np.zeros((7 * F, 50 * F, 4), np.uint8)
     cell = lambda img, r, c: img[r * F:(r + 1) * F, c * F:(c + 1) * F]
 
     for row in range(4):
@@ -87,6 +115,10 @@ def main():
                 sheet[row * F:(row + 1) * F, (c0 + k) * F:(c0 + k + 1) * F] = f
     for row in range(4, 7):  # up, right, down: run and idle as before
         sheet[row * F:(row + 1) * F, 0:12 * F] = ours[row * F:(row + 1) * F, 0:12 * F]
+    for row in range(4):
+        asleep = sleeping(cell(sheet, row, 32))
+        sheet[row * F:(row + 1) * F, 48 * F:49 * F] = asleep
+        sheet[row * F:(row + 1) * F, 49 * F:50 * F] = breathing(asleep)
 
     out = args.out_dir / "wolf-land.png"
     Image.fromarray(sheet, "RGBA").save(out)

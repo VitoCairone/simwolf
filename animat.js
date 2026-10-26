@@ -125,6 +125,10 @@ const frameDataBySpeciesAndPose = {
       holdTks: 6, topToShadow: 39, ...wolfDiagonalFacing},
     dead: {sheet: "wolf", nFrames: 1, colZero: 32, frameW: 64, frameH: 64,
       holdTks: Infinity, topToShadow: 39, ...wolfDiagonalFacing},
+    // asleep: lying on its side, breathing (made from the corpse: extract_wolf_sheet.py)
+    // TODO: placeholder art, not canonical (admin/design_notes.md): real sleeping frames
+    sleep: {sheet: "wolf", cols: [48, 49], holds: holdsFromMs([1400, 1000]), frameW: 64, frameH: 64,
+      topToShadow: 39, ...wolfDiagonalFacing},
     // not used yet
     howl: {sheet: "wolf", cols: colsFrom(12, 9), holds: holdsFromMs([100, 100, 100, 100, 100, 150, 500, 100, 100]),
       frameW: 64, frameH: 64, topToShadow: 39, ...wolfDiagonalFacing},
@@ -155,9 +159,14 @@ const frameDataBySpeciesAndPose = {
       holdTks: 10, topToShadow: 33 },
     // Plays exactly once in the simulation's death pose (attach checks this). A corpse
     // with a carcass is drawn by drawCarcass instead of "dead".
+    // TODO: the deer's death, carcass and sleep are AI-generated placeholders, not the
+    // artist's, and not canonical (admin/design_notes.md): replace them.
     death: {sheet: "deer-death", nFrames: 5, colZero: 0, frameW: 48, frameH: 48,
       holdTks: 8, topToShadow: 40, ...deerDeathFacing},
     dead: {sheet: "deer-death", nFrames: 1, colZero: 4, frameW: 48, frameH: 48,
+      holdTks: Infinity, topToShadow: 40, ...deerDeathFacing},
+    // asleep: bedded down, legs folded, head up (the death's third frame)
+    sleep: {sheet: "deer-death", nFrames: 1, colZero: 2, frameW: 48, frameH: 48,
       holdTks: Infinity, topToShadow: 40, ...deerDeathFacing},
   }
 };
@@ -246,8 +255,9 @@ const debugWolfEl = el("dbel-pc-wolf");
 const windFillEl = el("wind-meter-fill");
 const staminaFillEl = el("stamina-meter-fill");
 const foodFillEl = el("food-meter-fill");
+const wakeFillEl = el("wake-meter-fill");
 const inspectPanelEl = el("inspect-panel");
-const inspectFillEls = ["wind", "stamina", "food"].map(m => el(`inspect-${m}-fill`));
+const inspectFillEls = ["wind", "stamina", "food", "wake"].map(m => el(`inspect-${m}-fill`));
 const zoomInBtn = el("zoom-in");
 const zoomOutBtn = el("zoom-out");
 const arrowsIconEl = el("arrow-mode-icon");
@@ -847,21 +857,24 @@ function drawDebugWolf() {
   setStyle(debugWolfEl, debugWolfCss, "top", (isoY - qtrTile + surfaceDrop) + "px");
 }
 
-// METERS: the player's wolf's wind, stamina and food, a full bar when full. No labels:
+// METERS: the player's wolf's wind, stamina, food and wakefulness (how long until it must
+// sleep: see SLEEP in sim.js), a full bar when full. No labels:
 // the game shows no words or numbers. INSPECTING: while the camera follows another
 // critter (or its corpse), that critter's meters show below, under an eye.
 const windCss = {};
 const staminaCss = {};
 const foodCss = {};
-const inspectCss = [{}, {}, {}];
+const wakeCss = {};
+const inspectCss = [{}, {}, {}, {}];
 let inspectShown = false;
 function drawExertion() {
   setStyle(windFillEl, windCss, "width", `${100 * sim.pcWolf.wind}%`);
   setStyle(staminaFillEl, staminaCss, "width", `${100 * sim.pcWolf.stamina}%`);
   setStyle(foodFillEl, foodCss, "width", `${100 * sim.pcWolf.food}%`);
+  setStyle(wakeFillEl, wakeCss, "width", `${100 * sim.pcWolf.wake}%`);
   const other = pinned && pinned !== sim.pcWolf ? pinned : null;
   if (!!other !== inspectShown) { inspectShown = !!other; inspectPanelEl.hidden = !other; }
-  if (other) [other.wind, other.stamina, other.food].forEach((v, k) =>
+  if (other) [other.wind, other.stamina, other.food, other.wake].forEach((v, k) =>
     setStyle(inspectFillEls[k], inspectCss[k], "width", `${100 * v}%`));
 }
 

@@ -51,7 +51,7 @@ async function main(browser, r) {
     }
     return { w: ours.w, h: ours.h, bad, frames };
   }, { ANIMS, ARTIST_ROW_OF, RUN_SHIFT, oursUrl: dataUrl("images/wolf-land.png"), artUrl: dataUrl("images_raw/wolf-all.png") });
-  r.check(sheet.w === 48 * 64 && sheet.h === 7 * 64 && sheet.bad === 0,
+  r.check(sheet.w === 50 * 64 && sheet.h === 7 * 64 && sheet.bad === 0, // (48-49: our sleep frames)
     `the wolf's sheet holds the artist's ${sheet.frames} diagonal frames exactly (${sheet.bad} pixels differ), the run shifted to the others' ground point`);
 
   await moveToOpenLand(p, { radius: 6, clearOthers: true });

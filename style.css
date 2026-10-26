@@ -41,7 +41,7 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   justify-content: center;
   padding: 10px;
 }
-/* The player's wolf's meters: wind, stamina and food, a full bar when full. No labels:
+/* The player's wolf's meters: wind, stamina, food and wakefulness, a full bar when full. No labels:
    the game shows no words or numbers. */
 .exertion-meter {
   height: 6px;
@@ -55,6 +55,7 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
 #wind-meter-fill, #inspect-wind-fill { background-color: #7fe6ff; }
 #stamina-meter-fill, #inspect-stamina-fill { background-color: yellow; }
 #food-meter-fill, #inspect-food-fill { background-color: #e03c3c; }
+#wake-meter-fill, #inspect-wake-fill { background-color: #6a2fa0; }
 /* The inspected critter's meters, the same, under an eye (see METERS in animat.js). */
 #inspect-panel {
   display: flex;
