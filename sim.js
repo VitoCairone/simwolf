@@ -773,10 +773,13 @@ function startCritterDeath(a) {
 // tile (grassMJPerKg), a wolf a carcass in reach, once old enough to "eat" (and an infant
 // by nursing: see BREEDING). A critter whose meter empties dies of hunger.
 //
-// GRASS: every grass tile holds grass, in kg: at most SPEEDS.grassMaxKg, starting at
-// grassStartShare of that, regrowing at SPEEDS.grassRegrowKgPerS. Its HEIGHT (bare,
-// short, medium, tall) is for the view; tiles whose height changes are logged
-// (grassChangesSince) so the view redraws only those.
+// GRASS: every grass tile holds grass, in kg: at most SPEEDS.grassMaxKg (under a boulder,
+// rockGrassShare of that: grassMostAt), starting at grassStartShare of that, regrowing at
+// SPEEDS.grassRegrowKgPerS. Its HEIGHT (bare, short, medium, tall) is for the view; tiles
+// whose height changes are logged (grassChangesSince) so the view redraws only those.
+// UNDER A BOULDER: a deer eats grass under a boulder it stands right beside
+// (inGrassReach), turning to face it: the EAT intent with `at`, the boulder's tile. It
+// eats at the same rate, so the little there is goes in a third of the time.
 //
 // CARCASSES: a dead deer's meat is its body's food at its death (edibleKg: its fat and lean
 // tissue, so a starved deer is a poor meal), c.carcassFullKg, in 8 pieces, each kg of it
@@ -798,6 +801,8 @@ const eatReachTiles = 1.3;      // center to center
 const grassGrowEveryTicks = 60;
 const grassStartShare = 1 / 10; // the least that is still drawn short
 const grassTallFrom = 2 / 3, grassMediumFrom = 1 / 3, grassShortFrom = 1 / 10; // shares of the most
+const rockGrassShare = 1 / 3;    // the most grass under a boulder, of the most anywhere
+const rockGrassReachTiles = 0.35; // a deer's box this near a boulder's tile reaches its grass
 
 function newCarcass(a) {
   const kg = edibleKg(a);
@@ -810,7 +815,7 @@ function carcassMeatKg(c) {
 
 // By tile index (i * gridHeightN + j): grass in kg, NaN where the terrain isn't grass;
 // and its height, 0 bare to 3 tall, 255 where not grass.
-let grassKg = null, grassHeight = null;
+let grassKg = null, grassHeight = null, grassMostKg = null;
 const grassChanges = [];   // tile indices whose height changed, oldest first
 let grassChangesBase = 0;  // the serial number of grassChanges[0]
 
@@ -822,9 +827,11 @@ function heightOfGrass(kg) {
 function initGrass() {
   grassKg = new Float32Array(gridWidthN * gridHeightN).fill(NaN);
   grassHeight = new Uint8Array(gridWidthN * gridHeightN).fill(255);
+  grassMostKg = new Float32Array(gridWidthN * gridHeightN);
   for (let i = 0; i < gridWidthN; i++) for (let j = 0; j < gridHeightN; j++) {
     if (getTerrainAt(i, j) !== "grass") continue;
     const k = i * gridHeightN + j;
+    grassMostKg[k] = SPEEDS.grassMaxKg * (isBlockedTile(i, j) ? rockGrassShare : 1);
     grassKg[k] = grassStartShare * SPEEDS.grassMaxKg;
     grassHeight[k] = heightOfGrass(grassKg[k]);
   }
@@ -844,11 +851,25 @@ function setGrassKg(k, kg) {
 }
 
 function growGrass(dtS) {
-  const add = SPEEDS.grassRegrowKgPerS * dtS, most = SPEEDS.grassMaxKg;
+  const add = SPEEDS.grassRegrowKgPerS * dtS;
   for (let k = 0; k < grassKg.length; k++) {
-    const kg = grassKg[k];
+    const kg = grassKg[k], most = grassMostKg[k];
     if (kg < most) setGrassKg(k, Math.min(most, kg + add)); // (false for NaN: not grass)
   }
+}
+
+// The most grass tile (i, j) can hold, kg (0 where it isn't grass).
+function grassMostAt(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 0;
+  return grassMostKg[i * gridHeightN + j];
+}
+
+// Whether critter a stands right beside the boulder on tile (i, j), so it can reach the
+// grass under it: its box within rockGrassReachTiles of the tile.
+function inGrassReach(a, i, j) {
+  if (!isBlockedTile(i, j)) return false;
+  const gap = Math.max(Math.abs(i + 0.5 - a.gx), Math.abs(j + 0.5 - a.gy)) - 0.5;
+  return gap <= a.boxRad + rockGrassReachTiles;
 }
 
 // The grass on tile (i, j), in kg; 0 where it isn't grass.
@@ -897,7 +918,12 @@ function updateFood(a) {
     const room = roomMJ(a);
     let bite = SPEEDS.eatKgPerS[a.species] * tempo;
     if (a.species === "deer") {
-      const i = Math.floor(a.gx), j = Math.floor(a.gy), k = i * gridHeightN + j;
+      let i = Math.floor(a.gx), j = Math.floor(a.gy);
+      if (a.eatAt && inGrassReach(a, a.eatAt[0], a.eatAt[1])) { // grass under a boulder beside it
+        [i, j] = a.eatAt;
+        a.currentDirection = getDir(i + 0.5 - a.gx, j + 0.5 - a.gy, a.currentDirection);
+      }
+      const k = i * gridHeightN + j;
       const kg = grassFoodAt(i, j);
       const take = Math.min(bite, kg, room / grassMJPerKg);
       if (take > 0 && !isInWater(a)) {
@@ -1321,6 +1347,8 @@ function giveBirth(f) {
 //   null                   carry on as it is
 //   { gait: "idle" }       stand still (in water: swim on; see SWIMMING)
 //   { gait: "eat" }        stand still and eat what is there (see FOOD)
+//   { gait: "eat", at }    a deer: the same, the grass under the boulder on tile at, [i, j],
+//                          when right beside it (see GRASS)
 //   { gait: "mate", with } stand still, ready to mate with critter uid `with` (see BREEDING)
 //   { dx, dy, gait }       move along grid vector (dx, dy), any length, at walk, trot or
 //                          gallop, or the best gait wind and stamina allow
@@ -1371,6 +1399,7 @@ function playerHasControl() {
 function applyIntent(a, intent) {
   if (a.stunnedUntil > g_tick || isMating(a)) return;
   a.eating = intent.gait === "eat";
+  a.eatAt = a.eating && intent.at || null;
   if (intent.gait === "idle" || intent.gait === "eat" || intent.gait === "mate") setCritterIdle(a);
   else setCritterHeading(a, intent.hx, intent.hy, intent.gait, intent.dir);
 }
@@ -2048,7 +2077,7 @@ return {
   get speeds() { return SPEEDS.name; },
   get swimMinStamina() { return SPEEDS.swimMinStaminaFrac; },
   // food
-  grassFoodAt, grassHeightAt, grassChangesSince, carcassPieces, carcassMeatKg, eatReachTiles,
+  grassFoodAt, grassHeightAt, grassMostAt, inGrassReach, grassChangesSince, carcassPieces, carcassMeatKg, eatReachTiles,
   get grassMaxKg() { return SPEEDS.grassMaxKg; },
   edibleKg, bodySharesBySpecies,
   // ages and breeding

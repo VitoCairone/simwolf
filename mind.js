@@ -54,8 +54,13 @@ const deerFullAt = 0.99;         // ...and grazes until it is this full
 const deerBiteShare = 0.1;
 const deerGrazeLookShare = 0.25; // looks this share of its sight for grass first, then all of it
 const grazeLosChecks = 40;       // ...checking line of sight to at most this many, best first
+const grazeGiveUpS = 4;          // gives up on grass it has got no nearer to in this long...
+const grazeAvoidS = 60;          // ...and leaves it be this long
 const wolfHuntBelow = 0.75;      // a wolf hunts only with its food meter below this
 const wolfFullAt = 0.99;         // ...and eats until it is this full
+const wolfFeedBelow = 0.9;       // a full wolf goes back to a carcass only below this
+const feedQueueTiles = 3;        // blocked this near a carcass, a wolf waits its turn...
+const feedWaitS = 1;             // ...this long, then tries again
 const wolfForgetPreyS = 20;      // gives up on prey it last saw this long ago
 const trailEndKeepS = 4 * 3600;  // remembers a trail's dead end this long (longer than any trail lasts)
 const wolfLeadMaxS = 2;          // expects unseen prey to carry on this long, at most
@@ -66,6 +71,7 @@ const wolfSimilarRatio = 2;      // deer within this of the nearest's squared di
 const wolfSwitchRatio = 0.5;     // after wolfCommitS, changes prey only for one this much
                                  // nearer (squared distance)
 const shoreWaitTiles = 1;        // a wolf this near its spot on the shore waits there
+const waitCommitS = 3;           // ...and keeps to that spot at least this long
 const shoreLookAheadTiles = 40;  // looks this far along a swimmer's way for its landing
 const shoreRetryTurns = 10;      // a tired swimmer blocked this many turns looks for other land
 const returnToLandSureTiles = 4; // a calm swimmer this far from land surely heads for it
@@ -79,6 +85,7 @@ const suckleFullAt = 0.99;       // ...and suckles until it is this full
 const suckleTouchTiles = 0.1;    // stops this near touching its mother (box to box)
 const suckleGraceS = 0.6;        // getting nothing this long (longer than a stun)...
 const suckleRetryS = 5;          // ...it tries again after this long
+const keepCloseShare = 0.5;      // keeping near kin, it comes back to within this share of the distance
 const motherStayTiles = 4;       // a mother keeps within this of her infants
 const followParentTiles = 3;     // the young keep within this of a parent
 const kinLostTiles = 2;          // kin not where last seen, this near: lost until seen again
@@ -134,6 +141,10 @@ function memoryOf(a) {
       trailEnds: new Map(),   // deer uid -> the game time its trail was given up at (see track)
       watch: null,            // a wolf waiting ashore: { i, j, way (its prey's tile and way), spot }
       shore: null,            // a tired swimmer's land: { gx, gy, blockedTurns }
+      closing: null,          // the kin it is coming back to: "parent", "young", "mate" (see social)
+      grazeAvoid: new Map(),  // tile key -> tick: grass it couldn't get to, left be until then
+      grazeSince: 0,          // ...the tick it set off for its grazeTo, and its best distance
+      grazeBestD2: Infinity,  //    so far
       grazing: false,         // a deer grazing (from hungry until full)
       suckle: null,           // an infant suckling: { food (its meter at its last turn
                               // touching her, or null), since (the last tick it rose), retry
@@ -348,8 +359,11 @@ function decideDeer(a, m, now) {
 // DEER graze from when the food meter falls below deerGrazeBelow until full: eat the
 // tile underfoot if worth it (and crop it bare once started), else walk to the nearest
 // tile worth it, preferring ones at least half full. Looks deerGrazeLookShare of its
-// sight around, or as far as it sees when nothing there is worth it. An intent, or null if not
-// grazing or no grass worth it is in sight.
+// sight around, or as far as it sees when nothing there is worth it. Grass under a
+// boulder (less of it: sim.grassMostAt) it eats from the open tile beside the boulder
+// nearest it. Grass it gets no nearer to in grazeGiveUpS, or meets a dead end on the way
+// to, it leaves be for grazeAvoidS.
+// An intent, or null if not grazing or no grass worth it is in sight.
 function graze(a, m, now) {
   if (a.pose === "swim" || !sim.can(a, "eat")) return null;
   if (m.grazing && a.food >= deerFullAt) m.grazing = false;
@@ -360,28 +374,65 @@ function graze(a, m, now) {
   const goingFar = m.grazeTo && !grass.some(g => g.i === m.grazeTo[0] && g.j === m.grazeTo[1]);
   if (goingFar || !grass.some(g => g.kg >= worth)) grass = senses.grassAround(a);
   const i = Math.floor(a.gx), j = Math.floor(a.gy);
-  const here = grass.find(g => g.i === i && g.j === j);
-  const onIt = m.cropping && m.cropping[0] === i && m.cropping[1] === j;
+  const seen = (ti, tj) => grass.find(g => g.i === ti && g.j === tj);
+  // cropping the grass under a boulder beside it, until bare
+  const c = m.cropping;
+  if (c && sim.isBlockedTile(c[0], c[1]) && sim.inGrassReach(a, c[0], c[1]) && seen(c[0], c[1])?.kg > 0) {
+    m.grazeTo = null;
+    return { gait: "eat", at: c };
+  }
+  const here = seen(i, j);
+  const onIt = c && c[0] === i && c[1] === j;
   if (here && (here.kg >= worth || onIt)) { m.grazeTo = null; m.cropping = [i, j]; return EAT; }
   m.cropping = null;
-  const at = m.grazeTo && grass.find(g => g.i === m.grazeTo[0] && g.j === m.grazeTo[1] && g.kg >= worth);
+  let at = m.grazeTo && grass.find(g => g.i === m.grazeTo[0] && g.j === m.grazeTo[1] && g.kg >= worth);
+  if (at && sim.inGrassReach(a, at.i, at.j)) { // grass under a boulder it is beside
+    m.grazeTo = null; m.cropping = [at.i, at.j];
+    return { gait: "eat", at: m.cropping };
+  }
+  if (at) {
+    // no nearer after grazeGiveUpS: it can't get there (a cliff, water in the way)
+    const d2 = (at.i + 0.5 - a.gx) ** 2 + (at.j + 0.5 - a.gy) ** 2;
+    if (d2 < m.grazeBestD2 - 0.25) { m.grazeBestD2 = d2; m.grazeSince = now; }
+    // (or a dead end turned it right round on the way)
+    if (now - m.grazeSince > ticks(grazeGiveUpS) || (m.detour && m.detour.reversed && m.detour.until > now)) {
+      m.grazeAvoid.set(at.i * 100000 + at.j, now + ticks(grazeAvoidS));
+      at = null;
+    }
+  }
   if (!at) {
+    for (const [key, until] of m.grazeAvoid) if (until <= now) m.grazeAvoid.delete(key);
     // the best it can see (in line of sight: checked for the best few, nearest first)
     const options = [];
     for (const g of grass) {
-      if (g.kg < worth) continue;
+      // (not where it couldn't get to)
+      if (g.kg < worth || m.grazeAvoid.has(g.i * 100000 + g.j)) continue;
       const d2 = (g.i + 0.5 - a.gx) ** 2 + (g.j + 0.5 - a.gy) ** 2;
-      options.push({ g, score: d2 + (g.kg >= sim.grassMaxKg / 2 ? 0 : 1e6) });
+      options.push({ g, score: d2 + (g.kg >= sim.grassMostAt(g.i, g.j) / 2 ? 0 : 1e6) });
     }
     options.sort((p, q) => p.score - q.score);
     const best = options.slice(0, grazeLosChecks).find(o => senses.canSeeTile(a, o.g.i, o.g.j));
     if (!best) { m.grazeTo = null; return null; }
     m.grazeTo = [best.g.i, best.g.j];
+    m.grazeSince = now; m.grazeBestD2 = Infinity;
   }
-  return move(a, m, m.grazeTo[0] + 0.5 - a.gx, m.grazeTo[1] + 0.5 - a.gy, "walk", now);
+  const [gi, gj] = m.grazeTo;
+  if (!sim.isBlockedTile(gi, gj)) return move(a, m, gi + 0.5 - a.gx, gj + 0.5 - a.gy, "walk", now);
+  if (sim.inGrassReach(a, gi, gj)) { m.grazeTo = null; m.cropping = [gi, gj]; return { gait: "eat", at: m.cropping }; }
+  // under a boulder: it goes to the open tile beside the boulder nearest it
+  let via = null, viaD2 = Infinity;
+  for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const vi = gi + di, vj = gj + dj;
+    if (sim.isBlockedTile(vi, vj) || !sim.isLandTile(vi, vj)) continue;
+    const d2 = (vi + 0.5 - a.gx) ** 2 + (vj + 0.5 - a.gy) ** 2;
+    if (d2 < viaD2) { via = [vi, vj]; viaD2 = d2; }
+  }
+  if (!via) { m.grazeAvoid.set(gi * 100000 + gj, now + ticks(grazeAvoidS)); m.grazeTo = null; return null; }
+  return move(a, m, via[0] + 0.5 - a.gx, via[1] + 0.5 - a.gy, "walk", now);
 }
 
-// WOLVES eat first: while not full (and old enough to eat), the nearest carcass with meat
+// WOLVES eat first: from below wolfFeedBelow until full (and once old enough to eat), the
+// nearest carcass with meat (blocked near it, it waits its turn: feedWaitS)
 // it perceived within wolfForgetPreyS (seen, or smelled on the wind). Otherwise they hunt while hungry, once weaned (pups stay
 // with their family and eat what it kills). Of the deer it knows, a wolf picks
 // the nearest, or among those about as near, the one most straight ahead; then keeps to
@@ -393,7 +444,7 @@ function decideWolf(a, m, now) {
   // an infant suckles rather than goes to a carcass
   const suckling = sim.isInfant(a) && nurseOrSuckle(a, m, now);
   if (suckling) return suckling;
-  if (a.food < wolfFullAt && sim.can(a, "eat")) {
+  if (a.food < (m.mode === "feed" ? wolfFullAt : wolfFeedBelow) && sim.can(a, "eat")) {
     let carcass = null, bestD2 = Infinity;
     for (const k of m.known.values()) {
       if (k.species !== "deer" || k.alive || !(k.meat > 0) || now - k.seenTick > ticks(wolfForgetPreyS)) continue;
@@ -403,6 +454,9 @@ function decideWolf(a, m, now) {
     if (carcass) {
       m.mode = "feed"; m.target = null; m.searching = false; m.plan = null;
       if (bestD2 <= sim.eatReachTiles * sim.eatReachTiles) return EAT;
+      // crowded out near it (others eating): waits its turn rather than circling
+      if (bestD2 <= feedQueueTiles * feedQueueTiles && a.blockedTick > m.lastTurn) m.feedWaitUntil = now + ticks(feedWaitS);
+      if (now < (m.feedWaitUntil ?? -Infinity)) return IDLE;
       return move(a, m, carcass.gx - a.gx, carcass.gy - a.gy, "trot", now);
     }
   }
@@ -512,20 +566,23 @@ function track(a, m, now) {
 // A wolf doesn't follow prey k into the water (nor can it kill it there): it trots,
 // keeping dry, to where k seems to be swimming to (landingAhead), or failing that the
 // land nearest k, no farther from k than the wolf is; and waits there, while k stays in
-// sight.
+// sight. It keeps to a spot at least waitCommitS, so it doesn't run to and fro as k turns.
 function waitAshore(a, m, k, now) {
   m.mode = "wait"; m.searching = false;
   const ki = Math.floor(k.gx), kj = Math.floor(k.gy);
   const way = k.vx || k.vy ? sim.getDir(k.vx, k.vy, 0) : -1;
-  if (!m.watch || m.watch.i !== ki || m.watch.j !== kj || m.watch.way !== way) {
+  // a new spot when its prey has moved on, but not more often than every waitCommitS
+  if (!m.watch || ((m.watch.i !== ki || m.watch.j !== kj || m.watch.way !== way) && now - m.watch.since > ticks(waitCommitS))) {
     let spot = way >= 0 ? landingAhead(a, k) : null;
     if (!spot) {
       const reach = Math.ceil(Math.max(Math.abs(a.gx - k.gx), Math.abs(a.gy - k.gy))) + 1;
       const land = findNearestLand(a, k.gx, k.gy, reach);
-      spot = land ? [land.tile[0] + 0.5, land.tile[1] + 0.5] : [a.gx, a.gy];
+      spot = land ? [land.tile[0] + 0.5, land.tile[1] + 0.5] : a.pose === "swim" ? null : [a.gx, a.gy];
     }
-    m.watch = { i: ki, j: kj, way, spot };
+    m.watch = spot && { i: ki, j: kj, way, spot, since: now };
   }
+  // in the water itself, with no land to wait on in sight: it makes for land, or swims on
+  if (!m.watch) return calm(a, m, now);
   const dx = m.watch.spot[0] - a.gx, dy = m.watch.spot[1] - a.gy;
   if (dx * dx + dy * dy < shoreWaitTiles * shoreWaitTiles) return IDLE;
   return move(a, m, dx, dy, "trot", now, true);
@@ -602,6 +659,8 @@ function settle(a, m, now) {
 //   A paired critter mates with its partner while she is in heat (she while she is); a
 //     paired male otherwise keeps within pairStayTiles of her, and she within twice that
 //     of him (so one trotting off at the other's speed can't leave the other behind).
+//   Keeping near kin, once it sets off back it comes to within keepCloseShare of that
+//     distance, then wanders afresh (so it doesn't go to and fro across the limit).
 //   (Going to them, it trots while 2 tiles beyond where it would stop, else walks.)
 //   An unpaired grown critter courts the nearest unpaired grown critter of its species
 //     and the other sex, if not kin or familiar (WESTERMARCK): goes to it and stands
@@ -615,11 +674,16 @@ function social(a, m, now, romanceOnly = false) {
     return k && k.alive && !k.lost ? k : null;
   };
   const d2Of = k => (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2;
-  // the intent to go to k (uid) until within `within` (in sight), or null when there
-  const goTo = (uid, k, within) => {
-    const d2 = d2Of(k);
-    if (k.seenTick === now) { if (d2 <= within * within) return null; }
-    else if (d2 <= kinLostTiles * kinLostTiles) { k.lost = true; return null; }
+  // the intent to go to k (uid) until within `within` (in sight), or null when there. To
+  // keep near its kin (keep: "parent", "young" or "mate", whichever of them is nearest),
+  // once it sets off it goes on to within keepCloseShare of that, then wanders afresh.
+  const goTo = (uid, k, within, keep = null) => {
+    const d2 = d2Of(k), going = keep !== null && m.closing === keep;
+    const stop = going ? within * keepCloseShare : within;
+    if (k.seenTick === now) {
+      if (d2 <= stop * stop) { if (going) m.closing = null; return null; }
+    } else if (d2 <= kinLostTiles * kinLostTiles) { k.lost = true; m.closing = null; return null; }
+    if (keep !== null && !going) { m.closing = keep; m.plan = null; }
     return move(a, m, k.gx - a.gx, k.gy - a.gy, d2 > within * within + 4 ? "trot" : "walk", now);
   };
   const mateWith = (uid, k) => {
@@ -634,7 +698,7 @@ function social(a, m, now, romanceOnly = false) {
     const uid = a.parentUids.find(live);
     if (uid === undefined) return null;
     m.mode = "family";
-    return goTo(uid, live(uid), followParentTiles);
+    return goTo(uid, live(uid), followParentTiles, "parent");
   }
 
   if (!a.isMale && !romanceOnly) {
@@ -645,7 +709,7 @@ function social(a, m, now, romanceOnly = false) {
     }
     if (infant !== null) {
       m.mode = "family";
-      const go = goTo(infant, live(infant), motherStayTiles);
+      const go = goTo(infant, live(infant), motherStayTiles, "young");
       if (go) return go;
     }
   }
@@ -658,7 +722,7 @@ function social(a, m, now, romanceOnly = false) {
     if (inHeat && p.seenTick === now) { m.mode = "mate"; return mateWith(a.mateUid, p); }
     if (romanceOnly) return null;
     m.mode = "family";
-    return goTo(a.mateUid, p, a.isMale ? pairStayTiles : 2 * pairStayTiles);
+    return goTo(a.mateUid, p, a.isMale ? pairStayTiles : 2 * pairStayTiles, "mate");
   }
 
   let best = null, bestD2 = Infinity;
@@ -681,15 +745,18 @@ function social(a, m, now, romanceOnly = false) {
 }
 
 // A swimmer short of stamina (below sim.swimMinStamina) heads for the nearest land it
-// can see and climb onto, whatever else it would do; with none in sight, it swims on.
+// can see and climb onto, whatever else it would do; with none in sight, it swims on the
+// way it was going.
 function toShore(a, m, now) {
-  m.mode = "ashore"; m.plan = null;
+  m.mode = "ashore";
   const blocked = a.blockedTick > m.lastTurn;
   if (!m.shore || (blocked && ++m.shore.blockedTurns > shoreRetryTurns)) {
     const land = findNearestLand(a, a.gx, a.gy);
     m.shore = land ? { gx: land.tile[0] + 0.5, gy: land.tile[1] + 0.5, blockedTurns: 0 } : null;
   }
+  // no land in sight: swims on as it was going (its plan, kept from turn to turn)
   if (!m.shore) return calm(a, m, now);
+  m.plan = null;
   return move(a, m, m.shore.gx - a.gx, m.shore.gy - a.gy, "walk", now);
 }
 
@@ -784,6 +851,63 @@ function think() {
     sim.setIntent(a, intent);
   }
   for (const a of memories.keys()) if (!sim.allCritters.includes(a)) dropMemory(a);
+  if (pacing.on) watchPacing(now);
+}
+
+// DEBUG, PACING: flags a critter whose last pacingTiles tiles entered hold no more than
+// pacingDistinct different ones (going back and forth over a few tiles). Each flag goes
+// into pacing.log (the newest pacingLogMax) with the modes and decisions over those
+// steps, the ground around (patch) and the critters near, and to the console (info). A
+// critter is flagged again only after it has left the pattern. In the browser's console:
+// mind.pacing.log; mind.pacing.on = false turns it off.
+const pacingTiles = 24, pacingDistinct = 6, pacingLogMax = 500;
+const pacing = { on: true, log: [] };
+// The ground around tile (i, j): a row of cells per j, each its terrain's initial (W
+// water, g grass, d dirt, s stone; # a boulder) and lowest corner's level.
+function pacingPatch(ci, cj, r) {
+  const rows = [];
+  for (let j = cj - r; j <= cj + r; j++) {
+    const row = [];
+    for (let i = ci - r; i <= ci + r; i++) {
+      const t = sim.getTerrainAt(i, j);
+      row.push(!t ? "  " : (sim.obstacleAt(i, j) ? "#" : t[0].replace("w", "W")) + Math.min(...sim.tileCorners(i, j)));
+    }
+    rows.push(`${j}: ` + row.join(" "));
+  }
+  return { from: [ci - r, cj - r], rows };
+}
+function watchPacing(now) {
+  for (const a of sim.allCritters) {
+    if (!sim.isLiveCritter(a)) continue;
+    const m = memories.get(a);
+    if (!m) continue;
+    const i = Math.floor(a.gx), j = Math.floor(a.gy), key = i * 100000 + j;
+    const steps = m.pacingSteps || (m.pacingSteps = []);
+    if (steps.length && steps[steps.length - 1].key === key) continue;
+    const it = m.intent;
+    steps.push({ key, i, j, tick: now, mode: m.mode, food: +a.food.toFixed(2), pose: a.pose,
+      intent: !it ? null : it.gait + (it.dx !== undefined ? ` ${it.dx.toFixed(2)},${it.dy.toFixed(2)}` : it.dir !== undefined ? ` dir ${it.dir}` : "") });
+    if (steps.length > pacingTiles) steps.shift();
+    if (steps.length < pacingTiles) continue;
+    const distinct = new Set(steps.map(s => s.key)).size;
+    if (distinct > pacingDistinct) { m.pacingFlagged = false; continue; }
+    if (m.pacingFlagged) continue;
+    m.pacingFlagged = true;
+    const modes = {};
+    for (const s of steps) modes[s.mode] = (modes[s.mode] || 0) + 1;
+    const entry = { tick: now, uid: a.uid, species: a.species, grown: sim.isGrown(a), distinct,
+      seconds: +((now - steps[0].tick) * sim.tempo).toFixed(1), modes, steps: steps.slice(),
+      state: { target: m.target, searching: m.searching, flee: m.flee && { ...m.flee }, grazeTo: m.grazeTo,
+        court: m.court && { ...m.court }, plan: m.plan && { kind: m.plan.kind }, detour: m.detour && { ...m.detour },
+        mateUid: a.mateUid, parents: a.parentUids.slice(), young: a.youngUids.length,
+        watch: m.watch && { ...m.watch }, shore: m.shore && { ...m.shore } },
+      at: [+a.gx.toFixed(2), +a.gy.toFixed(2)], patch: pacingPatch(i, j, 4),
+      near: sim.allCritters.concat(sim.allCorpses).filter(c => c !== a && Math.abs(c.gx - a.gx) < 4 && Math.abs(c.gy - a.gy) < 4)
+        .map(c => ({ uid: c.uid, species: c.species, live: sim.isLiveCritter(c), at: [+c.gx.toFixed(1), +c.gy.toFixed(1)], mode: memories.get(c)?.mode })) };
+    pacing.log.push(entry);
+    if (pacing.log.length > pacingLogMax) pacing.log.shift();
+    if (typeof console !== "undefined") console.info("[pacing]", a.species, a.uid, `${distinct} tiles in ${entry.seconds} s`, modes);
+  }
 }
 
 // For tests and debugging: leave a critter alone (it keeps doing what it was last told),
@@ -811,6 +935,7 @@ function stateOf(a) {
   const m = memories.get(a);
   if (!m) return null;
   return { mode: m.mode, target: m.target, searching: m.searching, flee: m.flee, detour: m.detour, watch: m.watch,
+    grazeTo: m.grazeTo, closing: m.closing,
     slot: m.slot, lastTurn: m.lastTurn, court: m.court, familiar: [...m.familiar],
     avoid: m.avoid.map(t => t > sim.tickCount ? 1 : 0).join(""),
     known: [...m.known].map(([uid, k]) => ({ uid, ...k })) };
@@ -829,7 +954,8 @@ function attach(theSim, theSenses) {
   sim.onTick(think);
 }
 
-return { attach, takeOver, ignore, forget, stateOf, get turnTicks() { return turnTicks; }, wolfHuntBelow };
+return { attach, takeOver, ignore, forget, stateOf, get turnTicks() { return turnTicks; }, wolfHuntBelow,
+  pacing };
 
 })();
 

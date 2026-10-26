@@ -13,6 +13,11 @@
 //    nearest of its 8 directions; the vector is scaled (a square root) only when it changes
 //  - turns: each critter decides at most 10 times a game-second and once a tick, and about
 //    as many wolves (and deer) decide on each tick as on any other
+//  - grass under a boulder: a third as much grows there; a hungry deer eats it from beside
+//    the boulder, facing it, in a third of the time a full tile takes
+//  - no pacing (mind.pacing flags a critter going to and fro over 6 tiles or fewer): a
+//    paired stag kept from his hind comes well back to her, rather than to and fro across
+//    his limit
 // Each encounter is set up on open land (no water or boulders nearby) with every other
 // critter parked off the map and left alone by the mind, and the two starting with no
 // memories.
@@ -272,6 +277,70 @@ async function main(browser, r) {
   const calmGallops = Object.entries(gallops).filter(([mode]) => mode !== "chase" && mode !== "flee");
   r.check(calmGallops.length === 0,
     `galloping only to chase or flee (critter-ticks galloping in a minute: ${JSON.stringify(gallops)})`);
+
+  // PACING: grass under a boulder, and a paired stag keeping near his hind
+  await fresh();
+  const pace = await p.evaluate(() => {
+    const S = sim.internals, out = {};
+    const free = (i, j) => sim.getTerrainAt(i, j) === "grass" && !sim.isBlockedTile(i, j);
+    // a boulder on grass with open grass around it
+    let b = null;
+    for (let i = 8; i < sim.gridWidthN - 8 && !b; i++) for (let j = 8; j < sim.gridHeightN - 8 && !b; j++) {
+      if (sim.obstacleAt(i, j) !== "boulder" || sim.getTerrainAt(i, j) !== "grass") continue;
+      let ok = true;
+      for (let di = -4; di <= 4 && ok; di++) for (let dj = -4; dj <= 4 && ok; dj++)
+        if ((di || dj) && !free(i + di, j + dj)) ok = false;
+      if (ok) b = [i, j];
+    }
+    if (!b) return null;
+    sim.allCritters.forEach(c => { c.gx = c.gy = c.nextGX = c.nextGY = -500 - c.uid * 3; c.speed = 0; mind.ignore(c); });
+    const H = sim.gridHeightN;
+    for (let di = -30; di <= 30; di++) for (let dj = -30; dj <= 30; dj++) // (all it can see)
+      if (sim.getTerrainAt(b[0] + di, b[1] + dj) === "grass") S.setGrassKg((b[0] + di) * H + b[1] + dj, 0);
+    S.growGrass(1e9); // (grows back to its limit: under the rock, a third as much)
+    out.most = { rock: sim.grassFoodAt(b[0], b[1]) / sim.grassMaxKg, open: sim.grassFoodAt(b[0] + 5, b[1]) / sim.grassMaxKg };
+    for (let di = -30; di <= 30; di++) for (let dj = -30; dj <= 30; dj++)
+      if (sim.getTerrainAt(b[0] + di, b[1] + dj) === "grass") S.setGrassKg((b[0] + di) * H + b[1] + dj, 0);
+    const rockKg = sim.grassMostAt(b[0], b[1]);
+    S.setGrassKg(b[0] * H + b[1], rockKg); // only the grass under the rock
+    const [stag, hind] = [true, false].map(male => sim.allCritters.find(c => c.species === "deer" && c.isMale === male && sim.isGrown(c)));
+    const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; c.wind = c.stamina = 1; S.setCritterIdle(c); };
+    put(hind, b[0] - 1.5, b[1] + 0.5); hind.food = 0.5; hind.mateUid = null; mind.forget(hind); mind.ignore(hind, false);
+    let eatingTicks = 0, facing = true, inside = false;
+    for (let k = 0; k < 15 / sim.tempo && sim.grassFoodAt(b[0], b[1]) > 0; k++) {
+      S.tick();
+      if (hind.eating && hind.eatAt) {
+        eatingTicks++;
+        if (sim.getDir(b[0] + 0.5 - hind.gx, b[1] + 0.5 - hind.gy, -1) !== hind.currentDirection) facing = false;
+      }
+      if (Math.floor(hind.gx) === b[0] && Math.floor(hind.gy) === b[1]) inside = true;
+    }
+    const rate = S.SPEEDS.eatKgPerS.deer;
+    out.boulder = { left: sim.grassFoodAt(b[0], b[1]), eatingS: +(eatingTicks * sim.tempo).toFixed(2),
+      expectS: +(rockKg / rate).toFixed(2), fullTileS: +(sim.grassMaxKg / rate).toFixed(2), facing, inside,
+      at: [hind.gx - b[0], hind.gy - b[1]].map(v => +v.toFixed(1)) };
+    mind.ignore(hind);
+    // a pair: the hind stands; the stag starts just beyond pairStay (6) of her
+    S.critterByUid.forEach(o => { if (o.mateUid === stag.uid || o.mateUid === hind.uid) o.mateUid = null; });
+    stag.mateUid = null; hind.mateUid = null; S.pair(stag, hind);
+    hind.lastBredAt = stag.lastBredAt = sim.now; // (not in heat)
+    put(hind, b[0] - 3.5, b[1] - 3.5); sim.setIntent(hind, { gait: "idle" });
+    put(stag, hind.gx + 7, hind.gy); stag.food = 1; mind.forget(stag); mind.ignore(stag, false);
+    const log0 = mind.pacing.log.length;
+    let closest = Infinity;
+    for (let k = 0; k < 20 / sim.tempo; k++) { S.tick(); closest = Math.min(closest, Math.hypot(stag.gx - hind.gx, stag.gy - hind.gy)); }
+    out.pair = { closest: +closest.toFixed(2), flagged: mind.pacing.log.slice(log0).filter(e => e.uid === stag.uid).length };
+    mind.ignore(stag);
+    return out;
+  });
+  r.check(pace && Math.abs(pace.most.rock - 1 / 3) < 1e-6 && Math.abs(pace.most.open - 1) < 1e-6,
+    `grass under a boulder grows to a third of the most (${JSON.stringify(pace && pace.most)})`);
+  const B = pace && pace.boulder;
+  r.check(B && B.left === 0 && !B.inside && B.facing && Math.abs(B.eatingS / B.expectS - 1) < 0.1
+    && Math.abs(B.eatingS / B.fullTileS - 1 / 3) < 0.05,
+    `a hungry deer eats the grass under a boulder from beside it, facing it, in ${B && B.eatingS} s (a full open tile: ${B && B.fullTileS} s) (${JSON.stringify(B)})`);
+  r.check(pace && pace.pair.closest <= 3.2 && pace.pair.flagged === 0,
+    `a paired stag beyond his limit comes well back to his hind, not to and fro across it (${JSON.stringify(pace && pace.pair)})`);
 
   r.noProblems(p);
   await p.close();
