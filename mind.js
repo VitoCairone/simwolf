@@ -33,6 +33,8 @@
 //   mates and family (social): courting and mating as above, at any hunger; keeping near
 //     a partner or infants; the young keep near a parent
 //   anything else wanders (calm)
+// And whatever it decides, if that is to stand still or sleep and something has just
+// bumped into it, it steps aside first (giveWay).
 // Every move goes through steer, which finds a way round obstacles.
 
 const mind = (() => {
@@ -92,7 +94,10 @@ const suckleGraceS = 0.6;        // getting nothing this long (longer than a stu
 const suckleRetryS = 5;          // ...it tries again after this long
 const keepCloseShare = 0.5;      // keeping near kin, it comes back to within this share of the distance
 const motherStayTiles = 4;       // a mother keeps within this of her infants
-const followParentTiles = 3;     // the young keep within this of a parent
+const followParentTiles = 3;     // an infant keeps within this of a parent...
+const followWeanedTiles = 10;    // ...a weaned youngster, within this
+const kinSpacingTiles = 1.5;     // coming back to kin, it stops at least this far off
+const yieldS = 0.8;              // bumped while standing, it steps aside this long
 const kinLostTiles = 2;          // kin not where last seen, this near: lost until seen again
 const roamS = 40;                // an unpaired grown critter roams one way up to this long
 const playerHandoverS = 2;       // after the player lets go, the wolf waits this long
@@ -139,8 +144,9 @@ function memoryOf(a) {
       familiar: new Set(),    // uids of its species met while it or they were infants
       court: null,            // the critter it is courting: { uid, since }
       refused: new Map(),     // uid -> courting it again only after this tick
-      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | ashore | court | mate | family | nurse | sleep
+      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | ashore | court | mate | family | nurse | sleep | yield
       sleeping: false,        // asleep (see sleep)
+      yield: null,            // giving way: { until, intent } (see giveWay)
       target: null,           // a wolf's prey (uid)
       targetUntil: -Infinity, // ...kept until this tick at least
       flee: null,             // a deer's way to flee: { dx, dy, until, since }
@@ -686,13 +692,15 @@ function settle(a, m, now) {
 
 // MATES AND FAMILY: an intent, or null for nothing to do; with romanceOnly, only for
 // courting and mating.
-//   The young (not grown) keep within followParentTiles of a parent (the mother first).
+//   The young (not grown) keep near a parent (the mother first): an infant within
+//     followParentTiles, a weaned youngster within followWeanedTiles (it hunts or grazes
+//     for itself, and roams around the family).
 //   A female keeps within motherStayTiles of her nearest infant.
 //   A paired critter mates with its partner while she is in heat (she while she is); a
 //     paired male otherwise keeps within pairStayTiles of her, and she within twice that
 //     of him (so one trotting off at the other's speed can't leave the other behind).
 //   Keeping near kin, once it sets off back it comes to within keepCloseShare of that
-//     distance, then wanders afresh (so it doesn't go to and fro across the limit).
+//     distance (but no nearer than kinSpacingTiles), then wanders afresh (so it doesn't go to and fro across the limit).
 //   (Going to them, it trots while 2 tiles beyond where it would stop, else walks.)
 //   An unpaired grown critter courts the nearest unpaired grown critter of its species
 //     and the other sex, if not kin or familiar (WESTERMARCK): goes to it and stands
@@ -711,7 +719,7 @@ function social(a, m, now, romanceOnly = false) {
   // once it sets off it goes on to within keepCloseShare of that, then wanders afresh.
   const goTo = (uid, k, within, keep = null) => {
     const d2 = d2Of(k), going = keep !== null && m.closing === keep;
-    const stop = going ? within * keepCloseShare : within;
+    const stop = going ? Math.max(within * keepCloseShare, kinSpacingTiles) : within;
     if (k.seenTick === now) {
       if (d2 <= stop * stop) { if (going) m.closing = null; return null; }
     } else if (d2 <= kinLostTiles * kinLostTiles) { k.lost = true; m.closing = null; return null; }
@@ -730,7 +738,7 @@ function social(a, m, now, romanceOnly = false) {
     const uid = a.parentUids.find(live);
     if (uid === undefined) return null;
     m.mode = "family";
-    return goTo(uid, live(uid), followParentTiles, "parent");
+    return goTo(uid, live(uid), sim.isInfant(a) ? followParentTiles : followWeanedTiles, "parent");
   }
 
   if (!a.isMale && !romanceOnly) {
@@ -859,6 +867,28 @@ function findNearestLand(a, gx, gy, maxR = Infinity) {
   return best;
 }
 
+// GIVING WAY: a critter at ease (standing still, asleep, wandering or keeping near kin)
+// that another has just moved into (sim's BUMPED: it feels it) steps aside for yieldS,
+// across the bumper's way, to the side it can step to; so a family around one of them
+// never pens it in. Then it carries on (lying down again, say).
+function giveWay(a, m, intent, now) {
+  const atEase = intent === IDLE || intent === SLEEP || (intent && intent.gait === "idle")
+    || m.mode === "calm" || m.mode === "family" || m.mode === "yield";
+  if (m.yield && now < m.yield.until && atEase) return m.yield.intent;
+  m.yield = null;
+  if (!atEase || a.pose === "swim" || !(sim.tickCount - a.bumpedTick <= turnTicks)) return intent;
+  // across the bumper's way: whichever side it can step to (the left first)
+  const dx = a.bumpedDx, dy = a.bumpedDy;
+  for (const [sx, sy] of [[-dy, dx], [dy, -dx]]) {
+    const k = 1 / Math.max(Math.abs(sx), Math.abs(sy), 1e-6);
+    if (!sim.canStepTo(a, a.gx + sx * k, a.gy + sy * k)) continue;
+    m.yield = { until: now + ticks(yieldS), intent: { dx: sx, dy: sy, gait: "walk" } };
+    m.mode = "yield";
+    return m.yield.intent;
+  }
+  return intent;
+}
+
 // Every tick: the critters whose turn it is perceive, remember and decide.
 function think() {
   const now = sim.tickCount;
@@ -878,6 +908,7 @@ function think() {
     if (now - m.playerTick < ticks(playerHandoverS)) intent = IDLE;
     else if (a.pose === "swim" && a.stamina < sim.swimMinStamina) intent = toShore(a, m, now);
     else intent = a.species === "wolf" ? decideWolf(a, m, now) : decideDeer(a, m, now);
+    intent = giveWay(a, m, intent, now);
     m.intent = intent;
     m.lastTurn = now;
     sim.setIntent(a, intent);

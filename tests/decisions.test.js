@@ -15,6 +15,8 @@
 //    as many wolves (and deer) decide on each tick as on any other
 //  - grass under a boulder: a third as much grows there; a hungry deer eats it from beside
 //    the boulder, facing it, in a third of the time a full tile takes
+//  - giving way: bumped while standing or asleep, a critter steps aside (so a family
+//    resting around one of them doesn't pen it in)
 //  - no pacing (mind.pacing flags a critter going to and fro over 6 tiles or fewer): a
 //    paired stag kept from his hind comes well back to her, rather than to and fro across
 //    his limit
@@ -342,6 +344,37 @@ async function main(browser, r) {
     `a hungry deer eats the grass under a boulder from beside it, facing it, in ${B && B.eatingS} s (a full open tile: ${B && B.fullTileS} s) (${JSON.stringify(B)})`);
   r.check(pace && pace.pair.closest <= 3.2 && pace.pair.flagged === 0,
     `a paired stag beyond his limit comes well back to his hind, not to and fro across it (${JSON.stringify(pace && pace.pair)})`);
+
+  // GIVING WAY: a deer asleep in another's path, bumped, gets up and steps aside, and the
+  // other walks on through; a weaned youngster ranges further from its parent than an infant
+  await fresh();
+  const way = await p.evaluate(() => {
+    if (!setup({ deerAt: [30, 30], deerThinks: false })) return null;
+    const S = sim.internals, w = __w, out = {};
+    w.gx = w.nextGX = w.gy = w.nextGY = -800; mind.ignore(w);
+    const [a, b] = sim.allCritters.filter(c => c.species === "deer" && sim.isGrown(c) && c !== __d).slice(0, 2);
+    const at = [__d.gx - 30, __d.gy - 30];
+    __d.gx = __d.nextGX = __d.gy = __d.nextGY = -820; mind.ignore(__d);
+    const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; c.food = 1; c.wind = c.stamina = 1; c.lifespanS = 1e9; S.setCritterIdle(c); };
+    S.setNeedSleep(true);
+    put(a, at[0] + 2, at[1]); a.wake = 0.1; mind.forget(a); mind.ignore(a, false);
+    put(b, at[0], at[1]); mind.ignore(b); b.wake = 1;
+    for (let k = 0; k < 60; k++) S.tick();
+    out.asleep = a.pose === "sleep";
+    const a0 = [a.gx, a.gy];
+    sim.setIntent(b, { dx: 1, dy: 0, gait: "walk" });
+    const modes = new Set();
+    for (let k = 0; k < 6 / sim.tempo && b.gx < a0[0] + 1.5; k++) { b.wake = 1; S.tick(); modes.add(mind.stateOf(a).mode); }
+    out.passed = b.gx >= a0[0] + 1.5; out.modes = [...modes];
+    out.aside = +Math.hypot(a.gx - a0[0], a.gy - a0[1]).toFixed(2);
+    for (let k = 0; k < 4 / sim.tempo; k++) S.tick();
+    out.asleepAgain = a.pose === "sleep";
+    S.setNeedSleep(false);
+    mind.ignore(a);
+    return out;
+  });
+  r.check(way && way.asleep && way.passed && way.modes.includes("yield") && way.aside > 0.3 && way.asleepAgain,
+    `a deer asleep in another's way, bumped, gets up, steps aside and lies down again; the other walks on through (${JSON.stringify(way)})`);
 
   r.noProblems(p);
   await p.close();

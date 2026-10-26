@@ -15,7 +15,8 @@ async function main(browser, r) {
   // Find a straight shoreline: land tiles to the west, open water to the east (grid E).
   const setup = await p.evaluate(() => {
     sim.pause();
-    sim.allCritters.filter(c => c !== sim.pcWolf && c !== sim.internals.deer[0]).forEach(c => {
+    window.__d = sim.internals.deer.find(c => sim.isLiveCritter(c)); // (one may have been killed already)
+    sim.allCritters.filter(c => c !== sim.pcWolf && c !== window.__d).forEach(c => {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
     });
     const T = (i, j) => sim.getTerrainAt(i, j);
@@ -142,7 +143,7 @@ async function main(browser, r) {
   // 5. a deer swims too, with its own sheet and 40x48 frames, at its own speed
   const d = await p.evaluate(([i, j]) => {
     sim.pcWolf.gx = sim.pcWolf.gy = sim.pcWolf.nextGX = sim.pcWolf.nextGY = -80; sim.internals.setCritterIdle(sim.pcWolf);
-    const a = sim.internals.deer[0];
+    const a = window.__d;
     a.gx = a.nextGX = i - 1 + 0.5; a.gy = a.nextGY = j + 0.5; mind.ignore(a); a.stunnedUntil = 0;
     sim.internals.setCritterIdle(a); sim.internals.setCritterMoving(a, sim.DIR_E, "walk");
     for (let n = 0; n < 600 && a.pose !== "swim"; n++) sim.internals.tick();
@@ -157,7 +158,7 @@ async function main(browser, r) {
     `deer swims at ${d.kmh.toFixed(2)} km/h (expected ${sp.kph.deer.swim})`);
   r.check(d.cls === "critter deer-swim" && d.size.join() === "40px,48px",
     `deer uses its swim sheet (class "${d.cls}", ${d.size.join(" x ")} frames)`);
-  await p.evaluate(() => { const a = sim.internals.deer[0]; animat.setZoom(4);
+  await p.evaluate(() => { const a = window.__d; animat.setZoom(4);
     animat.centerCameraOn(a.gx, a.gy); });
   await p.screenshot({ path: path.join(outDir, "deer-swimming.png"), clip });
   r.noProblems(p);

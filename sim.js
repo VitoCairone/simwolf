@@ -675,6 +675,7 @@ function initCritter(a, species, isNewborn = false) {
   a.stamina = 1;
   a.nursingOn = null;      // the mother it is suckling from (see BREEDING)
   a.wake = isNewborn ? 1 : randBetween(0.4, 1); // (see SLEEP)
+  a.bumpedTick = -Infinity; // (see COLLISIONS)
   a.wantsSleep = false;
   a.sleepForced = false;
   a.food = isNewborn ? 1 : species === "wolf" ? wolfStartFood : randBetween(0.5, 1);
@@ -1862,7 +1863,9 @@ function updateAllCritters() {
 }
 
 // COLLISIONS: every live critter's next position is checked against blocked tiles and
-// every other live critter at once (the dying and corpses are walked over like ground). A wolf touching a live deer on land kills it; any
+// every other live critter at once (the dying and corpses are walked over like ground).
+// BUMPED: a critter that another moves into feels it: a.bumpedTick, a.bumpedBy (its uid)
+// and the way it was moving, (a.bumpedDx, a.bumpedDy). A wolf touching a live deer on land kills it; any
 // other collider is stunned where it is. This is the only place positions change.
 // TODO: kill only when the wolf bites, front-on; and let a critter bumped from behind
 // carry on when the space ahead is open.
@@ -1876,6 +1879,13 @@ function moveAllTogether(movers) {
   collidePairs.forEach(pair => {
     if (pair[0] === -1) return;
     const [c0, c1] = [allColliders[pair[0]], allColliders[pair[1]]];
+    // each feels the other moving into it (BUMPED)
+    for (const [felt, mover] of [[c0, c1], [c1, c0]]) {
+      if (mover.nextGX === mover.gx && mover.nextGY === mover.gy) continue;
+      felt.bumpedTick = g_tick;
+      felt.bumpedBy = mover.uid;
+      felt.bumpedDx = mover.nextGX - mover.gx; felt.bumpedDy = mover.nextGY - mover.gy;
+    }
     if (!isLiveCritter(c0) || !isLiveCritter(c1) || c0.species === c1.species) return;
     // no kills in the water: a wolf couldn't eat the carcass there, or drag it ashore
     if (isInWater(c0.species === "deer" ? c0 : c1)) return;
@@ -2174,7 +2184,7 @@ function start({ consoleOnly = false } = {}) {
 // currentDirection (the facing), hx, hy (the heading), speed, targetSpeed, species, wind,
 // stamina, food, eating, carcass, carcassFullKg, uid, blockedTick, stunnedUntil, isMale,
 // birthTime, deathTime, weightKg, adultKg, skeletonKg, boxRad, mateUid, matingWith, parentUids, youngUids,
-// pregnancy, nursingOn, wake, sleepForced)
+// pregnancy, nursingOn, wake, sleepForced, bumpedTick, bumpedBy, bumpedDx, bumpedDy)
 // but change the world only through these functions.
 return {
   // lifecycle and time
