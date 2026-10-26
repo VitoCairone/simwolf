@@ -1,5 +1,7 @@
 // Camera pinning and panning (see CAMERA in animat.js, controls.js):
 //  - clicking a critter pins the camera to it; it stays on its corpse when it dies
+//  - INSPECTING: while the camera follows a critter other than the player's wolf, that
+//    critter's meters show below the wolf's, under an eye; not while on the wolf
 //  - toggling the arrows to the wolf pins it back to the player's wolf; toggling them to
 //    the camera unpins it where it is
 //  - arrow-key panning is slower zoomed in, by the zoom factor
@@ -27,6 +29,20 @@ async function main(browser, r) {
   });
   await p.mouse.click(at.x, at.y);
   r.check(await p.evaluate(() => animat.camera.pinned === window.__d), "clicking a deer pins the camera to it");
+  const inspect = await p.evaluate(() => {
+    const d = window.__d, w = sim.pcWolf;
+    d.wind = 0.3; d.stamina = 0.6; d.food = 0.9; w.wind = 1; w.stamina = 1; w.food = 0.5;
+    animat.render();
+    const panel = document.getElementById("inspect-panel"), eye = document.getElementById("inspect-icon");
+    const widths = ["wind", "stamina", "food"].map(m => parseFloat(document.getElementById(`inspect-${m}-fill`).style.width));
+    const own = parseFloat(document.getElementById("food-meter-fill").style.width);
+    const below = panel.getBoundingClientRect().top >= document.getElementById("exertion-meters").getBoundingClientRect().bottom;
+    const eyeAbove = eye.getBoundingClientRect().bottom <= document.getElementById("inspect-wind-fill").getBoundingClientRect().top;
+    return { shown: !panel.hidden && panel.getBoundingClientRect().height > 0, widths, own, below, eyeAbove,
+      text: panel.textContent.trim() };
+  });
+  r.check(inspect.shown && inspect.widths.join() === "30,60,90" && inspect.own === 50 && inspect.below && inspect.eyeAbove && inspect.text === "",
+    `following the deer, its meters show below the wolf's, under an eye, with no text (${JSON.stringify(inspect)})`);
 
   const follows = await p.evaluate(() => {
     const d = window.__d;
@@ -43,7 +59,7 @@ async function main(browser, r) {
 
   // toggles: to wolf mode pins the wolf; to camera mode unpins, leaving the camera put
   await p.click("#arrow-mode-toggle");
-  const toWolf = await p.evaluate(() => animat.camera.pinned === sim.pcWolf);
+  const toWolf = await p.evaluate(() => { animat.render(); return animat.camera.pinned === sim.pcWolf && document.getElementById("inspect-panel").hidden; });
   await p.click("#arrow-mode-toggle");
   const toCamera = await p.evaluate(() => {
     const before = animat.camera.shiftPX;
@@ -51,7 +67,7 @@ async function main(browser, r) {
     return { unpinned: animat.camera.pinned === null, stayed: animat.camera.shiftPX === before };
   });
   r.check(toWolf && toCamera.unpinned && toCamera.stayed,
-    `arrows to the wolf pin the camera on it; arrows to the camera unpin it where it is (${toWolf}, ${JSON.stringify(toCamera)})`);
+    `arrows to the wolf pin the camera on it (the inspected meters hidden); arrows to the camera unpin it where it is (${toWolf}, ${JSON.stringify(toCamera)})`);
 
   // panning speed by zoom
   const pan = async zoom => {

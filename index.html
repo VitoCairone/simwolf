@@ -50,6 +50,18 @@
         <div class="exertion-meter"><div id="food-meter-fill" class="exertion-meter-fill"></div></div>
       </div>
 
+      <!-- The critter the camera follows, if not the player's wolf: its meters, under an eye -->
+      <div id="inspect-panel" hidden>
+        <svg id="inspect-icon" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M2 12 C5 6.5 8.5 4.5 12 4.5 C15.5 4.5 19 6.5 22 12 C19 17.5 15.5 19.5 12 19.5 C8.5 19.5 5 17.5 2 12 Z" />
+          <circle cx="12" cy="12" r="3.5" />
+          <circle cx="12" cy="12" r="1.2" fill="currentColor" />
+        </svg>
+        <div class="exertion-meter"><div id="inspect-wind-fill" class="exertion-meter-fill"></div></div>
+        <div class="exertion-meter"><div id="inspect-stamina-fill" class="exertion-meter-fill"></div></div>
+        <div class="exertion-meter"><div id="inspect-food-fill" class="exertion-meter-fill"></div></div>
+      </div>
+
       <div id="cursor-coords">
         x: –, y: –
       </div>

@@ -246,6 +246,8 @@ const debugWolfEl = el("dbel-pc-wolf");
 const windFillEl = el("wind-meter-fill");
 const staminaFillEl = el("stamina-meter-fill");
 const foodFillEl = el("food-meter-fill");
+const inspectPanelEl = el("inspect-panel");
+const inspectFillEls = ["wind", "stamina", "food"].map(m => el(`inspect-${m}-fill`));
 const zoomInBtn = el("zoom-in");
 const zoomOutBtn = el("zoom-out");
 const arrowsIconEl = el("arrow-mode-icon");
@@ -846,14 +848,21 @@ function drawDebugWolf() {
 }
 
 // METERS: the player's wolf's wind, stamina and food, a full bar when full. No labels:
-// the game shows no words or numbers.
+// the game shows no words or numbers. INSPECTING: while the camera follows another
+// critter (or its corpse), that critter's meters show below, under an eye.
 const windCss = {};
 const staminaCss = {};
 const foodCss = {};
+const inspectCss = [{}, {}, {}];
+let inspectShown = false;
 function drawExertion() {
   setStyle(windFillEl, windCss, "width", `${100 * sim.pcWolf.wind}%`);
   setStyle(staminaFillEl, staminaCss, "width", `${100 * sim.pcWolf.stamina}%`);
   setStyle(foodFillEl, foodCss, "width", `${100 * sim.pcWolf.food}%`);
+  const other = pinned && pinned !== sim.pcWolf ? pinned : null;
+  if (!!other !== inspectShown) { inspectShown = !!other; inspectPanelEl.hidden = !other; }
+  if (other) [other.wind, other.stamina, other.food].forEach((v, k) =>
+    setStyle(inspectFillEls[k], inspectCss[k], "width", `${100 * v}%`));
 }
 
 // Draws the whole view as the simulation is now: after every frame of ticks, and after

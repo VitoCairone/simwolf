@@ -52,9 +52,19 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   height: 100%;
   width: 100%;
 }
-#wind-meter-fill { background-color: #7fe6ff; }
-#stamina-meter-fill { background-color: yellow; }
-#food-meter-fill { background-color: #e03c3c; }
+#wind-meter-fill, #inspect-wind-fill { background-color: #7fe6ff; }
+#stamina-meter-fill, #inspect-stamina-fill { background-color: yellow; }
+#food-meter-fill, #inspect-food-fill { background-color: #e03c3c; }
+/* The inspected critter's meters, the same, under an eye (see METERS in animat.js). */
+#inspect-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+#inspect-panel[hidden] { display: none; }
+#inspect-icon { margin: 2px 0 4px; }
+#inspect-panel .exertion-meter { width: 100%; }
 #field-wrapper {
   flex: 1;
   position: relative;
