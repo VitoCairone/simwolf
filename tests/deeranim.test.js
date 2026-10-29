@@ -21,7 +21,7 @@ async function main(browser, r) {
     w.gx = w.nextGX = w.gx - 3;
     d.wind = d.stamina = 1;
     const el = () => animat.spriteEl(d);
-    const col = () => Math.round(-parseFloat(el().style.backgroundPosition.split(" ")[0]) / 32);
+    const col = () => Math.round(-parseFloat(el().style.backgroundPosition.split(" ")[0]) / 48);
     const sheet = () => getComputedStyle(el()).backgroundImage;
     // the columns shown over n ticks, run together: [[column, ticks], ...]
     const watch = (n, set) => {
@@ -54,7 +54,7 @@ async function main(browser, r) {
     return out;
   });
   const flat = runs => runs.map(([c, n]) => `${c}x${n}`).join(" ");
-  r.check(/deer-land\.png/.test(res.sheet), `the deer's land sheet is deer-land.png (${res.sheet.split("/").pop().replace(/"\)$/, "")})`);
+  r.check(/stag-land\.png/.test(res.sheet), `the deer's land sheet is stag-land.png (${res.sheet.split("/").pop().replace(/"\)$/, "")})`);
   // idle: one whole cycle (from its first column, after wherever it started): every
   // column 11..34 in order, 6 ticks each (30 at 19, 26, 33), then the first again
   const start = res.idle.findIndex(([c], k) => k > 0 && c === 11);

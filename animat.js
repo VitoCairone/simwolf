@@ -138,24 +138,24 @@ const frameDataBySpeciesAndPose = {
   },
   deer: {
     // (columns 10 and 44 are the preview's start and stop of a run, in no cycle)
-    walk: {sheet: "deer", nFrames: 10, colZero: 0, frameW: 32, frameH: 41,
+    walk: {sheet: "deer", nFrames: 10, colZero: 0, frameW: 48, frameH: 41,
       holdTks: 6, topToShadow: 33},
     // standing, looking about, turning its head and lowering it, with a pause at each
     idle: {sheet: "deer", cols: deerIdleCols,
       holds: deerIdleCols.map(c => (c === 19 || c === 26 || c === 33 ? 30 : 6)),
-      frameW: 32, frameH: 41, topToShadow: 33},
+      frameW: 48, frameH: 41, topToShadow: 33},
     // TODO: a trot of its own (this is the run cycle, as for the gallop)
-    trot: {sheet: "deer", nFrames: 9, colZero: 35, frameW: 32, frameH: 41,
+    trot: {sheet: "deer", nFrames: 9, colZero: 35, frameW: 48, frameH: 41,
       holdTks: 6, topToShadow: 33},
-    gallop: {sheet: "deer", nFrames: 9, colZero: 35, frameW: 32, frameH: 41,
+    gallop: {sheet: "deer", nFrames: 9, colZero: 35, frameW: 48, frameH: 41,
       holdTks: 6, topToShadow: 33},
     // standing and eating (sim's a.eating): lowers its head, then keeps it down
     graze: {sheet: "deer", cols: [32, 33], holds: [6, 30], loopFrom: 1,
-      frameW: 32, frameH: 41, topToShadow: 33},
-    mate: {sheet: "deer", nFrames: 1, colZero: 11, frameW: 32, frameH: 41,
+      frameW: 48, frameH: 41, topToShadow: 33},
+    mate: {sheet: "deer", nFrames: 1, colZero: 11, frameW: 48, frameH: 41,
       holdTks: Infinity, topToShadow: 33},
     // larger frames, to fit the ripple ring
-    swim: {sheet: "deer-swim", nFrames: 10, colZero: 0, frameW: 40, frameH: 48,
+    swim: {sheet: "deer-swim", nFrames: 10, colZero: 0, frameW: 48, frameH: 48,
       holdTks: 10, topToShadow: 33 },
     // Plays exactly once in the simulation's death pose (attach checks this). A corpse
     // with a carcass is drawn by drawCarcass instead of "dead".
@@ -188,18 +188,22 @@ function hasAntlers(a) {
 
 // Sheet row and mirroring by direction (DIR_*), for species with a row per direction:
 //            E(↘) SE(↓) S(↙) SW(←) W(↖) NW(↑) N(↗) NE(→)
-// The wolf's rows: 0 ↗, 1 ↘, 2 ↙, 3 ↖, 4 ↑, 5 →, 6 ↓; ← is → mirrored.
+// The wolf's and the deer's rows: 0 ↗, 1 ↘, 2 ↙, 3 ↖, 4 ↑, 5 →, 6 ↓; ← is → mirrored.
+// (The deer's rows 4-6 are drawn by spritecraft/deer_facings.py: placeholder art, not
+// canonical, admin/design_notes.md.)
 const spriteRowByDir = {
   wolf: [1, 6, 2, 5, 3, 4, 0, 5],
+  deer: [1, 6, 2, 5, 3, 4, 0, 5],
 };
 const mirrorByDir = {
   wolf: [false, false, false, true, false, false, false, false],
+  deer: [false, false, false, true, false, false, false, false],
 };
 
 function spriteRow(a) {
   const rows = spriteRowByDir[a.species];
   if (rows) return rows[a.currentDirection];
-  // only the 4 diagonals drawn (the deer): the others borrow the next one clockwise
+  // a species drawn only on the 4 diagonals: the others borrow the next one clockwise
   return (Math.floor(a.currentDirection / 2) + 1) % 4;
 }
 

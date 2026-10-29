@@ -2,7 +2,7 @@
 """The deer sheets without antlers, for hinds and young stags: each antlered sheet's
 antlers removed, frame by frame.
 
-    images/deer-land.png     -> images/hind-land.png
+    images/stag-land.png     -> images/hind-land.png
     images/stag-death.png    -> images/hind-death.png
     images/deer-carcass.png  -> images/hind-carcass.png
 
@@ -36,7 +36,7 @@ ANTLER = [(96, 44, 44), (52, 28, 39), (136, 75, 43)]
 MIN_ANTLER_PX = 6
 # antlered sheet -> (antlerless sheet, frame width, frame height)
 SHEETS = {
-    "deer-land.png": ("hind-land.png", 32, 41),
+    "stag-land.png": ("hind-land.png", 48, 41),
     "stag-death.png": ("hind-death.png", 48, 48),
     "deer-carcass.png": ("hind-carcass.png", 48, 48),
 }

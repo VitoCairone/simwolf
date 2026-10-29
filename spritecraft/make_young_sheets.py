@@ -34,8 +34,8 @@ YOUNG_SCALES = [0.3, 0.45, 0.6, 0.8]  # stages 1-4
 SHEETS = {
     "wolf-land.png": (64, 64, 32, 39),
     "wolf-swim.png": (64, 64, 32, 47),
-    "hind-land.png": (32, 41, 16, 33),
-    "hind-swim.png": (40, 48, 20, 41),
+    "hind-land.png": (48, 41, 24, 33),
+    "hind-swim.png": (48, 48, 24, 41),
     "hind-death.png": (48, 48, 24, 40),
     "hind-carcass.png": (48, 48, 24, 40),
 }

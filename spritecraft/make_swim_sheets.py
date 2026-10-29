@@ -2,7 +2,7 @@
 """Generate the swimming sprite sheets from the run frames of the land sheets.
 
     images/wolf-land.png           -> images/wolf-swim.png   (8 frames x 7 facings, 64x64)
-    images/stag-walk-idle-run.png  -> images/stag-swim.png   (10 frames x 4 facings, 40x48)
+    images/stag-land.png           -> images/stag-swim.png   (10 frames x 7 facings, 48x48)
     images/hind-land.png           -> images/hind-swim.png   (the same without antlers, from the
                                                               walk frames: see make_hind_sheets.py)
 
@@ -66,9 +66,9 @@ SHEETS = {
         sheet_class="wolf-swim",
     ),
     "deer": dict(
-        src="stag-walk-idle-run.png", out="stag-swim.png",
-        rows=range(4), cols=range(35, 45),       # run frames
-        frame=(32, 41), ground=(16, 33), out_frame=(40, 48), cut=17,  # wider/taller for the ring
+        src="stag-land.png", out="stag-swim.png",
+        rows=range(7), cols=range(35, 45),       # run frames, all 7 facings
+        frame=(48, 41), ground=(24, 33), out_frame=(48, 48), cut=17,  # taller for the ring
         axis_by_row={},
         sheet_class="deer-swim",
     ),
@@ -76,9 +76,9 @@ SHEETS = {
         src="hind-land.png", out="hind-swim.png",
         # the walk frames: the run's lowered head would be under water, and a hind has no
         # antlers above it
-        rows=range(4), cols=range(0, 10),
+        rows=range(7), cols=range(0, 10),
         # lower: without antlers, more of the head, neck and back must show above water
-        frame=(32, 41), ground=(16, 33), out_frame=(40, 48), cut=12,
+        frame=(48, 41), ground=(24, 33), out_frame=(48, 48), cut=12,
         axis_by_row={},
         sheet_class="deer-swim",
     ),

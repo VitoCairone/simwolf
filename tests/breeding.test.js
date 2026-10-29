@@ -159,7 +159,7 @@ async function main(browser, r) {
     out.corpse = [animat.spriteEl(young).style.backgroundImage.split("/").pop(), sim.isGrown(young)];
     return out;
   });
-  r.check(antlers.stag[0] === "critter deer" && /deer-land\.png/.test(antlers.stag[1])
+  r.check(antlers.stag[0] === "critter deer" && /stag-land\.png/.test(antlers.stag[1])
     && antlers.hind[0] === "critter deer hind" && /hind-land\.png/.test(antlers.hind[1])
     && antlers.young[0] === "critter deer hind" && antlers.youngStage === 0 && /hind-land\.png/.test(antlers.young[1])
     && /^hind-land-stage\d\.png/.test(antlers.calf[1]),

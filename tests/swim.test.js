@@ -156,7 +156,7 @@ async function main(browser, r) {
   }, setup.shore);
   r.check(d.pose === "swim" && Math.abs(d.kmh - sp.kph.deer.swim) < 0.1,
     `deer swims at ${d.kmh.toFixed(2)} km/h (expected ${sp.kph.deer.swim})`);
-  r.check(d.cls === "critter deer-swim" && d.size.join() === "40px,48px",
+  r.check(d.cls === "critter deer-swim" && d.size.join() === "48px,48px",
     `deer uses its swim sheet (class "${d.cls}", ${d.size.join(" x ")} frames)`);
   await p.evaluate(() => { const a = window.__d; animat.setZoom(4);
     animat.centerCameraOn(a.gx, a.gy); });

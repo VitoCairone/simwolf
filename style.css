@@ -111,12 +111,12 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   background-image: url('./images/wolf-swim.png');
 }
 .deer {
-  width: 32px;
+  width: 48px;
   height: 41px;
-  background-image: url('./images/deer-land.png');
+  background-image: url('./images/stag-land.png');
 }
 .deer-swim {
-  width: 40px;
+  width: 48px;
   height: 48px;
   background-image: url('./images/stag-swim.png');
 }

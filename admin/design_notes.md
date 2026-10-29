@@ -56,3 +56,13 @@ art from them.
   young sheets) are the artist's corpse frame, edited (mouth and eye closed, a breathing
   frame): `extract_wolf_sheet.py`. A stopgap until real lying-down frames are drawn.
 
+- **Deer facing up, right and down.** The artist drew the stag on the 4 diagonals only
+  (`images/deer-land.png`). Rows 4 (↑), 5 (→) and 6 (↓) of the game's sheet
+  `images/stag-land.png` (← is → mirrored) are drawn by `spritecraft/deer_facings.py`:
+  a skeleton fitted to the artist's frames, posed and drawn by pixel rules fitted to them
+  (`deer_pose.py`, `deer_pixels.py`). Its head is the artist's block for its view, pasted
+  at the poll; but seen side-on (the artist drew no profile head) it is drawn from a 3D
+  head (`deer_pose.HEAD`: skull, muzzle, jaw, throat, ears, eyes on the sides of the skull),
+  only the antlers the artist's.
+  The same rows of `hind-land.png`, `stag-swim.png`, `hind-swim.png` and the young sheets
+  are made from them. Rows 0-3 are the artist's, unchanged (centred in wider frames).
