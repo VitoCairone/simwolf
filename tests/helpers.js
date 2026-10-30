@@ -21,8 +21,8 @@ async function launchBrowser() {
 // Opens the game in a new page and records page errors and alert() dialogs.
 // An alert() means the program hit a state that should halt it, so the
 // dialog is dismissed (to keep the test running) and counted as a failure.
-// Unless dayNight is set, the clock is held at noon and no critter needs sleep (see DAY
-// AND NIGHT and SLEEP in sim.js), so other tests aren't upset by the time of day.
+// Unless dayNight is set, the clock is held at noon (see DAY AND NIGHT in sim.js), so
+// other tests aren't upset by the time of day.
 async function openGame(browser, { viewport, initScript, initArg, dayNight = false } = {}) {
   const page = await browser.newPage(viewport ? { viewport } : {});
   page.problems = [];
@@ -31,7 +31,7 @@ async function openGame(browser, { viewport, initScript, initArg, dayNight = fal
   if (initScript) await page.addInitScript(initScript, initArg);
   await page.goto(PAGE_URL);
   await page.waitForTimeout(300); // let the page load create critters and start the loop
-  if (!dayNight) await page.evaluate(() => { sim.internals.holdClock(12); sim.internals.setNeedSleep(false); });
+  if (!dayNight) await page.evaluate(() => { sim.internals.holdClock(12); });
   return page;
 }
 
@@ -78,7 +78,7 @@ async function makeStags(page) {
     c.pregnancy = null;
     c.lifespanS = 1e9;
     c.birthTime = Math.min(c.birthTime, sim.now - sim.internals.SPEEDS.lifeStageAgesS.deer.mate.max);
-    sim.internals.setSkeletonByAge(c);
+    sim.internals.setBodyByAge(c, c.food);
   }));
 }
 

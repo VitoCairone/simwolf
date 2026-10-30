@@ -6,8 +6,8 @@
 // itself it knows only what its senses tell it, now or in memory: where other critters
 // are (prey, threats, carcasses, mates, parents, young alike), what they are, and the
 // terrain and grass in sight. Its own state (meters, age, whether in heat, whom it is
-// paired with or born of) is always its to read, as is the ground under its next steps
-// (sim.canStepTo: it feels its footing).
+// paired with or born of, whether it is suckling) is always its to read, as is the
+// ground under its next steps (sim.canStepTo: it feels its footing).
 //
 // Everything it offers is on the one global it defines, `mind`. Connect it with
 // mind.attach(sim, senses).
@@ -24,7 +24,6 @@
 //     first
 //   a mother stands still while young suckle from her; an infant suckles while hungry
 //     (nursing)
-//   sleep at its species' time of rest when its wakeful meter is low (sleep)
 //   while its meter is above romanceAbove, a grown critter courts and mates, or mates
 //     with its partner in heat (social, romance only)
 //   a deer grazes while hungry (graze); a wolf hunts while hungry and weaned, waiting on
@@ -33,8 +32,11 @@
 //   mates and family (social): courting and mating as above, at any hunger; keeping near
 //     a partner or infants; the young keep near a parent
 //   anything else wanders (calm)
-// And whatever it decides, if that is to stand still or sleep and something has just
-// bumped into it, it steps aside first (giveWay).
+// And whatever it decides, if that is to stand still and something has just bumped into
+// it, it steps aside first (giveWay).
+// HUNGER: its two meters (sim.js, BODY): a.food, the energy its body holds, and a.gut, how
+// full its stomach is. It eats while its body is hungry, until its stomach is full
+// (gutFullAt) or its body is; and starts again only with room in its stomach.
 // Every move goes through steer, which finds a way round obstacles.
 
 const mind = (() => {
@@ -49,12 +51,10 @@ const deerCommitS = 0.75;        // keep to a chosen way to flee at least this l
 const deerCaughtBetween = 0.3;   // the pulls of wolves cancel to below this share: break sideways
 // Above this share of a full meter, courting and mating come before eating.
 const romanceAbove = 0.5;
-const sleepBelow = 0.5;          // sleeps at its time of rest with its wakeful meter below this...
-const sleepAnyTimeBelow = 0.15;  // ...or at any time below this
-const sleepFedAbove = 0.4;       // ...(at its time of rest, only if no hungrier than this)
-const sleepFullAt = 0.98;        // ...and sleeps until this
-const deerGrazeBelow = 0.8;      // a deer starts grazing with its food meter below this
-const deerFullAt = 0.99;         // ...and grazes until it is this full
+const gutFullAt = 0.99;          // stops eating with its stomach this full
+const deerGrazeBelow = 0.8;      // a deer starts grazing with its food meter below this...
+const deerGrazeGutBelow = 0.5;   // ...and its stomach below this
+const deerFullAt = 0.99;         // ...and grazes until it is this full (or its stomach is)
 // A tile is worth walking to and starting on with at least this share of the most a tile
 // holds. Grass regrows a little every second, so without it deer go back for the crumbs
 // on tiles they have just cropped.
@@ -63,9 +63,11 @@ const deerGrazeLookShare = 0.25; // looks this share of its sight for grass firs
 const grazeLosChecks = 40;       // ...checking line of sight to at most this many, best first
 const grazeGiveUpS = 4;          // gives up on grass it has got no nearer to in this long...
 const grazeAvoidS = 60;          // ...and leaves it be this long
-const wolfHuntBelow = 0.75;      // a wolf hunts only with its food meter below this
-const wolfFullAt = 0.99;         // ...and eats until it is this full
-const wolfFeedBelow = 0.9;       // a full wolf goes back to a carcass only below this
+const wolfHuntBelow = 0.75;      // a wolf hunts only with its food meter below this...
+const wolfHuntGutBelow = 0.25;   // ...and its stomach below this
+const wolfFullAt = 0.99;         // eats until it is this full (or its stomach is)...
+const wolfFeedBelow = 0.9;       // ...and goes back to a carcass only below this...
+const wolfFeedGutBelow = 0.5;    // ...with its stomach below this
 const feedQueueTiles = 3;        // blocked this near a carcass, a wolf waits its turn...
 const feedWaitS = 1;             // ...this long, then tries again
 const wolfForgetPreyS = 20;      // gives up on prey it last saw this long ago
@@ -88,7 +90,8 @@ const courtGiveUpS = 30;         // gives up courting one that hasn't mated afte
 const courtRetryS = 120;         // ...and leaves it be this long
 const pairStayTiles = 6;         // a paired male keeps within this of his partner
 const suckleBelow = 0.8;         // an infant goes to suckle with its meter below this...
-const suckleFullAt = 0.99;       // ...and suckles until it is this full
+const suckleGutBelow = 0.5;      // ...and its stomach below this
+const suckleFullAt = 0.99;       // ...and suckles until it is this full (or its stomach is)
 const suckleTouchTiles = 0.1;    // stops this near touching its mother (box to box)
 const suckleGraceS = 0.6;        // getting nothing this long (longer than a stun)...
 const suckleRetryS = 5;          // ...it tries again after this long
@@ -109,7 +112,6 @@ const decideEveryS = 0.1;
 
 const IDLE = { gait: "idle" };
 const EAT = { gait: "eat" };
-const SLEEP = { gait: "sleep" };
 
 const memories = new Map(); // critter -> its memory
 const ignored = new Set();  // critters left alone (tests, debugging)
@@ -144,8 +146,7 @@ function memoryOf(a) {
       familiar: new Set(),    // uids of its species met while it or they were infants
       court: null,            // the critter it is courting: { uid, since }
       refused: new Map(),     // uid -> courting it again only after this tick
-      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | ashore | court | mate | family | nurse | sleep | yield
-      sleeping: false,        // asleep (see sleep)
+      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | ashore | court | mate | family | nurse | yield
       yield: null,            // giving way: { until, intent } (see giveWay)
       target: null,           // a wolf's prey (uid)
       targetUntil: -Infinity, // ...kept until this tick at least
@@ -159,9 +160,8 @@ function memoryOf(a) {
       grazeSince: 0,          // ...the tick it set off for its grazeTo, and its best distance
       grazeBestD2: Infinity,  //    so far
       grazing: false,         // a deer grazing (from hungry until full)
-      suckle: null,           // an infant suckling: { food (its meter at its last turn
-                              // touching her, or null), since (the last tick it rose), retry
-                              // (not again before this tick) }
+      suckle: null,           // an infant suckling: { since (the tick it began getting no
+                              // milk touching her, or null), retry (not again before this tick) }
       grazeTo: null,          // ...the tile it is walking to, [i, j]
       cropping: null,         // ...the tile it is eating, [i, j]
       plan: null,             // a calm critter's plan: { kind, until, intent, ... }
@@ -344,8 +344,6 @@ function decideDeer(a, m, now) {
     m.flee = null;
     const nursing = nurseOrSuckle(a, m, now);
     if (nursing) return nursing;
-    const sleeping = sleep(a, m, now);
-    if (sleeping) return sleeping;
     const romance = a.food > romanceAbove && social(a, m, now, true);
     if (romance) return romance;
     const grazing = graze(a, m, now);
@@ -371,7 +369,8 @@ function decideDeer(a, m, now) {
   return move(a, m, m.flee.dx, m.flee.dy, close ? "gallop" : "trot", now);
 }
 
-// DEER graze from when the food meter falls below deerGrazeBelow until full: eat the
+// DEER graze from when the food meter falls below deerGrazeBelow (with its stomach below
+// deerGrazeGutBelow) until full (or its stomach is): eat the
 // tile underfoot if worth it (and crop it bare once started), else walk to the nearest
 // tile worth it, preferring ones at least half full. Looks deerGrazeLookShare of its
 // sight around, or as far as it sees when nothing there is worth it. Grass under a
@@ -381,8 +380,8 @@ function decideDeer(a, m, now) {
 // An intent, or null if not grazing or no grass worth it is in sight.
 function graze(a, m, now) {
   if (a.pose === "swim" || !sim.can(a, "eat")) return null;
-  if (m.grazing && a.food >= deerFullAt) m.grazing = false;
-  if (!m.grazing && a.food < deerGrazeBelow) m.grazing = true;
+  if (m.grazing && (a.food >= deerFullAt || a.gut >= gutFullAt)) m.grazing = false;
+  if (!m.grazing && a.food < deerGrazeBelow && a.gut < deerGrazeGutBelow) m.grazing = true;
   if (!m.grazing) return null;
   const worth = deerBiteShare * sim.grassMaxKg * 0.999; // (grass is stored as 32-bit floats)
   let grass = senses.grassAround(a, deerGrazeLookShare);
@@ -446,9 +445,11 @@ function graze(a, m, now) {
   return move(a, m, via[0] + 0.5 - a.gx, via[1] + 0.5 - a.gy, "walk", now);
 }
 
-// WOLVES eat first: from below wolfFeedBelow until full (and once old enough to eat), the
-// nearest carcass with meat (blocked near it, it waits its turn: feedWaitS)
-// it perceived within wolfForgetPreyS (seen, or smelled on the wind). Otherwise they hunt while hungry, once weaned (pups stay
+// WOLVES eat first: from below wolfFeedBelow (with its stomach below wolfFeedGutBelow)
+// until full (or its stomach is), and once old enough to eat, the nearest carcass with
+// meat (blocked near it, it waits its turn: feedWaitS) it perceived within
+// wolfForgetPreyS (seen, or smelled on the wind). Otherwise they hunt while hungry (below
+// wolfHuntBelow, with its stomach below wolfHuntGutBelow), once weaned (pups stay
 // with their family and eat what it kills). Of the deer it knows, a wolf picks
 // the nearest, or among those about as near, the one most straight ahead; then keeps to
 // it for wolfCommitS (unless a deer in sight is much nearer) and after that changes only
@@ -459,7 +460,9 @@ function decideWolf(a, m, now) {
   // an infant suckles rather than goes to a carcass
   const suckling = sim.isInfant(a) && nurseOrSuckle(a, m, now);
   if (suckling) return suckling;
-  if (a.food < (m.mode === "feed" ? wolfFullAt : wolfFeedBelow) && sim.can(a, "eat")) {
+  const feeding = m.mode === "feed"
+    ? a.food < wolfFullAt && a.gut < gutFullAt : a.food < wolfFeedBelow && a.gut < wolfFeedGutBelow;
+  if (feeding && sim.can(a, "eat")) {
     let carcass = null, bestD2 = Infinity;
     for (const k of m.known.values()) {
       if (k.species !== "deer" || k.alive || !(k.meat > 0) || now - k.seenTick > ticks(wolfForgetPreyS)) continue;
@@ -477,11 +480,9 @@ function decideWolf(a, m, now) {
   }
   const nursing = nurseOrSuckle(a, m, now);
   if (nursing) { m.target = null; m.searching = false; m.watch = null; return nursing; }
-  const sleeping = sleep(a, m, now);
-  if (sleeping) { m.target = null; m.searching = false; m.watch = null; return sleeping; }
   const romance = a.food > romanceAbove && social(a, m, now, true);
   if (romance) { m.target = null; m.searching = false; m.watch = null; return romance; }
-  if (a.food >= wolfHuntBelow || sim.isInfant(a)) {
+  if (a.food >= wolfHuntBelow || a.gut >= wolfHuntGutBelow || sim.isInfant(a)) {
     m.target = null; m.searching = false; m.watch = null;
     return settle(a, m, now);
   }
@@ -627,10 +628,11 @@ function landingAhead(a, k) {
 // With nothing more pressing: mates and family, else wander.
 // NURSING: a mother that feels young suckling from her (by touch) stands still, carrying
 // on eating if she was. An infant suckles from when its meter falls below suckleBelow
-// until suckleFullAt: goes to its mother where it knows her to be (trotting while 3 tiles
-// off) and, touching her (box within suckleTouchTiles of hers) and perceiving her now,
-// eats, which the simulation makes suckling. Getting nothing for suckleGraceS (its meter
-// not rising: she has none to spare, say), it leaves off for suckleRetryS. An intent, or null.
+// (with its stomach below suckleGutBelow) until suckleFullAt (or its stomach is full):
+// goes to its mother where it knows her to be (trotting while 3 tiles off) and, touching
+// her (box within suckleTouchTiles of hers) and perceiving her now, eats, which the
+// simulation makes suckling. Getting no milk for suckleGraceS (she has none to spare, say),
+// it leaves off for suckleRetryS. An intent, or null.
 function nurseOrSuckle(a, m, now) {
   if (!a.isMale && a.youngUids.some(uid => { const k = m.known.get(uid); return k && k.nursingOnMe && k.seenTick === now; })) {
     m.mode = "nurse"; m.plan = null;
@@ -638,49 +640,28 @@ function nurseOrSuckle(a, m, now) {
   }
   if (!sim.isInfant(a) || a.pose === "swim") { m.suckle = null; return null; }
   const s = m.suckle;
-  if (s && (a.food >= suckleFullAt || s.retry > now)) { if (a.food >= suckleFullAt) m.suckle = null; return null; }
-  if (!s && a.food >= suckleBelow) return null;
-  if (!s) m.suckle = { food: null, since: null, retry: -Infinity };
+  const full = a.food >= suckleFullAt || a.gut >= gutFullAt;
+  if (s && (full || s.retry > now)) { if (full) m.suckle = null; return null; }
+  if (!s && (a.food >= suckleBelow || a.gut >= suckleGutBelow)) return null;
+  if (!s) m.suckle = { since: null, retry: -Infinity };
   const k = a.parentUids.length ? m.known.get(a.parentUids[0]) : undefined;
-  if (!k || !k.alive || k.lost || k.swimming) { m.suckle.food = null; return null; }
+  if (!k || !k.alive || k.lost || k.swimming) { m.suckle.since = null; return null; }
   const dx = k.gx - a.gx, dy = k.gy - a.gy, d2 = dx * dx + dy * dy;
   const reach = a.boxRad + sim.adultBoxRad + suckleTouchTiles;
   if (k.seenTick === now && Math.abs(dx) <= reach && Math.abs(dy) <= reach) {
-    if (m.suckle.food !== null && !(a.food > m.suckle.food)) {
-      if (now - m.suckle.since > ticks(suckleGraceS)) {
-        m.suckle = { food: null, since: null, retry: now + ticks(suckleRetryS) };
-        return null;
-      }
-    } else m.suckle.since = now;
-    m.suckle.food = a.food;
+    if (a.nursingOn !== null) m.suckle.since = null;
+    else if (m.suckle.since === null) m.suckle.since = now;
+    else if (now - m.suckle.since > ticks(suckleGraceS)) {
+      m.suckle = { since: null, retry: now + ticks(suckleRetryS) };
+      return null;
+    }
     m.mode = "nurse"; m.plan = null;
     return EAT;
   }
-  m.suckle.food = null;
+  m.suckle.since = null;
   if (k.seenTick !== now && d2 <= kinLostTiles * kinLostTiles) { k.lost = true; return null; }
   m.mode = "nurse"; m.plan = null;
   return move(a, m, dx, dy, d2 > 9 ? "trot" : "walk", now);
-}
-
-// SLEEP: a critter lies down to sleep when its wakeful meter (a.wake, its own) is below
-// sleepBelow at its species' time for rest, if it isn't hungry (food at least
-// sleepFedAbove): a wolf while the sun is up (wolves rest by day), a deer in the dark or
-// around midday (senses.sky); and below sleepAnyTimeBelow, at any time. It sleeps until
-// the meter is sleepFullAt, unless something more pressing comes first (a deer fleeing,
-// a wolf going to a carcass). Never in the water. (At empty it collapses anyway: see
-// SLEEP in sim.js.)
-function sleep(a, m, now) {
-  if (m.intent !== SLEEP) m.sleeping = false; // woken by something more pressing
-  if (a.pose === "swim") { m.sleeping = false; return null; }
-  if (m.sleeping && a.wake >= sleepFullAt) m.sleeping = false;
-  if (!m.sleeping) {
-    const sky = senses.sky();
-    const restTime = a.species === "wolf" ? sky.sunUp : sky.light < 0.5 || sky.midday;
-    if (a.wake < sleepAnyTimeBelow || (a.wake < sleepBelow && restTime && a.food >= sleepFedAbove)) m.sleeping = true;
-  }
-  if (!m.sleeping) return null;
-  m.mode = "sleep"; m.plan = null;
-  return SLEEP;
 }
 
 function settle(a, m, now) {
@@ -867,12 +848,12 @@ function findNearestLand(a, gx, gy, maxR = Infinity) {
   return best;
 }
 
-// GIVING WAY: a critter at ease (standing still, asleep, wandering or keeping near kin)
+// GIVING WAY: a critter at ease (standing still, wandering or keeping near kin)
 // that another has just moved into (sim's BUMPED: it feels it) steps aside for yieldS,
 // across the bumper's way, to the side it can step to; so a family around one of them
-// never pens it in. Then it carries on (lying down again, say).
+// never pens it in. Then it carries on.
 function giveWay(a, m, intent, now) {
-  const atEase = intent === IDLE || intent === SLEEP || (intent && intent.gait === "idle")
+  const atEase = intent === IDLE || (intent && intent.gait === "idle")
     || m.mode === "calm" || m.mode === "family" || m.mode === "yield";
   if (m.yield && now < m.yield.until && atEase) return m.yield.intent;
   m.yield = null;
@@ -987,6 +968,13 @@ function takeOver(a) {
   if (m) m.playerTick = -Infinity;
 }
 
+// For tests and debugging: a critter at rest, planning to stand still for s seconds.
+function rest(a, s) {
+  const m = memoryOf(a);
+  m.mode = "calm";
+  m.plan = { kind: "wander", until: sim.tickCount + ticks(s), intent: IDLE };
+}
+
 // For tests and debugging: wipe a critter's memory and last decision.
 function forget(a) {
   dropMemory(a);
@@ -1017,7 +1005,7 @@ function attach(theSim, theSenses) {
   sim.onTick(think);
 }
 
-return { attach, takeOver, ignore, forget, stateOf, get turnTicks() { return turnTicks; }, wolfHuntBelow,
+return { attach, takeOver, ignore, forget, rest, stateOf, get turnTicks() { return turnTicks; }, wolfHuntBelow,
   pacing };
 
 })();

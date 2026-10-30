@@ -36,7 +36,7 @@ async function main(browser, r) {
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     const place = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; S.setCritterIdle(c); c.speed = 0; };
     place(w, i - 2.5, j - 3.5); place(d, i + 4.5, j + 3.5);
-    w.food = 0.3; w.wind = w.stamina = 1; d.wind = d.stamina = 1;
+    sim.internals.setFood(w, 0.3); w.wind = w.stamina = 1; d.wind = d.stamina = 1;
     mind.forget(w); mind.ignore(w, false);
     S.setCritterMoving(d, sim.DIR_W, "walk"); // swimming for the shore (grid -x)
     let wolfSwam = false, galloped = false, modes = new Set(), spot = null;
@@ -81,7 +81,7 @@ async function main(browser, r) {
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     const place = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; S.setCritterIdle(c); c.speed = 0; };
     place(w, i - 2.5, j - 3.5); place(d, i + 4.5, j + 3.5);
-    w.food = 0.3; w.wind = w.stamina = 1; d.wind = d.stamina = 1;
+    sim.internals.setFood(w, 0.3); w.wind = w.stamina = 1; d.wind = d.stamina = 1;
     mind.forget(w); mind.ignore(w, false);
     for (let n = 0; n < 60; n++) { S.setCritterMoving(d, sim.DIR_E, "walk"); S.tick(); }
     const waiting = mind.stateOf(w).mode;
@@ -142,7 +142,7 @@ async function main(browser, r) {
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     d.gx = d.nextGX = i + 3.5; d.gy = d.nextGY = j + 0.5; d.stunnedUntil = 0; d.speed = 0;
     S.setCritterIdle(d); S.setCritterMoving(d, sim.DIR_E, "walk"); // swimming away from the shore
-    d.stamina = 0.2; d.food = 1;
+    d.stamina = 0.2; sim.internals.setFood(d, 1);
     mind.forget(d); mind.ignore(d, false);
     const modes = new Set();
     let n = 0;

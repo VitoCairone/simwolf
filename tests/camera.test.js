@@ -31,7 +31,7 @@ async function main(browser, r) {
   r.check(await p.evaluate(() => animat.camera.pinned === window.__d), "clicking a deer pins the camera to it");
   const inspect = await p.evaluate(() => {
     const d = window.__d, w = sim.pcWolf;
-    d.wind = 0.3; d.stamina = 0.6; d.food = 0.9; w.wind = 1; w.stamina = 1; w.food = 0.5;
+    d.wind = 0.3; d.stamina = 0.6; sim.internals.setFood(d, 0.9); w.wind = 1; w.stamina = 1; sim.internals.setFood(w, 0.5);
     animat.render();
     const panel = document.getElementById("inspect-panel"), eye = document.getElementById("inspect-icon");
     const widths = ["wind", "stamina", "food"].map(m => parseFloat(document.getElementById(`inspect-${m}-fill`).style.width));

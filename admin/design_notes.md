@@ -22,7 +22,7 @@ senses (`senses.js`), either now or remembered from earlier (the mind's memory i
 Outside its senses and memory, a critter knows only **itself**. Its own state is always
 available to it:
 
-- its meters: wind, stamina, food
+- its meters: wind, stamina, food (its body's and its stomach's)
 - its own body: position, heading, pose, age and what it is old enough to do, whether
   it is in heat or pregnant
 - its own ties: whom it is paired with, its parents, its young. These are identities only:
@@ -39,6 +39,17 @@ The simulation (`sim.js`) may use the whole world's state to apply physics (coll
 eating what is in reach, nursing, a mating both critters intend), but it never decides
 for a critter. Decisions belong to the mind, which sees only through the senses.
 
+## Biomass is never made but by grass
+
+Everything living is biomass: fat, carbohydrate, protein, water and minerals, in kg (see
+BIOMASS in `sim.js`). Only grass makes it, growing (from air, soil and sunlight, which
+aren't counted). Everything else only moves it (eating, digesting, a womb filling,
+suckling) or spends it, and it leaves the world (burned by metabolism, excreted, rotted
+away with a corpse). A body may turn carbs and fat into each other, and protein into
+either, keeping their energy; nothing makes protein. The ledger (`biomassLedger`) counts
+all that grows and all that leaves, so the world's biomass always adds up
+(`tests/biomass.test.js`).
+
 ## Placeholder art (not canonical)
 
 Some sprites were not drawn by the artist (Scrabling, see ART_CREDIT.txt) and must be
@@ -51,7 +62,7 @@ art from them.
 - **Derived from it:** the deer carcass (`deer-carcass.png`, `hind-carcass.png`,
   `young/hind-carcass-stage*.png`, from the death's last frame:
   `make_deer_carcass.py`), and the deer's sleeping pose (the death's third frame, used as
-  is: `sleep` in animat.js).
+  is: `sleep` in animat.js; not used while sleep is off).
 - **Wolf sleep.** The wolf's sleeping frames (columns 48-49 of `wolf-land.png` and the
   young sheets) are the artist's corpse frame, edited (mouth and eye closed, a breathing
   frame): `extract_wolf_sheet.py`. A stopgap until real lying-down frames are drawn.

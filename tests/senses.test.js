@@ -27,7 +27,7 @@ async function main(browser, r) {
     window.wolfA = sim.allCritters.find(c => c.species === "wolf" && c !== sim.pcWolf && sim.isGrown(c));
     window.deerA = sim.allCritters.find(c => c.species === "deer" && sim.isGrown(c));
     window.deerB = sim.allCritters.find(c => c.species === "deer" && sim.isGrown(c) && c !== deerA);
-    [sim.pcWolf, wolfA, deerA, deerB].forEach(c => { far(c); c.lifespanS = 1e9; c.food = 1; });
+    [sim.pcWolf, wolfA, deerA, deerB].forEach(c => { far(c); c.lifespanS = 1e9; sim.internals.setFood(c, 1); });
     window.by = (a, b) => (senses.perceive(a).find(o => o.uid === b.uid) || {}).by || null;
   });
 
@@ -134,7 +134,7 @@ async function main(browser, r) {
     far(deerA);
     // a hungry wolf crossing the start of the trail, the wind blowing away from it
     S.setWind(Math.PI * 1.5);
-    put(wolfA, hx - 4.5, hy - 5); wolfA.food = 0.3; mind.forget(wolfA); mind.ignore(wolfA, false);
+    put(wolfA, hx - 4.5, hy - 5); sim.internals.setFood(wolfA, 0.3); mind.forget(wolfA); mind.ignore(wolfA, false);
     const modes = new Set();
     out.moved = [0, 0];
     for (let k = 0; k < 6 / sim.tempo; k++) {
@@ -147,7 +147,7 @@ async function main(browser, r) {
     // where the trail ends (as at a kill), it gives it up rather than pace about there
     let nearEnd = 0, samples = 0;
     for (let k = 0; k < 30 / sim.tempo; k++) {
-      wolfA.food = 0.3; S.tick();
+      sim.internals.setFood(wolfA, 0.3); S.tick();
       if (k % 30) continue;
       samples++;
       if (Math.hypot(wolfA.gx - end[0], wolfA.gy - end[1]) < 2.5) nearEnd++;
@@ -165,7 +165,7 @@ async function main(browser, r) {
   // MEMORY: sight's details kept when only heard or smelled
   const memory = await p.evaluate(() => {
     const [hx, hy] = home;
-    put(wolfA, hx, hy); put(deerA, hx + 4, hy); mind.forget(wolfA); mind.ignore(wolfA, false); wolfA.food = 1;
+    put(wolfA, hx, hy); put(deerA, hx + 4, hy); mind.forget(wolfA); mind.ignore(wolfA, false); sim.internals.setFood(wolfA, 1);
     S.tick(); for (let k = 0; k < 10; k++) S.tick();
     const seen = mind.stateOf(wolfA).known.find(k => k.uid === deerA.uid);
     put(deerA, hx + 60, hy); S.setWind(Math.PI); // now only smelled: the wolf is downwind

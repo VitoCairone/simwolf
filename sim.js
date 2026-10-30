@@ -17,8 +17,8 @@ let g_now = 0;                 // game seconds so far; changed only by tick()
 let g_next_uid = 0;
 let isPaused = false;
 
-// The map is square. Its grass feeds about 59 deer: a deer eats ~639 kg of grass a year
-// and a tile grows back 0.4 kg a year (see FOOD), so a deer needs ~1,600 grass tiles;
+// The map is square. Its grass feeds about 59 deer: a deer eats ~639 kg of grass (dry) a
+// year and a tile grows back 0.4 kg a year (see FOOD), so a deer needs ~1,600 grass tiles;
 // 414 x 414 has 94,881. The sea's ring scales with the map; land features are sized in
 // tiles.
 const gridWidthN = 414;
@@ -42,20 +42,19 @@ const gridHeightN = 414;
 //   corpseLastsS           how long after its death a corpse is gone (two weeks)
 //   lifeStageAgesS         ages a young critter can see, hear, walk, eat, run, is weaned
 //                          and can mate
-//   growthAgesS            ages at which a well-fed young critter's skeleton has grown
+//   growthAgesS            ages at which a well-fed young critter's frame has grown
 //                          growthSharesBySpecies of the way to an adult's (see BODY)
 //   breeding               gestation, how often a female can conceive, the oldest a
 //                          critter is fertile, and the mating act (see BREEDING)
 //   forcedMortalityMaxS, mortalityRatio   how long critters live (see FORCED MORTALITY)
 //   foodFullS, eatKgPerS, grassMaxKg, grassRegrowKgPerS
-//                          food meters, eating and grass (see FOOD)
-//   infantFoodFullS, nurseFullS   how long an infant's meter lasts, and how long it takes
-//                          to suckle it full (see BREEDING); GAMIFIED's are chosen for
-//                          play, not scaled from REALISTIC's
-//   growthCostShare        the share of growth's real cost in food that it costs (see BODY)
+//                          how long a full meter lasts (and with it how fast a stomach
+//                          empties), eating and grass (see FOOD and BODY)
+//   infantFoodFullS, nurseFullS   how long an infant's full meter lasts, and how long it
+//                          takes to suckle it full (see BREEDING)
+//   feedingMinS            the least time a meal at a carcass or a suckle takes (see
+//                          FEEDING TIME); none in REALISTIC
 //   dayLengthS             a day and night; a year is 365 of them (see DAY AND NIGHT)
-//   wakeLastsS, sleepFillS how long a full wakeful meter lasts awake, and how long sleep
-//                          takes to fill an empty one (see SLEEP)
 //   scentHalfLifeS, windChangeEveryS   scent trails fading, and the wind shifting (see
 //                          SCENT AND WIND); the same in both: they go with travel, which
 //                          is at real speeds in both
@@ -131,58 +130,97 @@ const mortalityRatio = {
 //   birth (San Diego Zoo Wildlife Alliance); adults average 41 (female) and 50 (male) in
 //   Yellowstone (NPS). Red deer calves: about 6 kg (female) and 6.5 (male) (Arman et al.,
 //   via wildlifeonline.me.uk); adults: estimates for European red deer.
-//   Shares of a well-fed body: white-tailed deer in early winter are 62% water, 12% fat,
-//   20.5% protein and 4.5% ash (DelGiudice et al. 1990, J. Wildlife Management). The
-//   skeleton is taken as 10% (its ash, with its own protein and water: estimate), the
-//   rest of the water as the lean tissue's. Wolf: estimates, likewise (fasting wolves'
-//   loss is about 55% water: Kreeger et al. 1997).
-//   Energy: 37.7 MJ a kg of fat, 16.7 of protein (Atwater's 9 and 4 kcal a gram). A
-//   starving mammal dies with about two thirds of its protein left (estimate).
+//   What a well-fed body is made of, as shares of its weight (the rest water): white-tailed
+//   deer in early winter are 62% water, 12% fat, 20.5% protein and 4.5% ash (DelGiudice et
+//   al. 1990, J. Wildlife Management), with about 0.5% glycogen (estimate). Wolf:
+//   estimates, likewise (fasting wolves' loss is about 55% water: Kreeger et al. 1997).
+//   Energy: 37.7 MJ a kg of fat, 16.7 of carbohydrate or protein (Atwater's 9, 4 and 4
+//   kcal a gram); none in water or minerals. A starving mammal dies with about two thirds
+//   of its protein left (estimate).
+//   Bone is about 45% minerals, 20% protein, 25% water and 10% fat (estimates); wolves eat
+//   a carcass's soft tissue and boneEdibleShare of its bone (estimate).
 const bodyKgBySpecies = {
   wolf: { birth: { female: 0.4, male: 0.4 }, female: 41, male: 50 },
   deer: { birth: { female: 6, male: 6.5 }, female: 100, male: 160 },
 };
-const bodySharesBySpecies = {
-  wolf: { fat: 0.10, protein: 0.19, skeleton: 0.10 },
-  deer: { fat: 0.12, protein: 0.18, skeleton: 0.10 },
-};
-const fatMJPerKg = 37.7, proteinMJPerKg = 16.7;
+const bodySharesBySpecies = withWater({
+  wolf: { fatKg: 0.10, carbsKg: 0.005, proteinKg: 0.19, mineralKg: 0.04 },
+  deer: { fatKg: 0.12, carbsKg: 0.005, proteinKg: 0.205, mineralKg: 0.045 },
+});
+const fatMJPerKg = 37.7, carbsMJPerKg = 16.7, proteinMJPerKg = 16.7;
 const lethalProteinShare = 2 / 3;
-// Food, as real animals eat:
+const boneShares = withWater({ fatKg: 0.10, carbsKg: 0, proteinKg: 0.20, mineralKg: 0.45 });
+const boneEdibleShare = 0.2;
+// Food, as real animals eat it (shares of its fresh weight, the rest water):
+//   Grass: fresh pasture is about 22% dry matter: about 17% carbohydrate, 3% protein, 0.5%
+//   fat and 1.5% minerals (estimates). Red deer eat ~1.75 kg of it dry a day (Forestry and
+//   Land Scotland), which yields them ~10 MJ a kg (grassDryYieldMJPerKg, estimate): all its
+//   protein and fat, and the share of its carbohydrate (grassCarbsDigested) that makes up
+//   the rest; the rest of it, fibre, passes through. They graze ~0.2 kg (dry) an hour.
+//   An ungrazed field holds ~0.2-0.4 kg of dry matter a square metre (0.3 here) and
+//   unfertilized grassland regrows ~0.4 kg a square metre a year.
 //   Wolf: a full meter lasts 14 days (an adult wolf can go almost two weeks without food:
 //   New York Wolf Center); it eats ~0.5 kg of meat a minute, and can gorge on up to 20%
-//   of its weight at a time (International Wolf Center).
-//   Deer: red deer eat ~1.75 kg of dry grass a day (Forestry and Land Scotland), of ~10
-//   MJ a kg (estimate), so a full meter lasts as long as that takes to spend; they graze
-//   ~0.2 kg an hour.
-//   Grass: an ungrazed field holds ~0.2-0.4 kg of dry matter a square metre (0.3 here)
-//   and unfertilized grassland regrows ~0.4 kg a square metre a year.
-//   Nursing (red deer, via wildlifeonline.me.uk): bouts of 45 s to 4 minutes, of 150-600
-//   ml of milk, 5-10 a day at first; a hind gives up to ~2 kg a day. At ~6 MJ a kg (its
-//   fat and protein), that is ~12 MJ a day, a newborn's full meter (see BODY) in about 3
-//   days, and its meter full in about 40 minutes of suckling. A hind turns food into milk
-//   at about 65% (as livestock: estimate). Wolf pups: no figures found; as calves.
-const grassMJPerKg = 10;
+//   of its weight at a time (International Wolf Center). A big meal has left the stomach
+//   in about 8 hours (as a dog's: estimate).
+//   Deer: a full meter lasts as long as a hind takes to spend it on grass (above). The
+//   rumen holds about 12% of the deer's weight of fresh grass (estimate); full, it passes
+//   grass on as fast as the deer grazes (so grazing without pause keeps it about full).
+//   The young's stomachs hold as much for their size as their parents'; an infant digests
+//   all of the carbohydrate it takes in (its milk's lactose; a calf's milk bypasses the
+//   rumen).
+//   Milk: red deer, about 8.5% fat, 7.1% protein, 4.5% lactose and 1.3% minerals; wolf,
+//   about 9.5%, 9%, 3.5% and 1.2% (estimates from deer's and dogs' milk). Nursing (red deer,
+//   via wildlifeonline.me.uk): bouts of 45 s to 4 minutes, of 150-600 ml of milk, 5-10 a
+//   day at first; a hind gives up to ~2 kg a day, ~13 MJ, a newborn's full meter (see
+//   BODY) in about 3 days. A mother turns her body into milk at about 65% (as livestock:
+//   estimate); the rest she burns. Wolf pups: no figures found; as calves.
+const grassShares = withWater({ fatKg: 0.005, carbsKg: 0.17, proteinKg: 0.03, mineralKg: 0.015 });
+const grassDryShare = 1 - grassShares.waterKg;
+const grassDryYieldMJPerKg = 10;
+const grassCarbsDigested = (grassDryYieldMJPerKg * grassDryShare - grassShares.fatKg * fatMJPerKg
+  - grassShares.proteinKg * proteinMJPerKg) / (grassShares.carbsKg * carbsMJPerKg);
+const carbsDigestedBySpecies = { wolf: 1, deer: grassCarbsDigested };
+const milkSharesBySpecies = {
+  wolf: withWater({ fatKg: 0.095, carbsKg: 0.035, proteinKg: 0.09, mineralKg: 0.012 }),
+  deer: withWater({ fatKg: 0.085, carbsKg: 0.045, proteinKg: 0.071, mineralKg: 0.013 }),
+};
 const milkEfficiency = 0.65;
+const stomachShareBySpecies = { wolf: 0.2, deer: 0.12 };
 const realFoodFullS = {
   wolf: 14 * dayS,
   // (a hind's full meter, over what she spends a day)
-  deer: dayS * bodyKgBySpecies.deer.female * bodySharesBySpecies.deer.skeleton * energyRangePerKg("deer") / (1.75 * grassMJPerKg),
+  deer: dayS * bodyKgBySpecies.deer.female * rangeMJPerKg("deer") / (1.75 * grassDryYieldMJPerKg),
 };
-const realEatKgPerS = { wolf: 0.5 / 60, deer: 0.2 / hourS };
-const realGrassRegrowKgPerS = 0.4 / yearS;
-// Sleep:
-//   Grey wolves sleep about a third of the time, mostly by day: in winter daylight, 34%
-//   asleep and 31% resting (Mech 1992, J. Mammalogy, 405 radio-collared wolves); most
-//   active at dawn and dusk. A wolf can keep going a whole day (estimate).
-//   Red deer sleep in several short bouts, by night and around midday: reindeer, the
-//   nearest measured, sleep about 6.3 hours a day (5.4 h non-REM, 0.9 h REM: Furrer et
-//   al. 2023, Current Biology); a full meter lasts 8 hours awake (estimate).
-//   Sleep fills the meter as fast as the day's sleep makes up for the day awake.
-const realSleepShare = { wolf: 8 / 24, deer: 6.3 / 24 };
-const realWakeLastsS = { wolf: 24 * hourS, deer: 8 * hourS };
-const realSleepFillS = Object.fromEntries(Object.entries(realWakeLastsS).map(([sp, s]) =>
-  [sp, s * realSleepShare[sp] / (1 - realSleepShare[sp])]));
+const realEatKgPerS = { wolf: 0.5 / 60, deer: 0.2 / grassDryShare / hourS }; // fresh
+const realGrassRegrowKgPerS = 0.4 / grassDryShare / yearS;
+// THE STOMACH'S DRIP (see BODY): each second it passes 1 / T of what it holds, but never
+// less than stomachDripLeastShare of a full stomach's drip, until empty; so a full one
+// empties in T (1 + ln(1 / stomachDripLeastShare)). T is a share of the time a full meter
+// lasts (so a stomach keeps pace with the meter, at any game speed; an infant's too).
+const stomachDripLeastShare = 0.1;
+const stomachEmptiesInT = 1 + Math.log(1 / stomachDripLeastShare);
+const stomachTShareBySpecies = {
+  wolf: 8 * hourS / stomachEmptiesInT / realFoodFullS.wolf,
+  deer: stomachShareBySpecies.deer * bodyKgBySpecies.deer.female / realEatKgPerS.deer / realFoodFullS.deer,
+};
+
+// Adds water to shares of fat, carbs, protein and minerals (one set, or one by key), as
+// the rest of the whole.
+function withWater(s) {
+  if (!("fatKg" in s)) return Object.fromEntries(Object.entries(s).map(([k, v]) => [k, withWater(v)]));
+  return { ...s, waterKg: 1 - s.fatKg - s.carbsKg - s.proteinKg - s.mineralKg };
+}
+// MJ a kg of a well-fed body (its frame: see BODY) holds, at full, and at the lethal point;
+// and from the one to the other.
+function fullMJPerKg(species) {
+  const s = bodySharesBySpecies[species];
+  return s.fatKg * fatMJPerKg + s.carbsKg * carbsMJPerKg + s.proteinKg * proteinMJPerKg;
+}
+function lethalMJPerKg(species) {
+  return bodySharesBySpecies[species].proteinKg * lethalProteinShare * proteinMJPerKg;
+}
+function rangeMJPerKg(species) { return fullMJPerKg(species) - lethalMJPerKg(species); }
 
 const REALISTIC = {
   name: "realistic",
@@ -238,22 +276,21 @@ const REALISTIC = {
   scentHalfLifeS: 30 * 60,
   windChangeEveryS: 60,
   dayLengthS: dayS,
-  wakeLastsS: realWakeLastsS,
-  sleepFillS: realSleepFillS,
   eatKgPerS: realEatKgPerS,
   infantFoodFullS: { wolf: 3 * dayS, deer: 3 * dayS },
-  growthCostShare: 1,
   nurseFullS: { wolf: 40 * 60, deer: 40 * 60 },
-  grassMaxKg: 0.3,
+  feedingMinS: 0,
+  grassMaxKg: 0.3 / grassDryShare,
   grassRegrowKgPerS: realGrassRegrowKgPerS,
 };
 
-// GAMIFIED shrinks real times by one factor per area: lives (growing up and breeding
-// too) so the wolf's greatest age is 90 minutes, food so a wolf's full meter lasts 20
-// minutes, and exertion (draining and refilling) 10 times as fast, and a deer's swimming
-// twice that. The mating act lasts a few seconds, long enough to see.
-const gameLifeScale = (90 * 60) / Math.min(...Object.values(realForcedMortalityMaxS));
-const gameFoodScale = (20 * 60) / realFoodFullS.wolf;
+// GAMIFIED shrinks real times by one factor per area: METABOLISM (gameMetabolismScale)
+// for everything a body does over time, eating and growing alike: meters, eating,
+// digesting, grass growing, corpses rotting, and lives (growing up, breeding, ageing),
+// so a wolf's full meter lasts 20 minutes (and its greatest age some 7.5 days); and
+// exertion (draining and refilling) 10 times as fast, and a deer's swimming twice that.
+// The mating act lasts a few seconds, long enough to see.
+const gameMetabolismScale = (20 * 60) / realFoodFullS.wolf;
 const gameExertionSpeedup = 10;
 const gameDayS = 10 * 60;
 const scaledAges = (table, k) => Object.fromEntries(Object.entries(table).map(([sp, caps]) =>
@@ -284,38 +321,34 @@ const GAMIFIED = {
   stunMinS: 0.1,
   stunMaxS: 0.5,
   deathDurationSBySpecies: { deer: 2 / 3, wolf: 1.1 },
-  corpseLastsS: 14 * dayS * gameFoodScale, // as long as a wolf's full meter lasts
-  lifeStageAgesS: scaledAges(realLifeStageAgesS, gameLifeScale),
-  growthAgesS: scaledTimes(realGrowthAgesS, gameLifeScale),
+  corpseLastsS: 14 * dayS * gameMetabolismScale, // as long as a wolf's full meter lasts
+  lifeStageAgesS: scaledAges(realLifeStageAgesS, gameMetabolismScale),
+  growthAgesS: scaledTimes(realGrowthAgesS, gameMetabolismScale),
   breeding: (() => {
-    const b = scaledTimes(realBreeding, gameLifeScale);
+    const b = scaledTimes(realBreeding, gameMetabolismScale);
     b.wolf.mateActS = b.deer.mateActS = 3;
     return b;
   })(),
   forcedMortalityMaxS: {
-    wolf: realForcedMortalityMaxS.wolf * gameLifeScale,
-    deer: realForcedMortalityMaxS.deer * gameLifeScale,
+    wolf: realForcedMortalityMaxS.wolf * gameMetabolismScale,
+    deer: realForcedMortalityMaxS.deer * gameMetabolismScale,
   },
   mortalityRatio,
-  foodFullS: { wolf: realFoodFullS.wolf * gameFoodScale, deer: realFoodFullS.deer * gameFoodScale },
+  foodFullS: { wolf: realFoodFullS.wolf * gameMetabolismScale, deer: realFoodFullS.deer * gameMetabolismScale },
   // Estimates: dogs follow trails hours old; breezes shift every minute or so.
   scentHalfLifeS: 30 * 60,
   windChangeEveryS: 60,
-  // A day and night lasts 10 minutes (chosen for play; a year, 61 hours), and sleep goes
-  // with it. TODO: one scale for all of GAMIFIED (this is far from food's, and lives').
+  // A day and night lasts 10 minutes (chosen for play; a year, 61 hours).
+  // TODO: one scale for all of GAMIFIED (this is far from metabolism's).
   dayLengthS: gameDayS,
-  wakeLastsS: scaledTimes(realWakeLastsS, gameDayS / dayS),
-  sleepFillS: scaledTimes(realSleepFillS, gameDayS / dayS),
-  eatKgPerS: { wolf: realEatKgPerS.wolf / gameFoodScale, deer: realEatKgPerS.deer / gameFoodScale },
-  // Chosen for play, not scaled (scaled, a bout would last a few ticks): the young get
-  // hungry every 15 s or so, and a bout (0.8 to full) takes a few seconds, to be seen.
-  infantFoodFullS: { wolf: 86, deer: 86 },
-  // Lives shrink far more than meals: growing at full cost, the young would need to eat
-  // over a hundred times what they use. Growth costs what it would have at food's scale.
-  growthCostShare: gameLifeScale / gameFoodScale,
-  nurseFullS: { wolf: 14, deer: 14 },
-  grassMaxKg: 0.3,
-  grassRegrowKgPerS: realGrassRegrowKgPerS / gameFoodScale,
+  eatKgPerS: { wolf: realEatKgPerS.wolf / gameMetabolismScale, deer: realEatKgPerS.deer / gameMetabolismScale },
+  infantFoodFullS: scaledTimes(REALISTIC.infantFoodFullS, gameMetabolismScale),
+  nurseFullS: scaledTimes(REALISTIC.nurseFullS, gameMetabolismScale),
+  // Scaled, a wolf would gorge its fill, or an infant suckle its, in under a second: too
+  // quick to see (chosen for play).
+  feedingMinS: 2,
+  grassMaxKg: 0.3 / grassDryShare,
+  grassRegrowKgPerS: realGrassRegrowKgPerS / gameMetabolismScale,
 };
 
 const SPEEDS = GAMIFIED;
@@ -650,8 +683,12 @@ function setPose(a, pose) {
   a.poseTick = g_tick;
 }
 
-// A newborn starts fed and unpaired, placed at random until its birth places it.
-function initCritter(a, species, isNewborn = false) {
+// A critter placed at the start is a well-fed body of its age (see BODY), its meter
+// wolfStartFood (a wolf) or anywhere from half full (a deer). A newborn is unpaired, its
+// body `tissues` (from its mother's womb: see BREEDING), placed at random until its birth
+// places it.
+function initCritter(a, species, tissues = null) {
+  const isNewborn = !!tissues;
   if (!a) return alert("Falsy ref to initCritter");
   if (a.kind) return alert("Already-kind ref to initCritter");
   a.kind = 'critter';
@@ -661,7 +698,6 @@ function initCritter(a, species, isNewborn = false) {
   const adultS = Math.min(canAtAgeBySpecies[species].mate, a.lifespanS / 2);
   a.birthTime = g_now - (isNewborn ? 0 : randBetween(adultS, a.lifespanS / 2));
   a.uid = g_next_uid++;
-  a.food = 1;
   setSex(a, Math.random() < 0.5);
   a.mateUid = null;        // its partner (see BREEDING)
   a.matingWith = null;     // ...or whoever it is mating with now
@@ -674,12 +710,14 @@ function initCritter(a, species, isNewborn = false) {
   a.wind = 1;
   a.stamina = 1;
   a.nursingOn = null;      // the mother it is suckling from (see BREEDING)
-  a.wake = isNewborn ? 1 : randBetween(0.4, 1); // (see SLEEP)
   a.bumpedTick = -Infinity; // (see COLLISIONS)
-  a.wantsSleep = false;
-  a.sleepForced = false;
-  a.food = isNewborn ? 1 : species === "wolf" ? wolfStartFood : randBetween(0.5, 1);
-  updateBody(a);
+  a.womb = biomass();
+  if (isNewborn) {
+    a.frameKg = biomassKg(tissues); // (a well-fed body's weight: its mother's womb is made so)
+    a.tissues = tissues;
+    a.stomach = biomass();
+    updateBody(a);
+  } else setBodyByAge(a, species === "wolf" ? wolfStartFood : randBetween(0.5, 1));
   randomlyPlaceCritter(a);
   critterByUid.set(a.uid, a);
   return a;
@@ -789,32 +827,125 @@ function startCritterDeath(a) {
   if (a.species === "deer") { // (wolves aren't eaten)
     a.carcass = newCarcass(a);
     a.carcassFullKg = carcassMeatKg(a);
-    a.carcassMJPerKg = bodyEnergyMJ(a) / a.carcassFullKg;
   }
   setPose(a, "death");
   enqDelayed("decontrol", deathDurationSBySpecies[a.species], { a: a });
 }
 
+// BIOMASS: everything living is made of five things, in kg: fat, carbohydrate ("carbs"),
+// protein, water and minerals (everything else: the skeleton's matrix most of all). A
+// biomass is { fatKg, carbsKg, proteinKg, waterKg, mineralKg } (NUTRIENTS); its mass is
+// their sum (biomassKg), its energy that of its fat, carbs and protein (energyMJ).
+// Only grass makes biomass, from air and soil by sunlight (none of which is counted).
+// Everything else MOVES it: from grass or a carcass into an eater's stomach, from a
+// stomach into the body, from a mother into her womb or her young's stomachs; or spends
+// it, and it leaves the world: burned by metabolism, excreted, or rotted away with a
+// corpse. A body can turn carbs into fat and back, and protein into either, keeping their
+// energy, and their mass (the balance is water: fatPerCarbsKg); nothing makes protein.
+// THE LEDGER (biomassLedger) adds up, in kg, all grass has grown and all that has left the
+// world, by how: so the world's biomass (worldBiomassKg) is always what it was, plus what
+// grew, less what left (tests/biomass.test.js).
+const NUTRIENTS = ["fatKg", "carbsKg", "proteinKg", "waterKg", "mineralKg"];
+const fatPerCarbsKg = carbsMJPerKg / fatMJPerKg;
+const biomassLedger = { grownKg: 0, burnedKg: 0, excretedKg: 0, rottedKg: 0, lostKg: 0 };
+
+// A biomass: kg of these shares (none: empty).
+function biomass(shares = null, kg = 0) {
+  return {
+    fatKg: shares ? shares.fatKg * kg : 0, carbsKg: shares ? shares.carbsKg * kg : 0,
+    proteinKg: shares ? shares.proteinKg * kg : 0, waterKg: shares ? shares.waterKg * kg : 0,
+    mineralKg: shares ? shares.mineralKg * kg : 0,
+  };
+}
+function biomassKg(b) { return b.fatKg + b.carbsKg + b.proteinKg + b.waterKg + b.mineralKg; }
+function energyMJ(b) { return b.fatKg * fatMJPerKg + b.carbsKg * carbsMJPerKg + b.proteinKg * proteinMJPerKg; }
+
+// Moves `share` (0 to 1) of every part of `from` into `to` (null: out of the world, into
+// the ledger's `left`). The kg moved.
+function moveShare(from, to, share, left = null) {
+  let kg = 0;
+  for (const k of NUTRIENTS) {
+    const v = from[k] * share;
+    from[k] -= v;
+    if (to) to[k] += v;
+    kg += v;
+  }
+  if (left) biomassLedger[left] += kg;
+  return kg;
+}
+function moveAll(from, to, left = null) { return moveShare(from, to, 1, left); }
+
+// Turns kg of b's carbs (key "carbsKg") or protein ("proteinKg") into fat and water.
+function toFat(b, key, kg) {
+  b[key] -= kg;
+  b.fatKg += kg * fatPerCarbsKg;
+  b.waterKg += kg * (1 - fatPerCarbsKg);
+}
+// Makes up to kg of carbs in b from its fat (taking up water), then its protein. The kg made.
+function makeCarbs(b, kg) {
+  const fat = Math.max(0, Math.min(b.fatKg, kg * fatPerCarbsKg, b.waterKg * fatPerCarbsKg / (1 - fatPerCarbsKg)));
+  b.fatKg -= fat;
+  b.waterKg -= fat * (1 / fatPerCarbsKg - 1);
+  b.carbsKg += fat / fatPerCarbsKg;
+  const protein = Math.max(0, Math.min(b.proteinKg, kg - fat / fatPerCarbsKg));
+  b.proteinKg -= protein;
+  b.carbsKg += protein;
+  return fat / fatPerCarbsKg + protein;
+}
+
+// Moves `want` (a biomass) out of body b into `to`, as near as b allows, keeping
+// keepMineralKg of its minerals: fat it lacks it makes from its protein, carbs from its fat
+// or protein. What it moved.
+function withdraw(b, want, to, keepMineralKg = 0) {
+  if (b.fatKg < want.fatKg) toFat(b, "proteinKg", Math.min(b.proteinKg, (want.fatKg - b.fatKg) / fatPerCarbsKg));
+  if (b.carbsKg < want.carbsKg) makeCarbs(b, want.carbsKg - b.carbsKg);
+  const got = biomass();
+  for (const k of NUTRIENTS) {
+    const v = Math.max(0, Math.min(want[k], b[k] - (k === "mineralKg" ? keepMineralKg : 0)));
+    b[k] -= v;
+    to[k] += v;
+    got[k] = v;
+  }
+  return got;
+}
+
+// Burns mj of body b: its carbs first, then fat, then protein. The kg burned (it leaves
+// the world).
+function burn(b, mj) {
+  let kg = 0;
+  for (const [key, perKg] of [["carbsKg", carbsMJPerKg], ["fatKg", fatMJPerKg], ["proteinKg", proteinMJPerKg]]) {
+    if (!(mj > 0)) break;
+    const v = Math.min(b[key], mj / perKg);
+    b[key] -= v;
+    mj -= v * perKg;
+    kg += v;
+  }
+  return kg;
+}
+
 // FOOD
-// Every critter has a food meter, a.food, 0 (empty) to 1 (full): the energy its body holds
-// (see BODY). It empties over SPEEDS.foodFullS and fills by eating: a deer the grass on its
-// tile (grassMJPerKg), a wolf a carcass in reach, once old enough to "eat" (and an infant
-// by nursing: see BREEDING). A critter whose meter empties dies of hunger.
+// Critters eat into their stomachs (see BODY): a deer the grass on its tile, a wolf a
+// carcass in reach, once old enough to "eat" (and an infant suckles: see BREEDING), as
+// fast as SPEEDS.eatKgPerS (but see FEEDING TIME), while the stomach has room.
 //
-// GRASS: every grass tile holds grass, in kg: at most SPEEDS.grassMaxKg (under a boulder,
-// rockGrassShare of that: grassMostAt), starting at grassStartShare of that, regrowing at
-// SPEEDS.grassRegrowKgPerS. Its HEIGHT (bare, short, medium, tall) is for the view; tiles
-// whose height changes are logged (grassChangesSince) so the view redraws only those.
+// GRASS: every grass tile holds grass, fresh kg (grassShares): at most SPEEDS.grassMaxKg
+// (under a boulder, rockGrassShare of that: grassMostAt), starting at grassStartShare of
+// that, regrowing at SPEEDS.grassRegrowKgPerS (grass is the only maker of biomass). Its
+// HEIGHT (bare, short, medium, tall) is for the view; tiles whose height changes are
+// logged (grassChangesSince) so the view redraws only those.
 // UNDER A BOULDER: a deer eats grass under a boulder it stands right beside
 // (inGrassReach), turning to face it: the EAT intent with `at`, the boulder's tile. It
 // eats at the same rate, so the little there is goes in a third of the time.
 //
-// CARCASSES: a dead deer's meat is its body's food at its death (edibleKg: its fat and lean
-// tissue, so a starved deer is a poor meal), c.carcassFullKg, in 8 pieces, each kg of it
-// worth c.carcassMJPerKg. Like any corpse, it is gone SPEEDS.corpseLastsS after the death,
-// and never blocks the way (see COLLISIONS). Wolves eat one piece until it is gone,
-// then another picked at random from those left (c.eatingPiece is shared by every wolf
-// at the carcass). The view shows each piece as meat until all of it is eaten.
+// CARCASSES: a dead deer's whole biomass (its body, stomach and womb) becomes its carcass:
+// its bone (all its minerals, with bone's share of the rest: boneShares), and its soft
+// tissue, the rest. Wolves eat the soft tissue and boneEdibleShare of the bone: that is
+// the meat, in 8 pieces (c.carcass, a biomass by piece name); the rest of the bone lies
+// (c.bones). c.carcassFullKg is the meat at the death. Like any corpse, it rots away (and
+// leaves the world) SPEEDS.corpseLastsS after the death, and never blocks the way (see
+// COLLISIONS). Wolves eat one piece until it is gone, then another picked at random from
+// those left (c.eatingPiece is shared by every wolf at the carcass). The view shows each
+// piece as meat until all of it is eaten.
 const carcassPieces = [ // name, share of the meat
   ["hips", 0.20],
   ["midback", 0.14],
@@ -832,13 +963,33 @@ const grassTallFrom = 2 / 3, grassMediumFrom = 1 / 3, grassShortFrom = 1 / 10; /
 const rockGrassShare = 1 / 3;    // the most grass under a boulder, of the most anywhere
 const rockGrassReachTiles = 0.35; // a deer's box this near a boulder's tile reaches its grass
 
+// The carcass of a (dead): all its biomass, out of its body, stomach and womb.
 function newCarcass(a) {
-  const kg = edibleKg(a);
-  return Object.fromEntries(carcassPieces.map(([name, share]) => [name, share * kg]));
+  const all = biomass();
+  for (const b of [a.tissues, a.stomach, a.womb]) moveAll(b, all);
+  const m = all.mineralKg, boneKg = m / boneShares.mineralKg;
+  const bone = biomass();
+  for (const k of NUTRIENTS) {
+    bone[k] = k === "mineralKg" ? m : Math.min(all[k], boneShares[k] * boneKg);
+    all[k] -= bone[k]; // (leaving the soft tissue)
+  }
+  moveShare(bone, all, boneEdibleShare);
+  return {
+    pieces: Object.fromEntries(carcassPieces.map(([name, share]) => {
+      const piece = biomass();
+      for (const k of NUTRIENTS) piece[k] = all[k] * share;
+      return [name, piece];
+    })),
+    bones: bone,
+  };
 }
 
+// The meat left of a piece of corpse c (carcassPieces), kg.
+function carcassPieceKg(c, name) { return c.carcass ? biomassKg(c.carcass.pieces[name]) : 0; }
+
+// The meat left on corpse c, kg.
 function carcassMeatKg(c) {
-  return c.carcass ? carcassPieces.reduce((sum, [name]) => sum + c.carcass[name], 0) : 0;
+  return c.carcass ? carcassPieces.reduce((sum, [name]) => sum + biomassKg(c.carcass.pieces[name]), 0) : 0;
 }
 
 // By tile index (i * gridHeightN + j): grass in kg, NaN where the terrain isn't grass;
@@ -865,7 +1016,9 @@ function initGrass() {
   }
 }
 
+// Sets the grass on tile index k to kg: how much it changed by, as stored.
 function setGrassKg(k, kg) {
+  const before = grassKg[k];
   grassKg[k] = kg;
   const h = heightOfGrass(kg);
   if (h !== grassHeight[k]) {
@@ -876,14 +1029,17 @@ function setGrassKg(k, kg) {
       grassChangesBase += 25000;
     }
   }
+  return grassKg[k] - before;
 }
 
 function growGrass(dtS) {
   const add = SPEEDS.grassRegrowKgPerS * dtS;
+  let grown = 0;
   for (let k = 0; k < grassKg.length; k++) {
     const kg = grassKg[k], most = grassMostKg[k];
-    if (kg < most) setGrassKg(k, Math.min(most, kg + add)); // (false for NaN: not grass)
+    if (kg < most) grown += setGrassKg(k, Math.min(most, kg + add)); // (false for NaN: not grass)
   }
+  biomassLedger.grownKg += grown;
 }
 
 // The most grass tile (i, j) can hold, kg (0 where it isn't grass).
@@ -925,6 +1081,13 @@ function grassChangesSince(serial) {
   return { serial: end, tiles };
 }
 
+// All the grass on the map, kg.
+function grassTotalKg() {
+  let kg = 0;
+  for (let k = 0; k < grassKg.length; k++) if (grassKg[k] === grassKg[k]) kg += grassKg[k];
+  return kg;
+}
+
 // The nearest corpse within a's reach with meat left, or null.
 function carcassInReach(a) {
   let best = null, bestL2 = eatReachTiles * eatReachTiles;
@@ -936,141 +1099,211 @@ function carcassInReach(a) {
   return best;
 }
 
-// One tick of a's meter: it empties a little, and fills if a is eating. True if a starved.
-function updateFood(a) {
-  if (!isLiveCritter(a)) return false;
-  const lasts = isInfant(a) ? SPEEDS.infantFoodFullS : SPEEDS.foodFullS;
-  a.food = Math.max(0, a.food - tempo / lasts[a.species]);
-  a.nursingOn = a.eating && isInfant(a) ? nurse(a) : null;
-  if (a.eating && a.nursingOn === null && _can(a, "eat")) {
-    const room = roomMJ(a);
-    let bite = SPEEDS.eatKgPerS[a.species] * tempo;
-    if (a.species === "deer") {
-      let i = Math.floor(a.gx), j = Math.floor(a.gy);
-      if (a.eatAt && inGrassReach(a, a.eatAt[0], a.eatAt[1])) { // grass under a boulder beside it
-        [i, j] = a.eatAt;
-        a.currentDirection = getDir(i + 0.5 - a.gx, j + 0.5 - a.gy, a.currentDirection);
-      }
-      const k = i * gridHeightN + j;
-      const kg = grassFoodAt(i, j);
-      const take = Math.min(bite, kg, room / grassMJPerKg);
-      if (take > 0 && !isInWater(a)) {
-        setGrassKg(k, kg - take);
-        feed(a, take * grassMJPerKg);
-      }
-    } else {
-      const c = carcassInReach(a);
-      let roomKg = c ? room / c.carcassMJPerKg : 0;
-      while (c && bite > 0 && roomKg > 0) {
-        if (!(c.carcass[c.eatingPiece] > 0)) {
-          const left = carcassPieces.filter(([name]) => c.carcass[name] > 0);
-          if (!left.length) break;
-          c.eatingPiece = left[Math.floor(Math.random() * left.length)][0];
-        }
-        const name = c.eatingPiece, take = Math.min(bite, c.carcass[name], roomKg);
-        c.carcass[name] -= take;
-        if (c.carcass[name] < 1e-9) c.carcass[name] = 0;
-        feed(a, take * c.carcassMJPerKg);
-        bite -= take; roomKg -= take;
-      }
+// One tick of a's eating, into its stomach (see FOOD).
+function eat(a) {
+  let bite = Math.min(SPEEDS.eatKgPerS[a.species] * tempo, stomachRoomKg(a));
+  if (a.species === "deer") {
+    if (!(bite > 0)) return;
+    let i = Math.floor(a.gx), j = Math.floor(a.gy);
+    if (a.eatAt && inGrassReach(a, a.eatAt[0], a.eatAt[1])) { // grass under a boulder beside it
+      [i, j] = a.eatAt;
+      a.currentDirection = getDir(i + 0.5 - a.gx, j + 0.5 - a.gy, a.currentDirection);
     }
+    const kg = grassFoodAt(i, j);
+    const take = Math.min(bite, kg);
+    if (take > 0 && !isInWater(a)) {
+      const taken = -setGrassKg(i * gridHeightN + j, kg - take);
+      for (const k of NUTRIENTS) a.stomach[k] += grassShares[k] * taken;
+    }
+    return;
   }
-  growFromFood(a, tempo);
-  updateBody(a);
-  return a.food <= 0;
+  const c = carcassInReach(a);
+  if (!c) { a.meal = null; return; }
+  bite = Math.min(mealKgPerS(a, "meat", SPEEDS.eatKgPerS[a.species]) * tempo, stomachRoomKg(a));
+  while (bite > 1e-12) {
+    const pieces = c.carcass.pieces;
+    if (!(biomassKg(pieces[c.eatingPiece] ?? biomass()) > 1e-9)) {
+      const left = carcassPieces.filter(([name]) => biomassKg(pieces[name]) > 1e-9);
+      if (!left.length) break;
+      c.eatingPiece = left[Math.floor(Math.random() * left.length)][0];
+    }
+    const piece = pieces[c.eatingPiece], kg = biomassKg(piece);
+    bite -= moveShare(piece, a.stomach, bite >= kg - 1e-9 ? 1 : bite / kg);
+  }
+  if (!(stomachRoomKg(a) > 1e-12)) a.meal = null; // full: its next meal starts afresh
 }
 
-// BODY: a critter is its skeleton (a.skeletonKg) and the food its body holds, fat and
-// protein (dry kg), each carrying water: fat none, protein the rest of the body's
-// (leanWaterPerKg). At a full meter it holds bodySharesBySpecies of each, as a share of a
-// whole body, for its skeleton; so its weight (a.weightKg) at a full meter is its
-// skeleton over the skeleton's share, and less as it goes hungry. Published adult
-// weights (a.adultKg) are taken as full meters. Its food value is their energy (fatMJPerKg,
-// proteinMJPerKg). Its meter is the share of the energy it holds above the lethal point
-// (no fat, lethalProteinShare of its protein): fat and protein are spent, and laid down
-// again, together.
-// GROWTH: the skeleton only grows by eating: from its birth weight's share to its adult
-// weight's, it takes a share of the energy of all it eats or suckles (skeletonMJPerKg a kg
-// of bone), so that a critter eating as it uses, and as it grows, follows a well-fed
-// critter's growth (growthSharesBySpecies at SPEEDS.growthAgesS). It never shrinks. Its
-// new tissue holds food as full as the rest: that too comes from what it eats, at
-// SPEEDS.growthCostShare (with skeletonMJPerKg). What it eats for growing is laid down
-// over time (a.growingKg, still to grow), at most growFastestRatio times as fast as a
-// well-fed critter grows (growFromFood), so a meal never makes it grow at a stroke.
-const skeletonMJPerKg = 4; // estimate: bone's protein, and laying down its mineral
+// FEEDING TIME: a wolf at a carcass, or an infant suckling, eats a meal: what its stomach
+// has room for when it starts, taken in evenly over at least SPEEDS.feedingMinS, if eating
+// (or suckling) as fast as it can would take less (a.meal: { kind, kgPerS }). The meal
+// ends when its stomach is full, it stops eating, or it eats something else.
+// (Deer cropping grass take long enough on their own.)
+function mealKgPerS(a, kind, fastestKgPerS) {
+  if (!a.meal || a.meal.kind !== kind || !(a.meal.kgPerS > 0))
+    a.meal = { kind, kgPerS: Math.min(fastestKgPerS, stomachRoomKg(a) / SPEEDS.feedingMinS) };
+  return a.meal.kgPerS;
+}
+
+// BODY: a critter's biomass is in three places: its body's tissues (a.tissues), its
+// stomach (a.stomach) and, pregnant, its womb (a.womb: see BREEDING), each a biomass.
+// FRAME: its size, a.frameKg: the weight of a well-fed body of its build (bodySharesBySpecies),
+// as published weights are taken. Its meters, and how much of each part its tissues hold
+// at most, go by its frame:
+//   FOOD METER (a.food): the energy its tissues hold, from 0 at the lethal point (no fat or
+//   carbs, and lethalProteinShare of a well-fed body's protein) to 1 at a well-fed body's
+//   energy, or more (a.food stops at 1; fat has no limit). At the lethal point it dies of
+//   hunger.
+//   STOMACH METER (a.gut): the energy in its stomach, from 0 (empty) to 1 (a full stomach
+//   of its usual food: usualFoodShares). The stomach holds stomachShareBySpecies of its
+//   frame's weight.
+// METABOLISM: it burns its tissues (carbs, then fat, then protein: burn) so that a full
+// meter lasts SPEEDS.foodFullS (an infant's, SPEEDS.infantFoodFullS), at the same pace
+// whatever its meter.
+// DIGESTION: its stomach drips whatever is in it on to the body, the faster the fuller
+// (THE STOMACH'S DRIP), until empty. Of the drip, the body takes in
+// (absorb): the carbs it digests (carbsDigestedBySpecies; an infant all), the rest of
+// them, as fibre, excreted; protein and carbs up to a well-fed body's, and the rest of
+// them made into fat; all the fat; and water. Its tissues keep the water that goes with
+// their protein (a well-fed body's water to protein) and no more: the rest is excreted.
+// GROWTH: its frame grows only from what it digests: by the minerals in it (once its
+// tissues have their frame's), when the protein it digests with them can fill its frame's
+// protein as it grows (so the young grow only when well fed), up to its adult weight
+// (a.adultKg), at most growFastestRatio times as fast as a well-fed critter grows
+// (growthAgesS); minerals it can't use are excreted. Its frame never shrinks. A mother
+// gives minerals to her womb and milk (BREEDING) from her bones, down to
+// mineralKeepShare of her frame's, and makes them up from what she digests.
 const growFastestRatio = 2; // the fastest it grows, over a well-fed critter's pace (estimate)
-const bodyPerSkeletonKg = Object.fromEntries(Object.entries(bodySharesBySpecies).map(([sp, b]) => [sp, {
-  fat: b.fat / b.skeleton, protein: b.protein / b.skeleton,
-  leanWaterPerKg: (1 - b.fat - b.protein - b.skeleton) / b.protein,
-}]));
+const mineralKeepShare = 0.8; // estimate
+const fullBodyMJPerKg = Object.fromEntries(Object.keys(bodySharesBySpecies).map(sp => [sp, fullMJPerKg(sp)]));
+const lethalBodyMJPerKg = Object.fromEntries(Object.keys(bodySharesBySpecies).map(sp => [sp, lethalMJPerKg(sp)]));
+const leanWaterPerKg = Object.fromEntries(Object.entries(bodySharesBySpecies).map(([sp, s]) => [sp, s.waterKg / s.proteinKg]));
+// Meat: a well-fed deer's soft tissue and the bone wolves eat with it (as newCarcass).
+const meatShares = (() => {
+  const body = bodySharesBySpecies.deer, boneKg = body.mineralKg / boneShares.mineralKg, m = biomass();
+  for (const k of NUTRIENTS) m[k] = body[k] - (1 - boneEdibleShare) * Math.min(body[k], boneShares[k] * boneKg);
+  const kg = biomassKg(m);
+  for (const k of NUTRIENTS) m[k] /= kg;
+  return m;
+})();
+const usualFoodShares = { wolf: meatShares, deer: grassShares };
 
-// MJ a kg of skeleton holds, from empty to full and at empty (the lethal point).
-function energyRangePerKg(species) {
-  const b = bodySharesBySpecies[species];
-  return (b.fat * fatMJPerKg + b.protein * (1 - lethalProteinShare) * proteinMJPerKg) / b.skeleton;
+function rangeMJ(a) { return a.frameKg * rangeMJPerKg(a.species); }
+function stomachKg(a) { return stomachShareBySpecies[a.species] * a.frameKg; }
+// The minerals its body keeps, giving to its womb or milk (see GROWTH).
+function mineralKeptKg(a) { return mineralKeepShare * a.frameKg * bodySharesBySpecies[a.species].mineralKg; }
+function stomachRoomKg(a) { return Math.max(0, stomachKg(a) - biomassKg(a.stomach)); }
+function fullStomachMJ(a) {
+  return stomachKg(a) * energyMJ(isInfant(a) ? milkSharesBySpecies[a.species] : usualFoodShares[a.species]);
 }
-function energyFloorPerKg(species) {
-  const b = bodySharesBySpecies[species];
-  return b.protein * lethalProteinShare * proteinMJPerKg / b.skeleton;
+function foodLastsS(a) { return (isInfant(a) ? SPEEDS.infantFoodFullS : SPEEDS.foodFullS)[a.species]; }
+// Its stomach's T (THE STOMACH'S DRIP), seconds.
+function stomachTS(a) { return stomachTShareBySpecies[a.species] * foodLastsS(a); }
+// Its meter's share, uncapped: 0 or less, starved.
+function foodShare(a) {
+  const w = a.frameKg, lethal = w * lethalBodyMJPerKg[a.species];
+  return (energyMJ(a.tissues) - lethal) / (w * fullBodyMJPerKg[a.species] - lethal);
 }
 
-function energyRangeMJ(a) { return energyRangePerKg(a.species) * a.skeletonKg; }
-function roomMJ(a) { return (1 - a.food) * energyRangeMJ(a); }
-
-// Its fat and protein, dry kg.
-function fatKg(a) { return a.food * bodyPerSkeletonKg[a.species].fat * a.skeletonKg; }
-function proteinKg(a) {
-  return (lethalProteinShare + (1 - lethalProteinShare) * a.food) * bodyPerSkeletonKg[a.species].protein * a.skeletonKg;
-}
-// Its fat and lean tissue (with their water), kg: what a wolf eats of it, dead.
-function edibleKg(a) { return fatKg(a) + proteinKg(a) * (1 + bodyPerSkeletonKg[a.species].leanWaterPerKg); }
-function bodyWeightKg(a) { return edibleKg(a) + a.skeletonKg; }
-function bodyEnergyMJ(a) { return fatKg(a) * fatMJPerKg + proteinKg(a) * proteinMJPerKg; }
-
-// Its sex, and the skeletons that go with it: a newborn's, or its age's (well fed).
+// Its sex, and the weights that go with it.
 function setSex(a, isMale) {
   a.isMale = isMale;
-  const sex = isMale ? "male" : "female", kg = bodyKgBySpecies[a.species], share = bodySharesBySpecies[a.species].skeleton;
+  const sex = isMale ? "male" : "female", kg = bodyKgBySpecies[a.species];
   a.adultKg = kg[sex];
-  a.birthSkeletonKg = kg.birth[sex] * share;
-  a.adultSkeletonKg = kg[sex] * share;
-  setSkeletonByAge(a);
+  a.birthKg = kg.birth[sex];
 }
 
-// Critter a takes in mj of food: a share grows its skeleton, the rest fills its meter (up
-// to full; the rest is lost).
-function feed(a, mj) {
-  if (a.skeletonKg < a.adultSkeletonKg) {
-    // a well-fed critter's skeleton growth now (kg a second), and what it eats meanwhile
-    const v = growthKgPerS(a);
-    const range = energyRangePerKg(a.species), floor = energyFloorPerKg(a.species);
-    const lasts = isInfant(a) ? SPEEDS.infantFoodFullS : SPEEDS.foodFullS;
-    const share = SPEEDS.growthCostShare;
-    const eats = range * a.skeletonKg / lasts[a.species] + v * (range + floor + skeletonMJPerKg) * share;
-    const grow = Math.min(mj * v / eats, a.adultSkeletonKg - a.skeletonKg - a.growingKg);
-    if (grow > 0) { // its new bone, and the food it will hold as full as the rest
-      a.growingKg += grow;
-      mj -= grow * (floor + a.food * range + skeletonMJPerKg) * share;
-    }
+// A well-fed body of frame w, less what it burns to bring its meter down to `food`.
+function bodyOf(species, w, food = 1) {
+  const b = biomass(bodySharesBySpecies[species], w);
+  burn(b, (1 - food) * w * rangeMJPerKg(species));
+  b.waterKg = Math.min(b.waterKg, b.proteinKg * leanWaterPerKg[species]);
+  return b;
+}
+
+// Its body: of frame w, its meter at `food`, its stomach empty (for critters placed at the
+// start, and tests).
+function setBody(a, w, food = 1) {
+  a.frameKg = w;
+  a.tissues = bodyOf(a.species, w, food);
+  a.stomach = biomass();
+  updateBody(a);
+}
+
+// Its body as a well-fed critter's of its age.
+function setBodyByAge(a, food = 1) {
+  setBody(a, a.birthKg + (a.adultKg - a.birthKg) * growthShare(a.species, Math.max(0, ageS(a))), food);
+}
+
+// For tests: its body rebuilt at its frame, its meter at `food`, its stomach empty.
+function setFood(a, food) { setBody(a, a.frameKg, food); }
+
+// Its tissues' water, down to what goes with their protein (the rest excreted).
+function balanceWater(a) {
+  const t = a.tissues, most = t.proteinKg * leanWaterPerKg[a.species];
+  if (t.waterKg > most) { biomassLedger.excretedKg += t.waterKg - most; t.waterKg = most; }
+}
+
+// Its body takes in d, a biomass from its stomach (see BODY: DIGESTION and GROWTH).
+function absorb(a, d) {
+  const t = a.tissues, s = bodySharesBySpecies[a.species];
+  const fibre = isInfant(a) ? 0 : d.carbsKg * (1 - carbsDigestedBySpecies[a.species]);
+  d.carbsKg -= fibre;
+  const w = a.frameKg;
+  const refill = Math.max(0, Math.min(d.mineralKg, w * s.mineralKg - t.mineralKg));
+  t.mineralKg += refill;
+  d.mineralKg -= refill;
+  const grow = Math.max(0, Math.min(a.adultKg - w, growFastestRatio * growthKgPerS(a) * tempo,
+    d.mineralKg / s.mineralKg, (t.proteinKg + d.proteinKg) / s.proteinKg - w));
+  const minerals = grow * s.mineralKg;
+  t.mineralKg += minerals;
+  biomassLedger.excretedKg += fibre + d.mineralKg - minerals;
+  const w2 = a.frameKg = w + grow;
+  for (const key of ["proteinKg", "carbsKg"]) {
+    const keep = Math.max(0, Math.min(d[key], w2 * s[key] - t[key]));
+    t[key] += d[key];
+    toFat(t, key, d[key] - keep);
   }
-  a.food = Math.min(1, a.food + mj / energyRangeMJ(a));
+  t.fatKg += d.fatKg;
+  t.waterKg += d.waterKg;
 }
 
-// dt seconds of a laying down what it ate for growing.
-function growFromFood(a, dt) {
-  if (!(a.growingKg > 0)) return;
-  const kg = Math.min(a.growingKg, growFastestRatio * growthKgPerS(a) * dt);
-  a.skeletonKg += kg;
-  a.growingKg -= kg;
+// One tick of a's body: it burns, eats, digests, and its womb grows. True if it starved.
+function updateFood(a) {
+  if (!isLiveCritter(a)) return false;
+  const lasts = foodLastsS(a);
+  biomassLedger.burnedKg += burn(a.tissues, rangeMJ(a) * tempo / lasts);
+  if (!a.eating) a.meal = null;
+  a.nursingOn = a.eating && isInfant(a) ? nurse(a) : null;
+  if (a.eating && a.nursingOn === null && _can(a, "eat")) eat(a);
+  const kg = biomassKg(a.stomach);
+  if (kg > 0) {
+    const drip = biomass();
+    moveShare(a.stomach, drip, Math.min(1, Math.max(kg, stomachDripLeastShare * stomachKg(a)) * tempo / stomachTS(a) / kg));
+    absorb(a, drip);
+  }
+  balanceWater(a);
+  updateWomb(a);
+  updateBody(a);
+  return foodShare(a) <= 0;
 }
 
-// How fast a well-fed critter's skeleton grows at a's size, kg a second.
+// How fast a well-fed critter's frame grows at a's size, kg a second.
 function growthKgPerS(a) {
   const ages = SPEEDS.growthAgesS[a.species], shares = growthSharesBySpecies[a.species];
   const p = growthProgress(a);
   let k = 1;
   while (k < shares.length - 1 && shares[k] <= p) k++;
-  return (shares[k] - shares[k - 1]) / (ages[k] - ages[k - 1]) * (a.adultSkeletonKg - a.birthSkeletonKg);
+  return (shares[k] - shares[k - 1]) / (ages[k] - ages[k - 1]) * (a.adultKg - a.birthKg);
+}
+
+// All the biomass in the world: grass, critters, corpses and carcasses, kg.
+function worldBiomassKg() {
+  let kg = grassTotalKg();
+  for (const a of allCritters.concat(allCorpses)) {
+    for (const b of [a.tissues, a.stomach, a.womb]) kg += biomassKg(b);
+    if (a.carcass) kg += carcassMeatKg(a) + biomassKg(a.carcass.bones);
+  }
+  return kg;
 }
 
 // DAY AND NIGHT: the map lies at latitudeDeg north. A day lasts SPEEDS.dayLengthS and a
@@ -1100,18 +1333,9 @@ function daylightHoursAt(d) {
 // the share of a whole year the sun is up (about a half)
 const meanDaylightShare = Array.from({ length: yearDays }, (_, d) => daylightHoursAt(d)).reduce((p, q) => p + q) / (24 * yearDays);
 
-// For tests: hold the clock at an hour of the starting day (null: let it run), and turn
-// the need for sleep off (every meter kept full) or on.
-let heldHour = null, needSleep = true;
+// For tests: hold the clock at an hour of the starting day (null: let it run).
+let heldHour = null;
 function holdClock(hour) { heldHour = hour; updateClock(); }
-function setNeedSleep(on) {
-  needSleep = on;
-  if (on) return;
-  for (const a of allCritters) { // all awake, and staying so
-    a.wake = 1; a.wantsSleep = a.sleepForced = false;
-    if (a.pose === "sleep") setPose(a, "idle");
-  }
-}
 
 function updateClock() {
   const days = heldHour !== null ? equinoxDay + heldHour / 24 : (equinoxDay + startHour / 24) + g_now / SPEEDS.dayLengthS;
@@ -1126,34 +1350,6 @@ function updateClock() {
   if (Math.floor(dayOfYear) !== clock.daylightDay) {
     clock.daylightDay = Math.floor(dayOfYear);
     clock.daylightHours = daylightHoursAt(dayOfYear);
-  }
-}
-
-// SLEEP: every critter has a wakeful meter, a.wake, 0 to 1: how long until it must sleep.
-// Awake, it empties over SPEEDS.wakeLastsS; asleep (the "sleep" pose, lying down), it
-// fills over SPEEDS.sleepFillS. The SLEEP intent lies it down once stopped, on land; any
-// other intent gets it up. At empty it COLLAPSES: it stops and falls asleep where it is
-// (in the water, as soon as it is ashore), and sleeps on whatever its intent until the
-// meter is back to forcedWakeAt (a.sleepForced meanwhile).
-const forcedWakeAt = 0.3;
-
-function updateWake(a) {
-  if (!isLiveCritter(a)) return;
-  if (!needSleep) { a.wake = 1; return; }
-  if (a.pose === "sleep") {
-    a.wake = Math.min(1, a.wake + tempo / SPEEDS.sleepFillS[a.species]);
-    if (a.sleepForced && a.wake >= forcedWakeAt) a.sleepForced = false;
-    return;
-  }
-  a.wake = Math.max(0, a.wake - tempo / SPEEDS.wakeLastsS[a.species]);
-  if (a.wake <= 0 && !a.sleepForced && !isMating(a) && !isInWater(a)) {
-    a.sleepForced = true;
-    a.eating = false;
-    a.landPose = "idle"; a.targetSpeed = 0; // (as setCritterIdle, which a collapsed critter ignores)
-  }
-  if ((a.wantsSleep || a.sleepForced) && a.speed === 0 && a.pose === "idle" && !isInWater(a)) {
-    a.nextGX = a.gx; a.nextGY = a.gy;
-    setPose(a, "sleep");
   }
 }
 
@@ -1219,20 +1415,25 @@ function setWind(angle) {
 // A female is in heat (inHeat) while fertile (grown and not past her maxFertileAgeS), not
 // pregnant, and a year (intervalS) after she last mated in heat (a.lastBredAt). Mated
 // while in heat, her heat is spent; by a fertile male (not past his maxFertileAgeS), she
-// conceives, and after gestationS, once on land, gives birth beside herself:
-// a litter (litterBySpecies) whose parents are her, the father and her partner, while
-// alive; young that don't fit within birthSearchTiles of her are stillborn.
+// conceives a litter (litterBySpecies), and after gestationS, once on land, gives birth
+// beside herself: young whose parents are her, the father and her partner, while alive.
+// THE WOMB (a.womb, a biomass: see BODY) fills from her tissues as the litter grows, to
+// its newborns' weight (a well-fed body's make-up) at the birth, by the square of the
+// share of her gestation gone; while her meter is below miscarryBelow she loses the
+// litter, and takes its biomass back into her tissues. At the birth each newborn's body
+// is its share of the womb; young that don't fit within birthSearchTiles of her are
+// stillborn, and their shares lost.
 // GROWTH: see BODY.
-// NURSING: an infant's (not yet weaned) meter empties in SPEEDS.infantFoodFullS. Eating
+// NURSING: an infant's (not yet weaned) full meter lasts SPEEDS.infantFoodFullS. Eating
 // (the EAT intent) while touching its mother (boxes within nurseContactTiles), neither in
-// water, it suckles instead of eating anything else: its meter fills in SPEEDS.nurseFullS,
-// and a.nursingOn is her uid (else null). The milk's energy leaves her meter, over
-// milkEfficiency; her share still falls by far less than its share rises (her meter
-// holds far more). She keeps nurseMotherMinFood of her own.
+// water, it suckles instead of eating anything else: her milk (milkSharesBySpecies) goes
+// from her tissues into its stomach, as fast as would fill its meter in SPEEDS.nurseFullS
+// (but see FEEDING TIME), while its stomach has room; a.nursingOn is her uid (else null). She burns as much again
+// as making the milk takes (milkEfficiency), and keeps nurseMotherMinFood of her meter.
 // The mind (mind.js) decides who courts whom; the simulation only checks that a pairing
 // is possible (canPair).
 
-// Shares of the way from birth to adult skeleton at SPEEDS.growthAgesS, for a well-fed
+// Shares of the way from birth to adult frame at SPEEDS.growthAgesS, for a well-fed
 // critter (see BODY and GAME SPEEDS).
 const growthSharesBySpecies = {
   wolf: [0, 0.06, 0.19, 0.73, 1],
@@ -1247,6 +1448,7 @@ const litterBySpecies = {
 const mateReachTiles = 1.5;   // center to center
 const nurseContactTiles = 0.15; // the most gap between boxes that still counts as touching
 const nurseMotherMinFood = 0.25;
+const miscarryBelow = 0.1;
 const birthSearchTiles = 3;
 const critterByUid = new Map(); // every critter in play (not corpses)
 
@@ -1281,22 +1483,16 @@ function growthShare(species, age) {
   return shares[k - 1] + (shares[k] - shares[k - 1]) * (age - ages[k - 1]) / (ages[k] - ages[k - 1]);
 }
 
-// Its skeleton as a well-fed critter's of its age (for critters placed at the start, and
-// tests).
-function setSkeletonByAge(a) {
-  a.skeletonKg = a.birthSkeletonKg + (a.adultSkeletonKg - a.birthSkeletonKg) * growthShare(a.species, Math.max(0, ageS(a)));
-  a.growingKg = 0;
-  updateBody(a);
-}
-
-// Its weight and collision box, after its meter or skeleton changed.
+// Its weight, meters and collision box, after its body changed.
 function updateBody(a) {
-  a.weightKg = bodyWeightKg(a);
+  a.food = Math.min(1, Math.max(0, foodShare(a)));
+  a.gut = Math.min(1, energyMJ(a.stomach) / fullStomachMJ(a));
+  a.weightKg = biomassKg(a.tissues) + biomassKg(a.stomach) + biomassKg(a.womb);
   const stage = youngStage(a);
   a.boxRad = stage && stage <= smallBoxStages ? critterBoxRad * youngScales[stage - 1] : critterBoxRad;
 }
 
-// SIZES: by its skeleton's share of the way from birth to adult (growthProgress), taken as
+// SIZES: by its frame's share of the way from birth to adult (growthProgress), taken as
 // its size cubed, in one of 5 classes: young stages 1 (smallest, every newborn) to 4,
 // sized youngScales of an adult, or adult (0).
 // Each stage starts halfway (in size) from the one below; the thresholds are cubed, so no
@@ -1314,9 +1510,9 @@ function youngStage(a) {
   return 0;
 }
 
-// 0 at birth to 1 grown.
+// 0 at birth (or less) to 1 grown, by its frame.
 function growthProgress(a) {
-  return (a.skeletonKg - a.birthSkeletonKg) / (a.adultSkeletonKg - a.birthSkeletonKg);
+  return Math.max(0, (a.frameKg - a.birthKg) / (a.adultKg - a.birthKg));
 }
 
 // One tick of infant a suckling, if it is touching its mother: her uid, or null.
@@ -1325,12 +1521,35 @@ function nurse(a) {
   if (!mother || !isLiveCritter(mother) || isInWater(a) || isInWater(mother)) return null;
   const reach = a.boxRad + mother.boxRad + nurseContactTiles;
   if (Math.abs(mother.gx - a.gx) > reach || Math.abs(mother.gy - a.gy) > reach) return null;
-  const mj = Math.min(energyRangeMJ(a) * tempo / SPEEDS.nurseFullS[a.species], roomMJ(a),
-    (mother.food - nurseMotherMinFood) * energyRangeMJ(mother) * milkEfficiency);
-  if (!(mj > 0)) return null;
-  mother.food -= mj / milkEfficiency / energyRangeMJ(mother);
-  feed(a, mj);
+  const milk = milkSharesBySpecies[a.species], mjPerKg = energyMJ(milk);
+  const spareMJ = (foodShare(mother) - nurseMotherMinFood) * rangeMJ(mother) * milkEfficiency;
+  const fastest = rangeMJ(a) / SPEEDS.nurseFullS[a.species] / mjPerKg;
+  const kg = Math.min(mealKgPerS(a, "milk", fastest) * tempo, stomachRoomKg(a), spareMJ / mjPerKg);
+  if (!(kg > 0)) return null;
+  const got = withdraw(mother.tissues, biomass(milk, kg), a.stomach, mineralKeptKg(mother));
+  biomassLedger.burnedKg += burn(mother.tissues, energyMJ(got) * (1 / milkEfficiency - 1));
+  updateBody(mother);
+  if (!(stomachRoomKg(a) > 1e-12)) a.meal = null; // full: its next meal starts afresh
   return mother.uid;
+}
+
+// One tick of a pregnant female's womb (see BREEDING).
+function updateWomb(f) {
+  const p = f.pregnancy;
+  if (!p) return;
+  if (foodShare(f) < miscarryBelow) {
+    moveAll(f.womb, f.tissues);
+    f.pregnancy = null;
+    return;
+  }
+  const t = g_now >= p.dueAt ? 1 : (g_now - p.since) / (p.dueAt - p.since);
+  const kg = p.litter * newbornKg(f.species) * t * t - biomassKg(f.womb);
+  if (kg > 0) withdraw(f.tissues, biomass(bodySharesBySpecies[f.species], kg), f.womb, mineralKeptKg(f));
+}
+
+function newbornKg(species) {
+  const b = bodyKgBySpecies[species].birth;
+  return (b.female + b.male) / 2;
 }
 
 // Starts every mating that both critters intend and that can happen now.
@@ -1391,10 +1610,11 @@ function pair(a, b) {
 function conceive(female, male) {
   const g = SPEEDS.breeding[female.species].gestationS;
   const dueIn = aboutNormal(g.avg, (g.max - g.min) / 4, g.min, g.max);
-  female.pregnancy = { dueAt: g_now + dueIn, fatherUid: male.uid };
+  female.pregnancy = { since: g_now, dueAt: g_now + dueIn, fatherUid: male.uid, litter: litterSize(female.species) };
 }
 
-// On a death: the partner is free to pair again, and any pregnancy ends.
+// On a death: the partner is free to pair again, and any pregnancy ends (the womb's
+// biomass stays with the body).
 function endPairing(a) {
   const p = a.mateUid !== null ? critterByUid.get(a.mateUid) : null;
   if (p && p.mateUid === a.uid) p.mateUid = null;
@@ -1433,15 +1653,18 @@ function birthSpots(f, n) {
 }
 
 function giveBirth(f) {
-  const { fatherUid } = f.pregnancy;
+  const { fatherUid, litter } = f.pregnancy;
   f.pregnancy = null;
   const parents = [f.uid];
   for (const uid of [fatherUid, f.mateUid]) {
     const p = critterByUid.get(uid);
     if (p && isLiveCritter(p) && !parents.includes(uid)) parents.push(uid);
   }
-  for (const [x, y] of birthSpots(f, litterSize(f.species))) {
-    const c = initCritter({}, f.species, true);
+  const spots = biomassKg(f.womb) > 0 ? birthSpots(f, litter) : [];
+  for (const [k, [x, y]] of spots.entries()) {
+    const tissues = biomass();
+    moveShare(f.womb, tissues, 1 / (litter - k));
+    const c = initCritter({}, f.species, tissues);
     c.gx = c.nextGX = x;
     c.gy = c.nextGY = y;
     c.parentUids = parents.slice();
@@ -1449,6 +1672,8 @@ function giveBirth(f) {
     allCritters.push(c);
     if (c.species === "wolf" && !isLiveCritter(pcWolf)) pcWolf = c; // the player's new wolf
   }
+  moveAll(f.womb, null, "lostKg"); // the stillborn
+  updateBody(f);
 }
 
 // INTENTS
@@ -1462,7 +1687,6 @@ function giveBirth(f) {
 //   { gait: "eat", at }    a deer: the same, the grass under the boulder on tile at, [i, j],
 //                          when right beside it (see GRASS)
 //   { gait: "mate", with } stand still, ready to mate with critter uid `with` (see BREEDING)
-//   { gait: "sleep" }      stop, lie down and sleep (see SLEEP)
 //   { dx, dy, gait }       move along grid vector (dx, dy), any length, at walk, trot or
 //                          gallop, or the best gait wind and stamina allow
 //   { dir, gait }          the same along one of the 8 directions
@@ -1482,7 +1706,7 @@ const facingKeepCos = 0.866;     // cos 30 degrees
 
 // The intent with its heading (hx, hy) at unit length, reusing prev's for the same vector.
 function prepareIntent(intent, prev) {
-  if (!intent || intent.gait === "idle" || intent.gait === "eat" || intent.gait === "mate" || intent.gait === "sleep") return intent || null;
+  if (!intent || intent.gait === "idle" || intent.gait === "eat" || intent.gait === "mate") return intent || null;
   if (intent.dir !== undefined) {
     const [hx, hy] = moveVecByDir[intent.dir];
     return { dir: intent.dir, gait: intent.gait, hx, hy };
@@ -1510,12 +1734,7 @@ function playerHasControl() {
 }
 
 function applyIntent(a, intent) {
-  if (a.stunnedUntil > g_tick || isMating(a) || a.sleepForced) return;
-  if (intent.gait === "sleep") { // lies down once stopped (see SLEEP)
-    if (!a.wantsSleep) { a.eating = false; setCritterIdle(a); a.wantsSleep = true; }
-    return;
-  }
-  a.wantsSleep = false;
+  if (a.stunnedUntil > g_tick || isMating(a)) return;
   a.eating = intent.gait === "eat";
   a.eatAt = a.eating && intent.at || null;
   if (intent.gait === "idle" || intent.gait === "eat" || intent.gait === "mate") setCritterIdle(a);
@@ -1605,7 +1824,7 @@ function setCritterHeading(a, hx, hy, newPose = "walk", facing = undefined) {
 }
 
 function setCritterIdle(a) {
-  if (a.pose === "death" || a.pose === "dead" || isMating(a) || a.sleepForced) return;
+  if (a.pose === "death" || a.pose === "dead" || isMating(a)) return;
   a.landPose = "idle";
   a.swimBurst = false;
   if (isInWater(a)) { // nothing stands still in water: it swims on the way it faces
@@ -1630,7 +1849,7 @@ function changeSpeed(a) {
     const step = accelBySpecies[a.species];
     a.speed = a.speed < target ? Math.min(target, a.speed + step) : Math.max(target, a.speed - step);
   }
-  if (a.speed === 0 && target === 0 && a.pose !== "idle" && a.pose !== "swim" && a.pose !== "sleep" && !isMating(a) && isLiveCritter(a)) {
+  if (a.speed === 0 && target === 0 && a.pose !== "idle" && a.pose !== "swim" && !isMating(a) && isLiveCritter(a)) {
     a.nextGX = a.gx;
     a.nextGY = a.gy;
     setPose(a, "idle");
@@ -1667,10 +1886,9 @@ function applyExertion(a) {
     if (a.swimBurst) a.wind = Math.max(0, a.wind - dt / ex.gallopFullWindS);
     a.stamina = Math.max(0, a.stamina - (a.swimBurst ? gallopStaminaCostFactor : 1) * dt / ex.swimTimeS);
   }
-  const restPose = a.pose === "sleep" ? "idle" : a.pose;
-  const windHalfLifeS = windRefillHalfLifeSByPose[restPose];
+  const windHalfLifeS = windRefillHalfLifeSByPose[a.pose];
   if (windHalfLifeS) a.wind += (1 - a.wind) * (1 - Math.pow(0.5, dt / windHalfLifeS));
-  const staminaRefillS = staminaFullRefillSByPose[restPose];
+  const staminaRefillS = staminaFullRefillSByPose[a.pose];
   if (staminaRefillS) a.stamina = Math.min(1, a.stamina + dt / staminaRefillS);
 
   // out of a reserve: the next gait down
@@ -1812,7 +2030,6 @@ function updateAllCritters() {
   const pastLifespan = allCritters.filter(isPastLifespan);
   const starved = [];
   allCritters.forEach(a => { if (updateFood(a)) starved.push(a); });
-  allCritters.forEach(updateWake);
 
   allCritters.forEach(a => {
     // done scrambling up a bank: back to the gait it was asked for
@@ -1853,7 +2070,14 @@ function updateAllCritters() {
   allCritters.filter(a => a.pregnancy && g_now >= a.pregnancy.dueAt && isLiveCritter(a)
     && !isMating(a) && !isInWater(a)).forEach(giveBirth);
   for (let k = allCorpses.length - 1; k >= 0; k--) {
-    if (g_now - allCorpses[k].deathTime >= SPEEDS.corpseLastsS) allCorpses.splice(k, 1);
+    const c = allCorpses[k];
+    if (g_now - c.deathTime < SPEEDS.corpseLastsS) continue;
+    for (const b of [c.tissues, c.stomach, c.womb]) moveAll(b, null, "rottedKg"); // it rots away
+    if (c.carcass) {
+      for (const [name] of carcassPieces) moveAll(c.carcass.pieces[name], null, "rottedKg");
+      moveAll(c.carcass.bones, null, "rottedKg");
+    }
+    allCorpses.splice(k, 1);
   }
   markScent();
   if (g_tick % Math.round(SPEEDS.windChangeEveryS / tempo) === 0) shiftWind();
@@ -2165,6 +2389,7 @@ function init() {
     }
     list.forEach((a, k) => {
       setSex(a, sexes[k]);
+      setBodyByAge(a, a.food);
     });
   }
   forbidOverlapsOnStart();
@@ -2182,9 +2407,10 @@ function start({ consoleOnly = false } = {}) {
 // THE INTERFACE
 // Views and controllers read critters' fields directly (gx, gy, pose, poseTick,
 // currentDirection (the facing), hx, hy (the heading), speed, targetSpeed, species, wind,
-// stamina, food, eating, carcass, carcassFullKg, uid, blockedTick, stunnedUntil, isMale,
-// birthTime, deathTime, weightKg, adultKg, skeletonKg, boxRad, mateUid, matingWith, parentUids, youngUids,
-// pregnancy, nursingOn, wake, sleepForced, bumpedTick, bumpedBy, bumpedDx, bumpedDy)
+// stamina, food, gut, tissues, stomach, womb, eating, carcass, carcassFullKg, uid,
+// blockedTick, stunnedUntil, isMale, birthTime, deathTime, weightKg, adultKg, frameKg,
+// boxRad, mateUid, matingWith, parentUids, youngUids, pregnancy, nursingOn, bumpedTick,
+// bumpedBy, bumpedDx, bumpedDy)
 // but change the world only through these functions.
 return {
   // lifecycle and time
@@ -2202,17 +2428,17 @@ return {
   // scent and wind
   scentAt, get wind() { return { x: windX, y: windY }; },
   get scentHalfLifeS() { return SPEEDS.scentHalfLifeS; },
-  // day and night, and sleep
-  get clock() { return clock; }, daylightHoursAt, meanDaylightShare, latitudeDeg, forcedWakeAt,
+  // day and night
+  get clock() { return clock; }, daylightHoursAt, meanDaylightShare, latitudeDeg,
   get dayLengthS() { return SPEEDS.dayLengthS; },
   allCritters, allCorpses, deathDurationSBySpecies,
   get pcWolf() { return pcWolf; },    // the player's wolf, or its corpse (see THE PLAYER'S WOLF)
   get speeds() { return SPEEDS.name; },
   get swimMinStamina() { return SPEEDS.swimMinStaminaFrac; },
   // food
-  grassFoodAt, grassHeightAt, grassMostAt, inGrassReach, grassChangesSince, carcassPieces, carcassMeatKg, eatReachTiles,
+  grassFoodAt, grassHeightAt, grassMostAt, inGrassReach, grassChangesSince, carcassPieces, carcassPieceKg, carcassMeatKg, eatReachTiles,
   get grassMaxKg() { return SPEEDS.grassMaxKg; },
-  edibleKg, bodySharesBySpecies,
+  bodySharesBySpecies, biomassKg, energyMJ,
   // ages and breeding
   can: _can, isGrown, isInfant, isFertile, inHeat, mateReachTiles, youngStage, youngScales,
   adultBoxRad: critterBoxRad, nurseContactTiles, nurseMotherMinFood,
@@ -2231,7 +2457,10 @@ return {
     REALISTIC, GAMIFIED, SPEEDS, drawLifespanS, startCritterDeath, growGrass, setGrassKg, stun,
     windRefillHalfLifeSByPose, staminaFullRefillSByPose, maxStepLevels,
     critterByUid, bodyKgBySpecies, growthShare, litterSize, birthSpots, giveBirth,
-    holdClock, setNeedSleep, updateWake, conceive, pair, energyRangeMJ, feed, growFromFood, milkEfficiency, canPair, setWind, growthProgress, growthKgPerS, setSkeletonByAge, updateBody,
+    holdClock, conceive, pair, milkEfficiency, canPair, setWind, growthProgress, growthKgPerS, updateBody,
+    setBodyByAge, setBody, setFood, bodyOf, biomass, rangeMJ, stomachKg, foodShare, worldBiomassKg, biomassLedger,
+    milkSharesBySpecies, grassShares, newCarcass, newbornKg, miscarryBelow, updateFood,
+    toFat, makeCarbs, withdraw, burn, absorb, fullStomachMJ, carbsDigestedBySpecies, stomachTS, stomachEmptiesInT,
     get loopHandle() { return loopHandle; },
   },
 };

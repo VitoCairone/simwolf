@@ -19,8 +19,7 @@
 // is in heat (as smell would, up close). Grass and land a critter can see are likewise
 // in the rectangle and in line of sight (canSeeTile).
 // AT NIGHT the rectangle shrinks (sightShare), from the whole of it in daylight
-// (sim.clock.light 1) to nightSightShare of it in the dark, through the twilight. ASLEEP
-// (the "sleep" pose), a critter sees nothing; it still hears and smells.
+// (sim.clock.light 1) to nightSightShare of it in the dark, through the twilight.
 // HEARING, once old enough to "hear": a creature moving on land, heard within a range set
 // by its gait and the ground under it (hearingRangeTiles: loudest galloping on stone), or
 // swimming. Standing still is silent. It tells its species, and where and how it moves.
@@ -60,9 +59,8 @@ const eyeLevelsBySpecies = { wolf: 2.25, deer: 2.5 };
 // times or more; both see less detail than by day. Moonlight is left out (TODO).
 const nightSightShare = { wolf: 0.4, deer: 0.5 };
 
-// The share of its sight rectangle critter a sees now: by the light, none asleep.
+// The share of its sight rectangle critter a sees now, by the light.
 function sightShare(a) {
-  if (a.pose === "sleep") return 0;
   const n = nightSightShare[a.species], light = sim.clock.light;
   return n + (1 - n) * light;
 }

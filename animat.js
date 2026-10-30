@@ -125,7 +125,8 @@ const frameDataBySpeciesAndPose = {
       holdTks: 6, topToShadow: 39, ...wolfDiagonalFacing},
     dead: {sheet: "wolf", nFrames: 1, colZero: 32, frameW: 64, frameH: 64,
       holdTks: Infinity, topToShadow: 39, ...wolfDiagonalFacing},
-    // asleep: lying on its side, breathing (made from the corpse: extract_wolf_sheet.py)
+    // asleep: lying on its side, breathing (made from the corpse: extract_wolf_sheet.py);
+    // not used while sleep is off
     // TODO: placeholder art, not canonical (admin/design_notes.md): real sleeping frames
     sleep: {sheet: "wolf", cols: [48, 49], holds: holdsFromMs([1400, 1000]), frameW: 64, frameH: 64,
       topToShadow: 39, ...wolfDiagonalFacing},
@@ -165,7 +166,8 @@ const frameDataBySpeciesAndPose = {
       holdTks: 8, topToShadow: 40, ...deerDeathFacing},
     dead: {sheet: "deer-death", nFrames: 1, colZero: 4, frameW: 48, frameH: 48,
       holdTks: Infinity, topToShadow: 40, ...deerDeathFacing},
-    // asleep: bedded down, legs folded, head up (the death's third frame)
+    // asleep: bedded down, legs folded, head up (the death's third frame); not used while
+    // sleep is off
     sleep: {sheet: "deer-death", nFrames: 1, colZero: 2, frameW: 48, frameH: 48,
       holdTks: Infinity, topToShadow: 40, ...deerDeathFacing},
   }
@@ -259,9 +261,9 @@ const debugWolfEl = el("dbel-pc-wolf");
 const windFillEl = el("wind-meter-fill");
 const staminaFillEl = el("stamina-meter-fill");
 const foodFillEl = el("food-meter-fill");
-const wakeFillEl = el("wake-meter-fill");
+const gutFillEl = el("gut-meter-fill");
 const inspectPanelEl = el("inspect-panel");
-const inspectFillEls = ["wind", "stamina", "food", "wake"].map(m => el(`inspect-${m}-fill`));
+const inspectFillEls = ["wind", "stamina", "food", "gut"].map(m => el(`inspect-${m}-fill`));
 const zoomInBtn = el("zoom-in");
 const zoomOutBtn = el("zoom-out");
 const arrowsIconEl = el("arrow-mode-icon");
@@ -785,7 +787,7 @@ function drawCarcass(a, s) {
   const row = deerDeathFacing.rowByDir[a.currentDirection];
   const layers = []; // top first
   for (let k = carcassSheetPieces.length - 1; k >= 0; k--) {
-    layers.push(1 + 2 * k + (a.carcass[carcassSheetPieces[k]] > 0 ? 0 : 1));
+    layers.push(1 + 2 * k + (sim.carcassPieceKg(a, carcassSheetPieces[k]) > 0 ? 0 : 1));
   }
   layers.push(0); // the shadow, at the bottom
   const stage = sim.youngStage(a);
@@ -861,24 +863,24 @@ function drawDebugWolf() {
   setStyle(debugWolfEl, debugWolfCss, "top", (isoY - qtrTile + surfaceDrop) + "px");
 }
 
-// METERS: the player's wolf's wind, stamina, food and wakefulness (how long until it must
-// sleep: see SLEEP in sim.js), a full bar when full. No labels:
+// METERS: the player's wolf's wind, stamina and food: its body's (a.food) on the left,
+// its stomach's (a.gut) on the right (see BODY in sim.js), a full bar when full. No labels:
 // the game shows no words or numbers. INSPECTING: while the camera follows another
 // critter (or its corpse), that critter's meters show below, under an eye.
 const windCss = {};
 const staminaCss = {};
 const foodCss = {};
-const wakeCss = {};
+const gutCss = {};
 const inspectCss = [{}, {}, {}, {}];
 let inspectShown = false;
 function drawExertion() {
   setStyle(windFillEl, windCss, "width", `${100 * sim.pcWolf.wind}%`);
   setStyle(staminaFillEl, staminaCss, "width", `${100 * sim.pcWolf.stamina}%`);
   setStyle(foodFillEl, foodCss, "width", `${100 * sim.pcWolf.food}%`);
-  setStyle(wakeFillEl, wakeCss, "width", `${100 * sim.pcWolf.wake}%`);
+  setStyle(gutFillEl, gutCss, "width", `${100 * sim.pcWolf.gut}%`);
   const other = pinned && pinned !== sim.pcWolf ? pinned : null;
   if (!!other !== inspectShown) { inspectShown = !!other; inspectPanelEl.hidden = !other; }
-  if (other) [other.wind, other.stamina, other.food, other.wake].forEach((v, k) =>
+  if (other) [other.wind, other.stamina, other.food, other.gut].forEach((v, k) =>
     setStyle(inspectFillEls[k], inspectCss[k], "width", `${100 * v}%`));
 }
 

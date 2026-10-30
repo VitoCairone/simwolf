@@ -41,8 +41,9 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   justify-content: center;
   padding: 10px;
 }
-/* The player's wolf's meters: wind, stamina, food and wakefulness, a full bar when full. No labels:
-   the game shows no words or numbers. */
+/* The player's wolf's meters: wind, stamina, and food, a full bar when full. No labels:
+   the game shows no words or numbers. The food meter is two: the body's energy (three
+   quarters of the width) and the stomach's (a quarter), a small gap between. */
 .exertion-meter {
   height: 6px;
   width: 100%;
@@ -55,7 +56,14 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
 #wind-meter-fill, #inspect-wind-fill { background-color: #7fe6ff; }
 #stamina-meter-fill, #inspect-stamina-fill { background-color: yellow; }
 #food-meter-fill, #inspect-food-fill { background-color: #e03c3c; }
-#wake-meter-fill, #inspect-wake-fill { background-color: #6a2fa0; }
+#gut-meter-fill, #inspect-gut-fill { background-color: #f0904a; }
+.food-meter {
+  display: flex;
+  gap: 3px;
+  width: 100%;
+}
+.food-meter .exertion-meter:first-child { flex: 3; }
+.food-meter .exertion-meter:last-child { flex: 1; }
 /* The inspected critter's meters, the same, under an eye (see METERS in animat.js). */
 #inspect-panel {
   display: flex;

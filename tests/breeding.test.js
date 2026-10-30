@@ -2,7 +2,8 @@
 // in animat.js):
 //  - every critter is male or female; every critter has a lifespan,
 //    newborns too, so all die in the end
-//  - weight grows from birth to the sex's adult weight; the young are drawn from 4
+//  - a well-fed critter's weight grows from birth to the sex's adult weight; the young
+//    grow only from what they digest, at most twice that pace; they are drawn from 4
 //    shrunk sheets by size, the grown from the adult's
 //  - two unpaired grown critters of opposite sexes court and mate: they stand facing each
 //    other while a heart rises between them, then are a pair, and the male keeps near her
@@ -10,12 +11,14 @@
 //  - pairs are faithful until death; the widowed pair again, and the new partner adopts
 //    the young
 //  - a female in heat mated by a fertile male conceives; gestation, litter size, the
-//    oldest fertile age and one breeding a year are kept; the litter is born beside her,
-//    can't walk until old enough, and nurses from her
-//  - nursing: an infant suckles only touching its mother, not instantly but in
-//    nurseFullS for a full meter; its meter rises by more than hers falls (the same kg,
-//    from her bigger meter), and she keeps some for herself; a hungry infant goes to her
-//    and suckles while she stands still
+//    oldest fertile age and one breeding a year are kept; her womb fills from her body as
+//    the litter grows, and at the birth is its newborns' bodies; she loses a litter while
+//    starving, taking it back into her body; the litter is born beside her, can't walk
+//    until old enough, and nurses from her
+//  - nursing: an infant suckles only touching its mother, a stomachful over feedingMinS
+//    at least: milk from her body into its stomach, making no biomass,
+//    its energy hers at her efficiency; its meter rises by more than hers falls, and she
+//    keeps some for herself; a hungry infant goes to her and suckles while she stands still
 //  - unweaned pups don't hunt
 
 const { openGame, moveToOpenLand, runStandalone } = require("./helpers");
@@ -36,8 +39,9 @@ async function main(browser, r) {
       const c = sim.allCritters.find(c => c.species === sp && c.isMale === male && c !== w && c.gx < 0 && sim.isLiveCritter(c));
       S.critterByUid.forEach(o => { if (o.mateUid === c.uid) o.mateUid = null; });
       Object.assign(c, { mateUid: null, pregnancy: null, lastBredAt: -Infinity, parentUids: [], youngUids: [],
-        food: 1, speed: 0, stunnedUntil: 0, lifespanS: 1e9, birthTime: sim.now - grownAge(sp) });
-      S.setSkeletonByAge(c);
+        speed: 0, stunnedUntil: 0, lifespanS: 1e9, birthTime: sim.now - grownAge(sp) });
+      c.womb = S.biomass();
+      S.setBodyByAge(c, 1);
       c.gx = c.nextGX = home[0] + dx; c.gy = c.nextGY = home[1] + dy;
       S.setCritterIdle(c); mind.forget(c); mind.ignore(c, false);
       return c;
@@ -47,6 +51,8 @@ async function main(browser, r) {
       sim.allCorpses.forEach(c => { c.gx = c.nextGX = c.gy = c.nextGY = -50 - c.uid * 3; }); // (from earlier checks)
       return fetch(...specs);
     };
+    const L = S.biomassLedger;
+    window.net = () => L.grownKg - L.burnedKg - L.excretedKg - L.rottedKg - L.lostKg; // (see THE LEDGER in sim.js)
     window.runUntil = (cond, maxS) => { let n = 0; while (n < maxS / sim.tempo && !cond()) { S.tick(); n++; } return n * sim.tempo; };
   });
 
@@ -71,62 +77,52 @@ async function main(browser, r) {
     }
     const b = S.bodyKgBySpecies.wolf, month = S.SPEEDS.growthAgesS.wolf[1];
     out.wolf3mo = ["female", "male"].map(sex => b.birth[sex] + (b[sex] - b.birth[sex]) * S.growthShare("wolf", 3 * month));
-    // stages by the skeleton's share of the way from birth to adult
-    const fake = share => animat.youngStage({ skeletonKg: share, birthSkeletonKg: 0, adultSkeletonKg: 1 });
+    // stages by the frame's share of the way from birth to adult
+    const fake = share => animat.youngStage({ frameKg: share, birthKg: 0, adultKg: 1 });
     out.stages = [0.01, 0.1, 0.2, 0.5, 0.9, 1].map(fake);
 
     // GROWTH FROM FOOD: a calf of each sex, newborn
     const calves = [true, false].map(male => {
       const c = sim.allCritters.find(x => x.species === "deer" && x.isMale === male && sim.isLiveCritter(x));
-      return { c, save: [c.birthTime, c.food, c.skeletonKg] };
+      mind.ignore(c); c.gx = c.nextGX = c.gy = c.nextGY = -700 - c.uid; c.speed = 0; c.lifespanS = 1e9;
+      return { c, save: [c.birthTime, c.frameKg, c.tissues, c.stomach] };
     });
+    const newborn = c => S.setBody(c, c.birthKg, 1);
     out.calves = calves.map(({ c }) => {
-      c.birthTime = sim.now; c.food = 1; c.skeletonKg = c.birthSkeletonKg; S.updateBody(c);
+      c.birthTime = sim.now; newborn(c);
       const o = { male: c.isMale, stage: sim.youngStage(c), kg: c.weightKg };
-      // unfed, it doesn't grow: a while on (its age jumps, its meter as it was)
-      c.birthTime -= S.SPEEDS.growthAgesS.deer[1]; c.food = 0.5; S.updateBody(c);
-      o.unfed = { skel: c.skeletonKg === c.birthSkeletonKg, stage: sim.youngStage(c) };
-      // eating as it uses, from birth: it follows a well-fed calf's growth
-      const ages = S.SPEEDS.growthAgesS.deer, end = ages[ages.length - 1], dt = end / 4000;
-      // a big meal: it grows from it over time, not at a stroke
-      c.birthTime = sim.now - S.SPEEDS.growthAgesS.deer[1] * 0.5; c.food = 0.5; c.skeletonKg = c.birthSkeletonKg; c.growingKg = 0;
-      const before = c.skeletonKg, pace = S.growthKgPerS(c);
-      S.feed(c, 0.5 * S.energyRangeMJ(c));
-      const rightAway = c.skeletonKg - before;
-      S.growFromFood(c, 1);
-      o.meal = { rightAway, inASecond: c.skeletonKg - before, most: 2 * pace, owed: c.growingKg > 0 };
-      c.birthTime = sim.now; c.food = 1; c.skeletonKg = c.birthSkeletonKg; c.growingKg = 0;
-      o.track = [];
-      for (let n = 1; n <= 4400; n++) {
-        c.birthTime -= dt;
-        const lasts = sim.isInfant(c) ? S.SPEEDS.infantFoodFullS : S.SPEEDS.foodFullS;
-        c.food -= dt / lasts.deer;
-        if (c.food < 0.85) S.feed(c, (0.95 - c.food) * S.energyRangeMJ(c));
-        S.growFromFood(c, dt);
-        if (n % 1000 === 0) {
-          const want = c.birthSkeletonKg + (c.adultSkeletonKg - c.birthSkeletonKg) * S.growthShare("deer", sim.now - c.birthTime);
-          o.track.push(c.skeletonKg / want);
-        }
+      // unfed, it doesn't grow: a while on (its age jumps), eating nothing
+      c.birthTime -= S.SPEEDS.growthAgesS.deer[1]; S.setFood(c, 0.5);
+      for (let k = 0; k < 60; k++) S.tick();
+      o.unfed = { frame: Math.abs(c.frameKg - c.birthKg) < 1e-12, stage: sim.youngStage(c) };
+      // fed: its stomach kept full of milk for a second (its age a well-fed calf's at a month)
+      c.birthTime = sim.now - S.SPEEDS.growthAgesS.deer[1] * 0.2; newborn(c);
+      const pace = S.growthKgPerS(c), frame0 = c.frameKg, milk = S.milkSharesBySpecies.deer;
+      const before = S.worldBiomassKg(); let added = 0;
+      for (let k = 0; k < 60; k++) {
+        const room = S.stomachKg(c) - sim.biomassKg(c.stomach);
+        for (const key in milk) c.stomach[key] += milk[key] * room;
+        added += room;
+        S.tick();
       }
+      o.fed = { grew: c.frameKg - frame0, most: 2 * pace * 1, ofPace: (c.frameKg - frame0) / pace };
       return o;
     });
-    calves.forEach(({ c, save }) => { [c.birthTime, c.food, c.skeletonKg] = save; c.growingKg = 0; S.updateBody(c); });
+    calves.forEach(({ c, save }) => { [c.birthTime, c.frameKg, c.tissues, c.stomach] = save; S.updateBody(c); });
     return out;
   });
   r.check(["wolf", "deer"].every(sp => growth[sp].start === 0 && growth[sp].end === 1 && growth[sp].rising)
     && growth.wolf3mo[0] > 7 && growth.wolf3mo[1] < 11,
-    `weight grows steadily from birth weight to adult weight (a wolf pup at 3 months: ${growth.wolf3mo.map(x => x.toFixed(1)).join(" / ")} kg, female / male)`);
+    `a well-fed critter's weight grows steadily from birth weight to adult weight (a wolf pup at 3 months: ${growth.wolf3mo.map(x => x.toFixed(1)).join(" / ")} kg, female / male)`);
   r.check(growth.stages.join() === "1,2,3,4,0,0",
-    `the young are drawn from 4 shrunk sheets by size, the grown from the adult's (stages by skeleton grown: ${growth.stages.join(" ")})`);
+    `the young are drawn from 4 shrunk sheets by size, the grown from the adult's (stages by frame grown: ${growth.stages.join(" ")})`);
   r.check(growth.calves.every(o => o.stage === 1) && growth.calves[0].kg > growth.calves[1].kg,
     `a newborn of either sex is drawn from the smallest sheet (calves: ${growth.calves.map(o => (o.male ? "stag " : "hind ") + o.kg.toFixed(1) + " kg").join(", ")})`);
-  r.check(growth.calves.every(o => o.unfed.skel && o.unfed.stage === 1),
-    "the young grow only by eating: a calf that eats nothing stays its size");
-  r.check(growth.calves.every(o => o.meal.rightAway === 0 && o.meal.inASecond > 0 && o.meal.inASecond <= o.meal.most * 1.0001 && o.meal.owed),
-    `a big meal makes a calf grow over time, not at a stroke (in a second: ${growth.calves.map(o => o.meal.inASecond.toFixed(3)).join(", ")} kg of skeleton, at most twice a well-fed calf's pace)`);
-  r.check(growth.calves.every(o => o.track.every(x => x > 0.6 && x < 1.6) && o.track.at(-1) > 0.99),
-    `a calf eating as it uses grows about as a well-fed calf does, to full size (its skeleton over a well-fed one's, by quarters of growing up: ` +
-    `${growth.calves.map(o => o.track.map(x => x.toFixed(2)).join(" ")).join("; ")})`);
+  r.check(growth.calves.every(o => o.unfed.frame && o.unfed.stage === 1),
+    "the young grow only from what they digest: a calf that eats nothing stays its size");
+  r.check(growth.calves.every(o => o.fed.grew > 0 && o.fed.grew <= o.fed.most * 1.0001),
+    `a calf whose stomach is kept full of milk grows, at most twice a well-fed calf's pace (in a second: ` +
+    `${growth.calves.map(o => o.fed.grew.toFixed(4) + " kg, " + o.fed.ofPace.toFixed(2) + " of the pace").join("; ")})`);
   const images = await p.evaluate(async () => {
     const names = ["wolf-land", "wolf-swim", "hind-land", "hind-swim", "hind-death", "hind-carcass"];
     const urls = names.flatMap(n => [1, 2, 3, 4].map(k => `./images/young/${n}-stage${k}.png`)).concat(["./images/heart.png"])
@@ -142,8 +138,8 @@ async function main(browser, r) {
   const antlers = await p.evaluate(() => {
     const S = sim.internals, mate = S.SPEEDS.lifeStageAgesS.deer.mate.avg;
     const [stag, hind, young, calf] = stage(["deer", true, -3, 0], ["deer", false, 0, 0], ["deer", true, 3, 0], ["deer", true, 0, 3]);
-    young.birthTime = sim.now - mate * 0.97; S.setSkeletonByAge(young); // full size, not quite old enough
-    calf.birthTime = sim.now - mate * 0.2; S.setSkeletonByAge(calf);
+    young.birthTime = sim.now - mate * 0.97; S.setBodyByAge(young, young.food); // full size, not quite old enough
+    calf.birthTime = sim.now - mate * 0.2; S.setBodyByAge(calf, calf.food);
     [stag, hind, young, calf].forEach(c => mind.ignore(c));
     S.tick(); animat.render();
     const cls = c => animat.spriteEl(c).className;
@@ -152,7 +148,7 @@ async function main(browser, r) {
       calf: [cls(calf), bg(calf)], youngStage: animat.youngStage(young) };
     // the young stag dies a second short of breeding age: its corpse stays antlerless (its
     // age stopped at its death)
-    young.birthTime = sim.now - (mate - 1); S.setSkeletonByAge(young);
+    young.birthTime = sim.now - (mate - 1); S.setBodyByAge(young, young.food);
     S.startCritterDeath(young);
     for (let k = 0; k < 5 / sim.tempo; k++) S.tick();
     animat.render();
@@ -213,10 +209,10 @@ async function main(browser, r) {
   const wester = await p.evaluate(() => {
     const S = sim.internals;
     const [m, f] = stage(["deer", true, -2, 0], ["deer", false, 2, 1]);
-    f.birthTime = sim.now; S.setSkeletonByAge(f); // she is an infant when they meet
+    f.birthTime = sim.now; S.setBodyByAge(f, f.food); // she is an infant when they meet
     runUntil(() => false, 1);
     const familiar = mind.stateOf(m).familiar.includes(f.uid) && mind.stateOf(f).familiar.includes(m.uid);
-    f.birthTime = sim.now - grownAge("deer"); S.setSkeletonByAge(f); // grown up
+    f.birthTime = sim.now - grownAge("deer"); S.setBodyByAge(f, f.food); // grown up
     f.gx = f.nextGX = m.gx + 2; f.gy = f.nextGY = m.gy;
     let mated = false;
     runUntil(() => (mated = mated || m.pose === "mate"), 30);
@@ -238,7 +234,7 @@ async function main(browser, r) {
     S.pair(m, f);
     f.lastBredAt = sim.now; // not in heat: no reason to mate
     // her pup from before
-    pup.birthTime = sim.now - S.SPEEDS.lifeStageAgesS.wolf.mate.avg / 3; S.setSkeletonByAge(pup);
+    pup.birthTime = sim.now - S.SPEEDS.lifeStageAgesS.wolf.mate.avg / 3; S.setBodyByAge(pup, pup.food);
     pup.parentUids = [f.uid]; f.youngUids = [pup.uid];
     let strayed = false;
     runUntil(() => (strayed = strayed || m2.pose === "mate" || f.matingWith === m2.uid), 10);
@@ -291,9 +287,9 @@ async function main(browser, r) {
     // collision boxes by size; a newborn-sized pup walks straight at its mother until stopped
     const boxes = { newborn: pup.boxRad };
     const at2 = S.SPEEDS.growthAgesS.wolf[1] * 1.2, at3 = S.SPEEDS.growthAgesS.wolf[2] * 1.5;
-    pup.birthTime = sim.now - at2; S.setSkeletonByAge(pup); boxes.stage2 = pup.boxRad;
-    pup.birthTime = sim.now - at3; S.setSkeletonByAge(pup); boxes.stage3 = pup.boxRad;
-    pup.birthTime = sim.now - S.SPEEDS.lifeStageAgesS.wolf.walk.avg * 1.1; S.setSkeletonByAge(pup);
+    pup.birthTime = sim.now - at2; S.setBodyByAge(pup, pup.food); boxes.stage2 = pup.boxRad;
+    pup.birthTime = sim.now - at3; S.setBodyByAge(pup, pup.food); boxes.stage3 = pup.boxRad;
+    pup.birthTime = sim.now - S.SPEEDS.lifeStageAgesS.wolf.walk.avg * 1.1; S.setBodyByAge(pup, pup.food);
     young.concat(sim.allCorpses).forEach(c => { if (c !== pup) { c.gx = c.nextGX = c.gy = c.nextGY = -300 - c.uid; } });
     pup.gx = pup.nextGX = f.gx + 3; pup.gy = pup.nextGY = f.gy; pup.speed = 0; pup.stunnedUntil = 0; S.setCritterIdle(pup);
     let closest = Infinity;
@@ -308,40 +304,76 @@ async function main(browser, r) {
     const nursing = {};
     const place = gap => { pup.gx = pup.nextGX = f.gx + 0.4 + pup.boxRad + gap; pup.gy = pup.nextGY = f.gy; pup.speed = 0; S.setCritterIdle(pup); };
     f.gx = f.nextGX; f.gy = f.nextGY;
-    const pupLasts = S.SPEEDS.infantFoodFullS.wolf, motherLasts = S.SPEEDS.foodFullS.wolf;
-    place(1); pup.food = 0.2; f.food = 1; sim.setIntent(pup, { gait: "eat" });
+    const pupLasts = S.SPEEDS.infantFoodFullS.wolf;
+    place(1); S.setFood(pup, 0.2); S.setFood(f, 1); sim.setIntent(pup, { gait: "eat" });
     runUntil(() => false, 0.5);
-    nursing.apart = { on: pup.nursingOn, food: pup.food, mother: f.food, motherOwn: 1 - 0.5 / S.SPEEDS.foodFullS.wolf };
-    place(0.05); pup.food = 0.2; f.food = 1; sim.setIntent(pup, { gait: "eat" });
-    const t0 = sim.now, half = [];
-    let off = 0;
-    runUntil(() => { if (pup.nursingOn !== f.uid) off++; if (pup.food < 0.6) half.push(pup.food); return pup.food >= 0.99; }, 4 * sim.nurseFullS.wolf);
-    // (both meters empty meanwhile too)
-    nursing.fillS = sim.now - t0; nursing.on = off <= 1; // (not before the first tick)
-    nursing.expectS = 0.79 / (1 / sim.nurseFullS.wolf - 1 / pupLasts);
+    nursing.apart = { on: pup.nursingOn, food: pup.food, gut: pup.gut, mother: f.food, motherOwn: 1 - 0.5 / S.SPEEDS.foodFullS.wolf };
+    // one tick touching her: the milk, from her body into its stomach, making no biomass
+    place(0.05); S.setFood(pup, 0.5); S.setFood(f, 1); sim.setIntent(pup, { gait: "eat" });
+    S.tick(); // (it stops on the first)
+    const pupMJ = () => sim.energyMJ(pup.tissues) + sim.energyMJ(pup.stomach);
+    const W0 = S.worldBiomassKg(), n0 = net(), p0 = pupMJ(), fMJ = sim.energyMJ(f.tissues);
+    const pBurn = S.rangeMJ(pup) * sim.tempo / pupLasts, fBurn = S.rangeMJ(f) * sim.tempo / S.SPEEDS.foodFullS.wolf;
+    S.tick();
+    nursing.tick = { on: pup.nursingOn === f.uid, astray: Math.abs(S.worldBiomassKg() - W0 - (net() - n0)),
+      milkMJ: pupMJ() - p0 + pBurn, motherMJ: fMJ - sim.energyMJ(f.tissues) - fBurn };
+    // a suckle: its stomach full over feedingMinS at least
+    place(0.05); S.setFood(pup, 0.2); S.setFood(f, 1); sim.setIntent(pup, { gait: "eat" });
+    const t0 = sim.now, half = [], room0 = S.stomachKg(pup);
+    S.tick(); S.tick();
+    nursing.mealS = room0 / pup.meal.kgPerS; nursing.minS = S.SPEEDS.feedingMinS;
+    nursing.fastS = room0 * sim.energyMJ(S.milkSharesBySpecies.wolf) / S.rangeMJ(pup) * sim.nurseFullS.wolf;
+    // to full, suckle after suckle
+    runUntil(() => { if (pup.food < 0.6) half.push(pup.food); return pup.food >= 0.99; }, 60);
+    nursing.fillS = sim.now - t0;
     nursing.rise = pup.food - 0.2; nursing.fall = 1 - f.food;
-    // the milk's energy, from hers over her efficiency, over a tick (grown, so none goes to growing)
-    const skel = pup.skeletonKg; pup.skeletonKg = pup.adultSkeletonKg; S.updateBody(pup);
-    place(0.05); pup.food = 0.5; f.food = 1; S.tick();
-    nursing.kgRatio = ((1 - f.food - sim.tempo / motherLasts) * S.energyRangeMJ(f) * S.milkEfficiency) /
-      ((pup.food - 0.5 + sim.tempo / pupLasts) * S.energyRangeMJ(pup));
-    pup.skeletonKg = skel; S.updateBody(pup);
     nursing.gradual = half.length > 10;
-    place(0.05); pup.food = 0.2; f.food = sim.nurseMotherMinFood + 0.01;
+    place(0.05); S.setFood(pup, 0.2); S.setFood(f, sim.nurseMotherMinFood + 0.01);
     runUntil(() => false, 1);
     nursing.keeps = f.food;
     // and by the mind: a hungry pup 3 tiles off goes to her and suckles; she stands still
-    pup.birthTime = sim.now - S.SPEEDS.lifeStageAgesS.wolf.walk.avg * 1.1; S.setSkeletonByAge(pup); // (still unweaned)
-    pup.gx = pup.nextGX = f.gx + 3; pup.food = 0.5; f.food = 1; pup.speed = 0; S.setCritterIdle(pup);
+    pup.birthTime = sim.now - S.SPEEDS.lifeStageAgesS.wolf.walk.avg * 1.1; S.setBodyByAge(pup, 0.5); // (still unweaned)
+    pup.gx = pup.nextGX = f.gx + 3; S.setFood(f, 1); pup.speed = 0; S.setCritterIdle(pup);
     mind.forget(pup); mind.forget(f); mind.ignore(pup, false); mind.ignore(f, false);
     let suckled = 0, motherMoved = 0;
     runUntil(() => {
       if (pup.nursingOn === f.uid) { suckled++; if (f.speed > 0) motherMoved++; }
       return pup.food >= 0.99;
-    }, 15);
+    }, 20);
     nursing.mind = { suckledS: suckled * sim.tempo, motherMoved, food: pup.food, mode: mind.stateOf(pup).mode };
     mind.ignore(pup); mind.ignore(f);
-    return { nursing, nurseMinFood: sim.nurseMotherMinFood, ownUseS: 1 / S.SPEEDS.foodFullS.wolf, dueMin: Math.min(...dues), dueMax: Math.max(...dues), g: B.gestationS, wolf: stats(litters.wolf),
+    // THE WOMB, filling from her body; at the birth, the newborns
+    const womb = {};
+    const [m3, f3] = fetch(["wolf", true, -2, 2], ["wolf", false, 2, 2]);
+    mind.ignore(m3); mind.ignore(f3);
+    S.pair(m3, f3); S.conceive(f3, m3);
+    f3.pregnancy.dueAt = f3.pregnancy.since + 8; // (a gestation shortened, so she doesn't starve meanwhile)
+    const P = f3.pregnancy, litterKg = P.litter * S.newbornKg("wolf"), gest = P.dueAt - P.since;
+    const W1 = S.worldBiomassKg(), n1 = net(), kg1 = f3.weightKg;
+    womb.fills = [];
+    for (const t of [0.25, 0.5, 0.75]) { runUntil(() => sim.now - P.since >= t * gest, gest); womb.fills.push(sim.biomassKg(f3.womb) / litterKg); }
+    womb.shares = womb.fills.map((x, k) => x - ((k + 1) / 4) ** 2);
+    womb.astray = Math.abs(S.worldBiomassKg() - W1 - (net() - n1));
+    womb.motherKg = +(f3.weightKg - kg1).toFixed(3); // (her womb is in her weight)
+    const before3 = Math.max(...sim.allCritters.map(c => c.uid)), lost0 = S.biomassLedger.lostKg;
+    runUntil(() => !f3.pregnancy, gest);
+    const born = sim.allCritters.filter(c => c.uid > before3);
+    womb.born = Math.abs(born.reduce((p, c) => p + c.weightKg, 0) + S.biomassLedger.lostKg - lost0 - litterKg);
+    womb.n = [born.length, P.litter];
+    born.forEach(c => { c.gx = c.nextGX = c.gy = c.nextGY = -350 - c.uid; mind.ignore(c); });
+    // starving, she loses it
+    f3.lastBredAt = -Infinity; S.conceive(f3, m3); f3.pregnancy.dueAt = sim.now + 8;
+    runUntil(() => false, 4);
+    const inWomb = sim.biomassKg(f3.womb), tissues0 = sim.biomassKg(f3.tissues);
+    const t = f3.tissues, lethal = f3.frameKg * sim.bodySharesBySpecies.wolf.proteinKg * (2 / 3);
+    const sh = sim.bodySharesBySpecies.wolf;
+    t.fatKg = 0; t.carbsKg = 0; t.proteinKg = lethal + (t.proteinKg - lethal) * 0.05; t.waterKg = t.proteinKg * sh.waterKg / sh.proteinKg;
+    S.updateBody(f3);
+    const foodS = f3.food, tissuesS = sim.biomassKg(f3.tissues);
+    S.tick();
+    womb.lost = { food: +foodS.toFixed(3), pregnant: !!f3.pregnancy, womb: sim.biomassKg(f3.womb), inWomb: +inWomb.toFixed(3),
+      tissuesGain: +(sim.biomassKg(f3.tissues) - tissuesS).toFixed(3), alive: sim.isLiveCritter(f3) };
+    return { nursing, womb, milkEfficiency: S.milkEfficiency, nurseMinFood: sim.nurseMotherMinFood, ownUseS: 1 / S.SPEEDS.foodFullS.wolf, dueMin: Math.min(...dues), dueMax: Math.max(...dues), g: B.gestationS, wolf: stats(litters.wolf),
       deer: stats(litters.deer), twins: litters.deer.filter(n => n === 2).length / litters.deer.length,
       n: young.length, near, parents, kg, mortal, boxes, stayed, stages, wolfPreg: !!f.pregnancy };
   });
@@ -361,16 +393,27 @@ async function main(browser, r) {
     `from its mother (an adult stops at 0.8)`);
   r.check(birth.stayed, "a newborn pup can't walk yet");
   const N = birth.nursing;
-  r.check(N.apart.on === null && N.apart.food < 0.2 && N.apart.mother >= N.apart.motherOwn - 1e-9,
+  r.check(N.apart.on === null && N.apart.food < 0.2 && N.apart.gut === 0 && N.apart.mother >= N.apart.motherOwn - 1e-9,
     `an infant a tile from its mother doesn't suckle (${JSON.stringify(N.apart)})`);
-  r.check(N.on && N.gradual && Math.abs(N.fillS - N.expectS) < 0.15 * N.expectS,
-    `touching her, it suckles from 0.2 to full in ${N.fillS.toFixed(2)} s (about ${N.expectS.toFixed(2)} s), gradually`);
-  r.check(N.rise > N.fall && Math.abs(N.kgRatio - 1) < 0.01,
-    `its meter rises by ${N.rise.toFixed(2)}, hers falls by ${N.fall.toFixed(3)}: its milk's energy, from hers at her efficiency (ratio over a tick ${N.kgRatio.toFixed(3)})`);
+  r.check(N.tick.on && N.tick.astray < 1e-7 && Math.abs(N.tick.milkMJ / (N.tick.motherMJ * birth.milkEfficiency) - 1) < 0.01,
+    `touching her, it suckles her milk into its stomach, making no biomass (${N.tick.astray.toExponential(1)} kg astray), its energy hers at her efficiency ` +
+    `(${(N.tick.milkMJ * 1000).toFixed(2)} kJ of milk from ${(N.tick.motherMJ * 1000).toFixed(2)} of hers in a tick)`);
+  r.check(Math.abs(N.mealS / N.minS - 1) < 1e-3 && N.fastS < N.minS,
+    `a suckle, a stomachful of milk, comes evenly over ${N.mealS.toFixed(4)} s (at its full pace it would take ${N.fastS.toFixed(2)} s)`);
+  r.check(N.gradual && N.fillS < 60,
+    `it suckles from 0.2 to full in ${N.fillS.toFixed(1)} s, its stomach passing the milk on meanwhile`);
+  r.check(N.rise > N.fall,
+    `its meter rises by ${N.rise.toFixed(2)}, hers falls by ${N.fall.toFixed(3)}`);
   r.check(N.keeps >= birth.nurseMinFood - birth.ownUseS - 1e-9, `she keeps ${birth.nurseMinFood} of her meter for herself, less what she uses (${N.keeps.toFixed(3)})`);
   r.check(N.mind.suckledS > 1 && N.mind.food >= 0.99 && N.mind.motherMoved === 0,
     `a hungry pup 3 tiles off goes to its mother and suckles (${N.mind.suckledS.toFixed(1)} s) until full (${N.mind.food.toFixed(2)}); ` +
     `she stands still meanwhile (moved ${N.mind.motherMoved} ticks)`);
+  const W = birth.womb;
+  r.check(W.shares.every(x => Math.abs(x) < 0.02) && W.astray < 1e-6 && W.motherKg < 0 && W.born < 1e-9,
+    `her womb fills from her body as the square of her gestation gone (${W.fills.map(x => x.toFixed(3)).join(", ")} of the litter's weight at a quarter, half, three quarters), ` +
+    `making no biomass (${W.astray.toExponential(1)} kg astray; she, womb and all, ${W.motherKg} kg); at the birth it is the newborns' bodies (${W.born.toExponential(1)} kg astray; ${W.n.join(" of ")} born)`);
+  r.check(W.lost.pregnant === false && W.lost.womb === 0 && W.lost.inWomb > 0 && Math.abs(W.lost.tissuesGain - W.lost.inWomb) < 0.02 && W.lost.alive,
+    `starving, she loses the litter, taking it back into her body (${JSON.stringify(W.lost)})`);
 
   // fertility limits
   const limits = await p.evaluate(() => {
@@ -410,8 +453,8 @@ async function main(browser, r) {
   const pups = await p.evaluate(() => {
     const S = sim.internals;
     const [pup, d] = stage(["wolf", false, 0, 0], ["deer", false, 6, 0]);
-    pup.birthTime = sim.now - S.SPEEDS.lifeStageAgesS.wolf.run.avg * 1.2; S.setSkeletonByAge(pup);
-    pup.food = 0.3; mind.ignore(d);
+    pup.birthTime = sim.now - S.SPEEDS.lifeStageAgesS.wolf.run.avg * 1.2; S.setBodyByAge(pup, 0.3);
+    mind.ignore(d);
     const modes = new Set();
     for (let k = 0; k < 120; k++) { S.tick(); modes.add(mind.stateOf(pup)?.mode); }
     return [...modes];

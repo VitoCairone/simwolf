@@ -17,7 +17,7 @@ async function main(browser, r) {
     const S = sim.internals, w = sim.pcWolf;
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     mind.ignore(d); mind.ignore(w); // (the player's wolf, left alone, would hunt it)
-    d.gx = d.nextGX = w.gx + 2; d.gy = d.nextGY = w.gy; d.stunnedUntil = 0; d.food = 0.5;
+    d.gx = d.nextGX = w.gx + 2; d.gy = d.nextGY = w.gy; d.stunnedUntil = 0; sim.internals.setFood(d, 0.5);
     w.gx = w.nextGX = w.gx - 3;
     d.wind = d.stamina = 1;
     const el = () => animat.spriteEl(d);
@@ -48,8 +48,8 @@ async function main(browser, r) {
     // grazing: stand on grass and eat
     S.setCritterIdle(d); d.speed = 0; S.tick(); // (stopped dead, not slowing from a gallop)
     d.gx = d.nextGX = w.gx + 5; d.gy = d.nextGY = w.gy;
-    d.food = 0.2; sim.setIntent(d, { gait: "eat" }); S.tick();
-    out.graze = watch(120, () => { d.food = 0.2; sim.setIntent(d, { gait: "eat" }); });
+    sim.internals.setFood(d, 0.2); sim.setIntent(d, { gait: "eat" }); S.tick();
+    out.graze = watch(120, () => { sim.internals.setFood(d, 0.2); sim.setIntent(d, { gait: "eat" }); });
     out.grazeEating = d.eating;
     return out;
   });
@@ -81,11 +81,11 @@ async function main(browser, r) {
     const ds = sim.allCritters.filter(c => c.species === "deer" && sim.isLiveCritter(c)).slice(0, 4);
     const gaits = [{ gait: "idle" }, { gait: "eat" }, { dir: sim.DIR_E, gait: "trot" }, { dir: sim.DIR_S, gait: "gallop" }];
     ds.forEach((d, k) => {
-      mind.ignore(d); d.food = 0.2; d.wind = d.stamina = 1; d.stunnedUntil = 0;
+      mind.ignore(d); sim.internals.setFood(d, 0.2); d.wind = d.stamina = 1; d.stunnedUntil = 0;
       d.gx = d.nextGX = w.gx + 1.5 + 1.6 * k; d.gy = d.nextGY = w.gy - 1 + (k % 2); S.setCritterIdle(d);
       sim.setIntent(d, gaits[k]);
     });
-    for (let n = 0; n < 20; n++) { ds.forEach((d, k) => { d.food = 0.2; sim.setIntent(d, gaits[k]); }); S.tick(); }
+    for (let n = 0; n < 20; n++) { ds.forEach((d, k) => { sim.internals.setFood(d, 0.2); sim.setIntent(d, gaits[k]); }); S.tick(); }
     animat.setZoom(3); animat.centerCameraOn(w.gx + 4, w.gy); animat.render();
   });
   const outDir = ensureOutputDir("deeranim");

@@ -2,7 +2,8 @@
 //  - every speed constant is in both datasets, REALISTIC and GAMIFIED, and one line picks
 //    which the game uses (GAMIFIED)
 //  - forced mortality maxima: REALISTIC grey wolf 20.6 years, red deer 31.5 years;
-//    GAMIFIED the same shrunk so the wolf's is 90 minutes, and the life-stage ages with it
+//    GAMIFIED the same shrunk by metabolism's factor (a wolf's full meter: 14 days to 20
+//    minutes), so the wolf's is about 7.5 days, and the life-stage ages with it
 //  - each critter's lifespan, drawn when it is made, is about normal around its species'
 //    mean share of the maximum, within bounds; the first critters start as adults
 //    younger than their lifespan
@@ -61,6 +62,7 @@ async function main(browser, r) {
       sameKeys: keysOf(R) === keysOf(G) && shape(R) === shape(G), speeds: sim.speeds,
       realWolfY: R.forcedMortalityMaxS.wolf / year, realDeerY: R.forcedMortalityMaxS.deer / year,
       gameWolfMin: G.forcedMortalityMaxS.wolf / 60, gameDeerMin: G.forcedMortalityMaxS.deer / 60,
+      metabolism: Math.abs(scale - G.foodFullS.wolf / R.foodFullS.wolf) < 1e-15,
       sameScale: Math.abs(G.forcedMortalityMaxS.deer / R.forcedMortalityMaxS.deer - scale) < 1e-12,
       stagesScaled, draws, startsOk: starts.every(s => s.ok), starts: starts.length,
     };
@@ -69,8 +71,8 @@ async function main(browser, r) {
   r.check(res.speeds === "gamified", `the game runs at the GAMIFIED speeds (${res.speeds})`);
   r.check(Math.abs(res.realWolfY - 20.6) < 1e-9 && Math.abs(res.realDeerY - 31.5) < 1e-9,
     `REALISTIC greatest ages: wolf ${res.realWolfY} years, deer ${res.realDeerY} years`);
-  r.check(Math.abs(res.gameWolfMin - 90) < 1e-9 && res.sameScale,
-    `GAMIFIED: wolf ${res.gameWolfMin} minutes, deer ${res.gameDeerMin.toFixed(1)} minutes (shrunk alike)`);
+  r.check(res.metabolism && Math.abs(res.gameWolfMin / 60 / 24 - 7.46) < 0.01 && res.sameScale,
+    `GAMIFIED: wolf ${(res.gameWolfMin / 60 / 24).toFixed(2)} days, deer ${(res.gameDeerMin / 60 / 24).toFixed(2)} days (shrunk alike, as meals are)`);
   r.check(res.stagesScaled, "GAMIFIED life-stage ages are shrunk by the same factor");
   for (const sp of ["wolf", "deer"]) {
     const d = res.draws[sp];

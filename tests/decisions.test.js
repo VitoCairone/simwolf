@@ -6,7 +6,8 @@
 //  - forgetting: both give up once the sighting is old enough
 //  - no dithering: a wolf with two deer about as near in opposite directions picks the
 //    one ahead of it and keeps to it, without flipping between them
-//  - a chase ends in a kill: a hungry wolf runs down a tired deer, and eats it straight away
+//  - a chase ends in a kill: a hungry wolf runs down a tired deer, and eats it straight
+//    away (fills its stomach)
 //  - galloping is only for chasing and fleeing: over a minute of play, no calm critter
 //    gallops
 //  - any heading: a critter moves along whatever grid vector it is told, facing the
@@ -15,8 +16,8 @@
 //    as many wolves (and deer) decide on each tick as on any other
 //  - grass under a boulder: a third as much grows there; a hungry deer eats it from beside
 //    the boulder, facing it, in a third of the time a full tile takes
-//  - giving way: bumped while standing or asleep, a critter steps aside (so a family
-//    resting around one of them doesn't pen it in)
+//  - giving way: bumped while standing, a critter steps aside (so a family resting around
+//    one of them doesn't pen it in)
 //  - no pacing (mind.pacing flags a critter going to and fro over 6 tiles or fewer): a
 //    paired stag kept from his hind comes well back to her, rather than to and fro across
 //    his limit
@@ -50,7 +51,7 @@ function setup({ deerAt, deer2At = null, wolfThinks = true, deerThinks = true })
   for (const c of [w, d, d2].filter(Boolean)) {
     c.wind = 1; c.stamina = 1; c.stunnedUntil = 0; sim.internals.setCritterIdle(c); // (not stunned)
     c.speed = 0; // placed: standing, not slowing from how it moved before
-    c.food = c.species === "wolf" ? 0.3 : 1; // a hungry wolf (it hunts), a fed deer (it doesn't graze)
+    sim.internals.setFood(c, c.species === "wolf" ? 0.3 : 1); // a hungry wolf (it hunts), a fed deer (it doesn't graze)
     mind.ignore(c, c === w ? !wolfThinks : !deerThinks);
     mind.forget(c); // nothing remembered from before the test
   }
@@ -62,7 +63,7 @@ async function main(browser, r) {
   const p = await openGame(browser, { viewport: { width: 900, height: 650 } });
   const fresh = async () => {
     await p.reload(); await p.waitForTimeout(300);
-    await p.evaluate(() => { sim.internals.holdClock(12); sim.internals.setNeedSleep(false); }); // (as openGame)
+    await p.evaluate(() => { sim.internals.holdClock(12); }); // (as openGame)
     await p.evaluate(`window.setup = ${setup.toString()}`);
   };
 
@@ -189,16 +190,15 @@ async function main(browser, r) {
     d.wind = 0; d.stamina = 0;
     let n = 0;
     for (; n < 30 * 60 && d.pose !== "death" && d.pose !== "dead"; n++) sim.internals.tick();
-    const foodAtKill = w.food;
     const modes = new Set();
     for (let k = 0; k < 120; k++) { sim.internals.tick(); modes.add(mind.stateOf(w).mode); }
     return { s: n / 60, pose: d.pose, wolfMode: mind.stateOf(w).mode, modes: [...modes].join(","),
-      ate: w.food - foodAtKill, meatLeft: d.carcass ? sim.carcassMeatKg(d) / d.carcassFullKg : null };
+      gut: w.gut, meatLeft: d.carcass ? sim.carcassMeatKg(d) / d.carcassFullKg : null };
   })()`);
   r.check(kill && (kill.pose === "death" || kill.pose === "dead"),
     `a hungry wolf runs down a tired deer (killed after ${kill && kill.s.toFixed(1)} s)`);
-  r.check(kill && kill.ate > 0.1 && kill.meatLeft < 1 && kill.modes.includes("feed") && !kill.modes.includes("rest"),
-    `...and eats it straight away, no resting (its meter +${kill && kill.ate.toFixed(2)}, ` +
+  r.check(kill && kill.gut > 0.5 && kill.meatLeft < 1 && kill.modes.includes("feed") && !kill.modes.includes("rest"),
+    `...and eats it straight away, no resting (its stomach ${kill && kill.gut.toFixed(2)} full, ` +
     `${kill && (kill.meatLeft * 100).toFixed(0)}% of the meat left; ${kill && kill.modes})`);
 
   // 8. any heading, and square roots only for new headings
@@ -308,7 +308,7 @@ async function main(browser, r) {
     S.setGrassKg(b[0] * H + b[1], rockKg); // only the grass under the rock
     const [stag, hind] = [true, false].map(male => sim.allCritters.find(c => c.species === "deer" && c.isMale === male && sim.isGrown(c)));
     const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; c.wind = c.stamina = 1; S.setCritterIdle(c); };
-    put(hind, b[0] - 1.5, b[1] + 0.5); hind.food = 0.5; hind.mateUid = null; mind.forget(hind); mind.ignore(hind, false);
+    put(hind, b[0] - 1.5, b[1] + 0.5); sim.internals.setFood(hind, 0.5); hind.mateUid = null; mind.forget(hind); mind.ignore(hind, false);
     let eatingTicks = 0, facing = true, inside = false;
     for (let k = 0; k < 15 / sim.tempo && sim.grassFoodAt(b[0], b[1]) > 0; k++) {
       S.tick();
@@ -328,7 +328,7 @@ async function main(browser, r) {
     stag.mateUid = null; hind.mateUid = null; S.pair(stag, hind);
     hind.lastBredAt = stag.lastBredAt = sim.now; // (not in heat)
     put(hind, b[0] - 3.5, b[1] - 3.5); sim.setIntent(hind, { gait: "idle" });
-    put(stag, hind.gx + 7, hind.gy); stag.food = 1; mind.forget(stag); mind.ignore(stag, false);
+    put(stag, hind.gx + 7, hind.gy); sim.internals.setFood(stag, 1); mind.forget(stag); mind.ignore(stag, false);
     const log0 = mind.pacing.log.length;
     let closest = Infinity;
     for (let k = 0; k < 20 / sim.tempo; k++) { S.tick(); closest = Math.min(closest, Math.hypot(stag.gx - hind.gx, stag.gy - hind.gy)); }
@@ -345,36 +345,35 @@ async function main(browser, r) {
   r.check(pace && pace.pair.closest <= 3.2 && pace.pair.flagged === 0,
     `a paired stag beyond his limit comes well back to his hind, not to and fro across it (${JSON.stringify(pace && pace.pair)})`);
 
-  // GIVING WAY: a deer asleep in another's path, bumped, gets up and steps aside, and the
-  // other walks on through; a weaned youngster ranges further from its parent than an infant
+  // GIVING WAY: a deer standing in another's path, bumped, steps aside, and the other walks
+  // on through
   await fresh();
   const way = await p.evaluate(() => {
     if (!setup({ deerAt: [30, 30], deerThinks: false })) return null;
     const S = sim.internals, w = __w, out = {};
     w.gx = w.nextGX = w.gy = w.nextGY = -800; mind.ignore(w);
-    const [a, b] = sim.allCritters.filter(c => c.species === "deer" && sim.isGrown(c) && c !== __d).slice(0, 2);
+    // (two hinds: one wouldn't court the other)
+    const [a, b] = sim.allCritters.filter(c => c.species === "deer" && sim.isGrown(c) && !c.isMale && c !== __d).slice(0, 2);
     const at = [__d.gx - 30, __d.gy - 30];
     __d.gx = __d.nextGX = __d.gy = __d.nextGY = -820; mind.ignore(__d);
-    const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; c.food = 1; c.wind = c.stamina = 1; c.lifespanS = 1e9; S.setCritterIdle(c); };
-    S.setNeedSleep(true);
-    put(a, at[0] + 2, at[1]); a.wake = 0.1; mind.forget(a); mind.ignore(a, false);
-    put(b, at[0], at[1]); mind.ignore(b); b.wake = 1;
+    const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; sim.internals.setFood(c, 1); c.wind = c.stamina = 1; c.lifespanS = 1e9; S.setCritterIdle(c); };
+    put(a, at[0] + 2, at[1]); mind.forget(a); mind.ignore(a, false);
+    put(b, at[0], at[1]); mind.ignore(b);
+    // at rest: planning to stand a long while (as a calm critter may: mind.js calm)
+    mind.rest(a, 100);
     for (let k = 0; k < 60; k++) S.tick();
-    out.asleep = a.pose === "sleep";
+    out.standing = a.pose === "idle";
     const a0 = [a.gx, a.gy];
     sim.setIntent(b, { dx: 1, dy: 0, gait: "walk" });
     const modes = new Set();
-    for (let k = 0; k < 6 / sim.tempo && b.gx < a0[0] + 1.5; k++) { b.wake = 1; S.tick(); modes.add(mind.stateOf(a).mode); }
+    for (let k = 0; k < 6 / sim.tempo && b.gx < a0[0] + 1.5; k++) { S.tick(); modes.add(mind.stateOf(a).mode); }
     out.passed = b.gx >= a0[0] + 1.5; out.modes = [...modes];
     out.aside = +Math.hypot(a.gx - a0[0], a.gy - a0[1]).toFixed(2);
-    for (let k = 0; k < 4 / sim.tempo; k++) S.tick();
-    out.asleepAgain = a.pose === "sleep";
-    S.setNeedSleep(false);
     mind.ignore(a);
     return out;
   });
-  r.check(way && way.asleep && way.passed && way.modes.includes("yield") && way.aside > 0.3 && way.asleepAgain,
-    `a deer asleep in another's way, bumped, gets up, steps aside and lies down again; the other walks on through (${JSON.stringify(way)})`);
+  r.check(way && way.standing && way.passed && way.modes.includes("yield") && way.aside > 0.3,
+    `a deer standing in another's way, bumped, steps aside; the other walks on through (${JSON.stringify(way)})`);
 
   r.noProblems(p);
   await p.close();
