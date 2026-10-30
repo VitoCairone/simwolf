@@ -231,6 +231,64 @@ def joints(p, yaw=0.0):
     return {n: np.array(v, float) for n, v in J.items()}
 
 
+# THE ONE WIREFRAME. The joints above are where the idle frames put them; the lengths of the
+# skeleton's sections are then fitted to the artist's frames (wolf_runfit.py --skeleton), as a
+# scale on each (1: as above): every column's pose refitted (briefly) to each length tried.
+# Fitted to the idle's 4 columns alone, to the run's 8 alone, and to all 12, the lengths agree
+# but for two: the tail (idle 1.15, run 1.3, all 1.3) and the hind cannon (idle 1, run 1.15,
+# all 1.1); the rest stay as the idle put them (a change of 0.05 moves no fit by 0.3%). With
+# the back jointed (wolf_pose.Model: THE BACK), refitted to all: the tail 1.25, the hind cannon
+# 1, the standing back's arch 1 (an arch of 3, which lets the back straighten to 23% longer
+# than standing, fits the stretched-out gallop frames only 2% better, and the rest no better).
+# The poses file keeps the fit to all (its "skeleton"). Every pose moves this one skeleton: no
+# section changes length from pose to pose.
+SCALES = {
+    "back": "the back: withers to sacrum (the hind quarters move along it)",
+    "neck": "the neck: withers to poll (the head moves with the poll)",
+    "scap": "the shoulder blade", "hum": "the upper arm", "rad": "the forearm",
+    "fcan": "the fore cannon and toes (carpus to paw)",
+    "fem": "the thigh", "tib": "the shank", "hcan": "the hind cannon and toes (hock to paw)",
+    "tail": "the tail",
+}
+HIND_GROUP = ["sacrum", "tailroot", "tail"] + [n + x for x in SIDES for n in
+                                               ("coxa", "hipjoint", "ischium", "stifle", "hock", "fetlockH", "hoofH")]
+HEAD_GROUP = ["poll", "crown", "nose", "eyeL", "eyeR"]
+CHAINS = {  # (joints from the top down, the scale of each section)
+    "F": (["scapula", "shoulder", "elbow", "carpus", "fetlockF", "hoofF"], ["scap", "hum", "rad", "fcan", "fcan"]),
+    "H": (["hipjoint", "stifle", "hock", "fetlockH", "hoofH"], ["fem", "tib", "hcan", "hcan"]),
+}
+
+
+def scaled(J, scales=None):
+    """The joints J with each section's length scaled (SCALES; a missing key: 1)."""
+    k = lambda n: (scales or {}).get(n, 1.0)
+    J = {n: np.array(v, float) for n, v in J.items()}
+    d = (k("back") - 1) * (J["sacrum"] - J["withers"]) * np.array([1.0, 0, 0])
+    for n in HIND_GROUP:
+        J[n] = J[n] + d
+    poll = J["withers"] + (J["poll"] - J["withers"]) * k("neck")
+    dh = poll - J["poll"]
+    for n in HEAD_GROUP:
+        J[n] = J[n] + dh
+    J["tail"] = J["tailroot"] + (J["tail"] - J["tailroot"]) * k("tail")
+    for x in SIDES:
+        for names, keys in CHAINS.values():
+            old = [J[n + x].copy() for n in names]
+            for i in range(1, len(names)):
+                J[names[i] + x] = J[names[i - 1] + x] + (old[i] - old[i - 1]) * k(keys[i - 1])
+    return J
+
+
+def section_lengths(J):
+    """Each section's length (the left side's), true-space units."""
+    d = lambda a, b: float(np.linalg.norm(J[a] - J[b]))
+    out = {"back": d("withers", "sacrum"), "neck": d("withers", "poll"), "tail": d("tailroot", "tail")}
+    for names, keys in CHAINS.values():
+        for i in range(1, len(names)):
+            out[keys[i - 1]] = out.get(keys[i - 1], 0.0) + d(names[i - 1] + "L", names[i] + "L")
+    return out
+
+
 def measurements(p):
     d = lambda a, b: float(np.linalg.norm(np.subtract(a, b)))
     return {
@@ -286,12 +344,12 @@ FACINGS = dsk.FACINGS
 GROUND = (32, 39)                  # the critter's position in a frame (animat.js: topToShadow 39)
 
 
-def wireframe(p, out, position_f=0.0):
+def wireframe(p, out, position_f=0.0, scales=None):
     S = 8
     order = list(FACINGS)
     img = Image.new("RGB", (len(order) * (FW * S + 10), FH * S), (235, 235, 235))
     d = ImageDraw.Draw(img)
-    J = joints(p)
+    J = scaled(joints(p), scales)
     for k, fc in enumerate(order):
         F, L = (np.array(v, float) for v in FACINGS[fc])
         ox = k * (FW * S + 10)
@@ -323,8 +381,15 @@ def main():
     if args.overlay:
         overlay(p, origins, args.overlay, yaws)
         print("wrote", args.overlay)
+    import json
+    poses = Path(__file__).resolve().parent / "wolf_poses.json"
+    scales = json.loads(poses.read_text()).get("skeleton", {}) if poses.exists() else {}
+    J0 = joints(p)
+    print("sections (true-space units): as the idle fit puts them, and the one skeleton (wolf_poses.json):")
+    for k, v in section_lengths(J0).items():
+        print(f"  {k:5} {v:5.2f} {section_lengths(scaled(J0, scales))[k]:5.2f}  {SCALES[k]}")
     if args.wire:
-        wireframe(p, args.wire)
+        wireframe(p, args.wire, scales=scales)
         print("wrote", args.wire)
 
 

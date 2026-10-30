@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """The test of the wolf's pixel rules (wolf_pixels.py) on its fitted poses (wolf_runfit.py):
-paint each of the artist's frames (the run, columns 0-7, and the idle, 8-11) from its pose, at
-the facing the art is drawn at, and compare a pixel at a time; as deer_runtest.py.
+paint each of the artist's frames (the run, columns 0-7, and the idle, 8-11) from its pose (a
+column's one pose, seen from its row's facing), and compare a pixel at a time; as
+deer_runtest.py.
 
 Usage (needs Python 3 with numpy and Pillow):
 
@@ -9,6 +10,7 @@ Usage (needs Python 3 with numpy and Pillow):
         --sheet cmp.png    art | ours | difference, every frame
         --gif run.gif      the run and the idle animated, art above, ours below
         --bones b.png      the fitted skeletons over the art
+        --facings f.png    each column's pose from all 8 facings (skeleton only)
         --ablate           the score after each rule in turn
         --tune --save p.json   fit the rules' numbers to these poses, and save them
 
@@ -38,8 +40,9 @@ CROP = (6, 12, 58, 52)          # (x0, y0, x1, y1): the part of a frame the pict
 
 
 class Test:
-    def __init__(self, poses, shape, params=None):
-        self.model = wp.Model()
+    def __init__(self, poses, shape, params=None, skeleton=None):
+        """poses: {(view, column): pose} (wolf_runfit.frames)."""
+        self.model = wp.Model(skeleton)
         self.art = rf.Art(sorted({k[1] for k in poses}))
         self.poses, self.shape = poses, shape
         self.casters = {v: wp.caster(F, L, self.model.origins[v]) for v, (_, F, L) in rf.ROWS.items()}
@@ -131,8 +134,8 @@ def bones(test, path, S=8):
         bg = Image.new("RGBA", im.size, (120, 170, 90, 255)); bg.paste(im, (0, 0), im)
         d = ImageDraw.Draw(bg)
         P = {n: sc.caster.screen(q) * S for n, q in sc.J.items() if not n.startswith("_")}
-        for a, b in sk.BONES + sk.SOFT + [("tailroot", "tailmid"), ("tailmid", "tail")]:
-            if a in P and b in P and not (a, b) == ("tail", "tailroot"):
+        for a, b in wp.BONES + sk.SOFT:
+            if a in P and b in P:
                 far = a.endswith(sc.far) or b.endswith(sc.far)
                 col = (250, 160, 160, 255) if far else (200, 20, 20, 255) if a[-1] in "LR" else (20, 60, 220, 255)
                 d.line([tuple(P[a]), tuple(P[b])], fill=col, width=3 if not far else 2)
@@ -141,11 +144,77 @@ def bones(test, path, S=8):
     img.save(path)
 
 
+def facings(model, poses, path, S=4):
+    """Each column's one pose (its skeleton) seen from all 8 facings: a check that a pose
+    fitted to two views is a wolf's from every side. Columns down, facings across."""
+    from deer_skeleton import FACINGS, near_side
+    W, H = 56, 44
+    img = Image.new("RGB", (8 * W * S, len(poses) * H * S), (235, 235, 235))
+    d = ImageDraw.Draw(img)
+    bones = wp.BONES
+    for i, (col, pose) in enumerate(sorted(poses.items())):
+        p = rf.view_pose(pose, "E")
+        p = dict(p, df=0.0, ds=0.0)
+        J = model.posed(p)
+        for j, fc in enumerate(FACINGS):
+            F, L = (np.array(v, float) for v in FACINGS[fc])
+            c = wp.caster(F, L, (W / 2, 34), size=(W, H))
+            far = "R" if near_side(F, L) == "L" else "L"
+            P = {n: (c.screen(q) + (j * W, i * H)) * S for n, q in J.items() if not n.startswith("_")}
+            for a, b in sorted(bones, key=lambda e: 0 if e[0].endswith(far) or e[1].endswith(far) else 1):
+                if a in P and b in P:
+                    isfar = a.endswith(far) or b.endswith(far)
+                    col_ = (240, 150, 150) if isfar else (200, 20, 20) if a[-1] in "LR" else (20, 60, 220)
+                    d.line([tuple(P[a]), tuple(P[b])], fill=col_, width=2)
+            d.rectangle([j * W * S, i * H * S, (j + 1) * W * S - 1, (i + 1) * H * S - 1], outline=(200, 200, 200))
+    img.save(path)
+
+
+SHARE_WEIGHT = 0.5      # the objective's cost of the colours' shares being off (summed difference)
+
+
+def colour_shares(test, res):
+    """(ours, the art's): each colour's share of the wolf's pixels outside the head's block,
+    over every frame."""
+    ours, art = [], []
+    for k, (out, _) in res.items():
+        fr = test.art.frames[k]
+        keep = ~(fr["head"] | (fr["block"] != "."))
+        ours.append(out[keep]); art.append(fr["letters"][keep])
+    return wpx.shares(np.concatenate(ours)), wpx.shares(np.concatenate(art))
+
+
 def objective(test, res):
-    return test.mean(res, 0) + 0.2 * test.mean(res, 2)
+    """What tuning maximises: the same-colour share, a little of the shadow's overlap, less
+    how far the colours' shares are from the art's (the artist's darks are in the right
+    proportion even where not on the very pixel)."""
+    ours, art = colour_shares(test, res)
+    off = sum(abs(ours[c] - art[c]) for c in wpx.LETTERS)
+    return test.mean(res, 0) + 0.2 * test.mean(res, 2) - SHARE_WEIGHT * off
 
 
 LEG_LETTERS = "DEFJG"
+
+
+DARK = {c: i for i, c in enumerate(wpx.LETTERS)}       # G darkest ... H palest
+
+
+def valid(P):
+    """The artist's practice the colours must keep (wolf_pixels): a leg's back no lighter than
+    its front; a far leg no lighter than a near one; a paw no lighter than its leg's back;
+    facing away no lighter than facing toward; a far leg's top no lighter than the rest of it;
+    the tail's lower edge and the belly facing away no lighter than the coat, its tip lit; a
+    paw two to four pixels long."""
+    d = lambda k: DARK[P[k]]
+    ok = all(d(f"{a}leg.{s}.back") <= d(f"{a}leg.{s}.front") and d(f"{a}paw.{s}") <= d(f"{a}leg.{s}.back")
+             for a in ("", "a.") for s in ("near", "far"))
+    ok &= all(d(f"{a}leg.far.{p}") <= d(f"{a}leg.near.{p}") for a in ("", "a.") for p in ("back", "front"))
+    ok &= all(d(f"{a}paw.far") <= d(f"{a}paw.near") for a in ("", "a."))
+    ok &= all(d("a." + k) <= d(k) for k in ("leg.near.back", "leg.near.front", "leg.far.back", "leg.far.front",
+                                            "paw.near", "paw.far"))
+    ok &= d("far.top") <= d("far.up") <= DARK["D"] and d("tail.under") <= DARK["D"] and d("a.belly") <= DARK["D"]
+    ok &= d("tail.tipc") >= DARK["E"] and 2 <= P["paw.len"] <= 4
+    return ok
 
 
 def tune(test, params, steps=(0.2, 0.1, 0.05), sweeps=2):
@@ -155,10 +224,8 @@ def tune(test, params, steps=(0.2, 0.1, 0.05), sweeps=2):
         for _ in range(sweeps):
             improved = False
             for k, v in list(params.items()):
-                if k.startswith("leg.wide"):
-                    trials = [w for w in (-1, 0, 1) if w != v]
-                elif isinstance(v, str) and len(v) == 1:
-                    trials = [c for c in "DEFHJ" if c != v]
+                if isinstance(v, str) and len(v) == 1:
+                    trials = [c for c in wpx.LETTERS if c != v]
                 elif isinstance(v, str):
                     trials = []
                     for i in range(len(v)):
@@ -170,6 +237,8 @@ def tune(test, params, steps=(0.2, 0.1, 0.05), sweeps=2):
                     trials = [v + s, v - s]
                 for t in trials:
                     trial = dict(params); trial[k] = t
+                    if not valid({**wpx.RULE_PARAMS, **trial}):
+                        continue
                     m = objective(test, test.run(trial))
                     if m > best + 1e-9:
                         best, params, improved = m, trial, True
@@ -186,13 +255,15 @@ def main():
     ap.add_argument("--sheet", type=Path)
     ap.add_argument("--gif", type=Path)
     ap.add_argument("--bones", type=Path)
+    ap.add_argument("--facings", type=Path, help="each column's pose (skeleton) from all 8 facings")
     ap.add_argument("--tune", action="store_true")
     ap.add_argument("--ablate", action="store_true")
     ap.add_argument("--save", type=Path)
     args = ap.parse_args()
-    shape, poses, rules = rf.load(args.poses)
+    shape, skeleton, cols, rules = rf.load(args.poses)
+    poses = rf.frames(cols)
     params = dict(wpx.RULE_PARAMS); params.update(rules)
-    test = Test(poses, shape, params)
+    test = Test(poses, shape, params, skeleton)
     if args.tune:
         params = tune(test, params)
         print("rule numbers:", {k: round(v, 3) if isinstance(v, float) else v for k, v in params.items()})
@@ -205,6 +276,9 @@ def main():
         if sub:
             print(f"{name:5} mean same {test.mean(sub, 0):.3f}  outline {test.mean(sub, 1):.3f}  shadow {test.mean(sub, 2):.3f}")
     print(f"all   mean same {test.mean(res, 0):.3f}  outline {test.mean(res, 1):.3f}  shadow {test.mean(res, 2):.3f}")
+    ours, art = colour_shares(test, res)
+    print("colours' shares (outside the head):  " + "  ".join(f"{c} {ours[c]:.3f}/{art[c]:.3f}" for c in wpx.LETTERS)
+          + "  (ours/art's)")
     if args.ablate:
         for i, (name, _) in enumerate(wpx.RULES):
             print(f"  after {name:12} same {test.mean(test.run(params, i + 1)):.3f}")
@@ -214,6 +288,8 @@ def main():
         bones(test, args.bones); print("wrote", args.bones)
     if args.gif:
         gif(test, res, args.gif); print("wrote", args.gif)
+    if args.facings:
+        facings(test.model, cols, args.facings); print("wrote", args.facings)
     if args.save:
         d = json.loads(args.poses.read_text()); d["rules"] = params
         args.save.write_text(json.dumps(d, indent=1))
