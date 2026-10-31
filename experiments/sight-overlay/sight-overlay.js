@@ -1,4 +1,6 @@
 // SIGHT OVERLAY - a shelved experiment, kept for reference. NOT LOADED by the game.
+// (Written for the view as it was then, of DOM elements; animat.js now paints one canvas,
+// so its animat.js and style.css parts, and sight.test.js, would need rewriting for that.)
 //
 // What it did: worked out which tiles the player's wolf could actually see from its eyes,
 // over the terrain's heights and the boulders, and blacked out everything else on screen

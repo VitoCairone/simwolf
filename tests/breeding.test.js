@@ -142,8 +142,8 @@ async function main(browser, r) {
     calf.birthTime = sim.now - mate * 0.2; S.setBodyByAge(calf, calf.food);
     [stag, hind, young, calf].forEach(c => mind.ignore(c));
     S.tick(); animat.render();
-    const cls = c => animat.spriteEl(c).className;
-    const bg = c => getComputedStyle(animat.spriteEl(c)).backgroundImage.split("/").pop();
+    const cls = c => animat.spriteOf(c).cls;
+    const bg = c => animat.spriteOf(c).image.split("/").pop();
     const out = { stag: [cls(stag), bg(stag)], hind: [cls(hind), bg(hind)], young: [cls(young), bg(young)],
       calf: [cls(calf), bg(calf)], youngStage: animat.youngStage(young) };
     // the young stag dies a second short of breeding age: its corpse stays antlerless (its
@@ -152,7 +152,7 @@ async function main(browser, r) {
     S.startCritterDeath(young);
     for (let k = 0; k < 5 / sim.tempo; k++) S.tick();
     animat.render();
-    out.corpse = [animat.spriteEl(young).style.backgroundImage.split("/").pop(), sim.isGrown(young)];
+    out.corpse = [animat.spriteOf(young).image.split("/").pop(), sim.isGrown(young)];
     return out;
   });
   r.check(antlers.stag[0] === "critter deer" && /stag-land\.png/.test(antlers.stag[1])
@@ -171,19 +171,19 @@ async function main(browser, r) {
     const t = runUntil(() => m.pose === "mate" && f.pose === "mate", 30);
     for (let k = 0; k < 30; k++) sim.internals.tick();
     animat.render();
-    const top0 = parseFloat(animat.heartEl(m)?.style.top);
+    const top0 = animat.heartOf(m)?.top;
     for (let k = 0; k < 60; k++) sim.internals.tick();
     animat.render();
-    const top1 = parseFloat(animat.heartEl(m)?.style.top);
-    const heartZ = +animat.heartEl(m)?.style.zIndex;
+    const top1 = animat.heartOf(m)?.top;
+    const heartZ = animat.heartOf(m)?.z;
     const face = c => sim.getDir((c === m ? f : m).gx - c.gx, (c === m ? f : m).gy - c.gy);
     const facing = [m, f].every(c => c.currentDirection === face(c));
-    const cls = animat.spriteEl(m).className;
+    const cls = animat.spriteOf(m).cls;
     const tEnd = runUntil(() => m.pose !== "mate", 10);
     const paired = m.mateUid === f.uid && f.mateUid === m.uid;
     const pregnant = !!f.pregnancy;
     animat.render();
-    const heartGone = !animat.heartEl(m);
+    const heartGone = !animat.heartOf(m);
     // the male keeps near her as she wanders
     let farthest = 0, near = 0, n = 0;
     for (let k = 0; k < 60 / sim.tempo; k++) {
@@ -193,7 +193,7 @@ async function main(browser, r) {
       farthest = Math.max(farthest, d); n++; if (d < 9) near++;
     }
     window.deerPair = [m, f];
-    return { t, top0, top1, heartZ, z: Math.max(+animat.spriteEl(m).style.zIndex, +animat.spriteEl(f).style.zIndex),
+    return { t, top0, top1, heartZ, z: Math.max(animat.spriteOf(m).z, animat.spriteOf(f).z),
       facing, cls, tEnd, paired, pregnant, heartGone, farthest, nearShare: near / n };
   });
   r.check(court.t < 30 && court.facing && court.cls.startsWith("critter deer"),
@@ -283,7 +283,7 @@ async function main(browser, r) {
     runUntil(() => false, 1);
     const stayed = pup.gx === at[0] && pup.gy === at[1];
     animat.render();
-    const stages = young.map(c => animat.spriteEl(c)?.className);
+    const stages = young.map(c => animat.spriteOf(c)?.cls);
     // collision boxes by size; a newborn-sized pup walks straight at its mother until stopped
     const boxes = { newborn: pup.boxRad };
     const at2 = S.SPEEDS.growthAgesS.wolf[1] * 1.2, at3 = S.SPEEDS.growthAgesS.wolf[2] * 1.5;

@@ -10,6 +10,7 @@ const { chromium } = require("playwright");
 const ROOT = path.resolve(__dirname, "..");
 const PAGE_URL = "file://" + path.join(ROOT, "index.html");
 const OUTPUT_DIR = path.join(__dirname, "output");
+const startTicks = 12; // play before a suite takes over (see openGame)
 
 // Set CHROMIUM_PATH to use a specific Chromium build; otherwise Playwright's own.
 async function launchBrowser() {
@@ -29,8 +30,16 @@ async function openGame(browser, { viewport, initScript, initArg, dayNight = fal
   page.on("pageerror", e => page.problems.push("pageerror: " + e.message));
   page.on("dialog", d => { page.problems.push("alert: " + d.message()); d.dismiss(); });
   if (initScript) await page.addInitScript(initScript, initArg);
+  // the game starts paused (before the page's own load handler starts it), runs
+  // startTicks, and then runs on: so every suite starts from as much play, however fast
+  // the page draws
+  await page.addInitScript(() => window.addEventListener("load", () => {
+    const start = sim.start;
+    sim.start = (...args) => { start(...args); sim.pause(); };
+  }));
   await page.goto(PAGE_URL);
-  await page.waitForTimeout(300); // let the page load create critters and start the loop
+  await page.waitForTimeout(300); // let the page load create critters and its images
+  await page.evaluate(n => { for (let k = 0; k < n; k++) sim.internals.tick(); sim.unpause(); }, startTicks);
   if (!dayNight) await page.evaluate(() => { sim.internals.holdClock(12); });
   return page;
 }
@@ -61,7 +70,8 @@ async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = 
     a.gx = a.nextGX = tile[0] + 0.5; a.gy = a.nextGY = tile[1] + 0.5;
     a.stunnedUntil = 0; // not stunned from before it was moved
     sim.internals.setCritterIdle(a);
-    a.speed = 0; // placed: standing, not slowing from how it moved before
+    a.speed = 0; // placed: standing, not slowing from how it moved before...
+    a.climbingUntil = -1; // ...nor held to a walk, climbing out of water before
     if (a === sim.pcWolf) animat.followWolf();
     animat.render();
     return tile;

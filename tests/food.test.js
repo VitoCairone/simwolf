@@ -71,8 +71,8 @@ async function main(browser, r) {
     S.setFood(d, 0.5);
     animat.setZoom(2); animat.centerCameraOn(i + 0.5, j + 0.5); animat.render();
     const rowOf = () => {
-      const el = animat.tileEl(i, j), g = el && el.querySelector(".ground");
-      return g ? -parseInt(g.style.backgroundPosition.split(" ")[1]) / 40 : null;
+      const t = animat.tileOf(i, j);
+      return t.pieces ? t.pieces[0].row : null;
     };
     const before = { kg: sim.grassFoodAt(i, j), h: sim.grassHeightAt(i, j), row: rowOf(), food: d.food, gut: d.gut };
     const serial = sim.grassChangesSince(0).serial;
@@ -217,12 +217,12 @@ async function main(browser, r) {
     S.setFood(w, 0.99); // not hungry while it dies
     for (let n = 0; n < deathTicks; n++) S.tick();
     animat.render();
-    const el = animat.spriteEl(d);
-    const layersOf = () => (el.style.backgroundImage.match(/url\(/g) || []).length;
+    const sp = () => animat.spriteOf(d);
+    const layersOf = () => sp().layers.length;
     // the sheet columns drawn: 0 the shadow, odd a piece's meat, even (but 0) its bones
-    const colsOf = () => el.style.backgroundPosition.split(",").map(v => Math.round(-parseFloat(v) / 48));
+    const colsOf = () => sp().layers;
     const bonesOf = () => colsOf().filter(c => c > 0 && c % 2 === 0).length;
-    const full = { cls: el.className, layers: layersOf(), bones: bonesOf(), shadowLast: colsOf().at(-1) === 0,
+    const full = { cls: sp().cls, layers: layersOf(), bones: bonesOf(), shadowLast: colsOf().at(-1) === 0,
       meat: sim.carcassMeatKg(d) };
     const kg = (c, name) => sim.carcassPieceKg(c, name);
     // eats a carcass to the bones (kept hungry, its stomach emptied every tick): the order
@@ -270,7 +270,7 @@ async function main(browser, r) {
     sim.setPlayerIntent({ gait: "eat" });
     const first = eatUp(d);
     animat.render();
-    const bones = { layers: layersOf(), bones: bonesOf(), meat: sim.carcassMeatKg(d), cls: el.className, left: sim.biomassKg(d.carcass.bones) };
+    const bones = { layers: layersOf(), bones: bonesOf(), meat: sim.carcassMeatKg(d), cls: sp().cls, left: sim.biomassKg(d.carcass.bones) };
     // another carcass: another order
     const d2 = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     d2.gx = d2.nextGX = w.gx; d2.gy = d2.nextGY = w.gy + 1; d2.speed = 0; S.setCritterIdle(d2);
@@ -367,10 +367,10 @@ async function main(browser, r) {
     mind.ignore(w);
     // it lasts corpseLastsS from the death
     animat.render();
-    out.drawn = !!animat.spriteEl(d);
+    out.drawn = !!animat.spriteOf(d);
     d.deathTime = sim.now - S.SPEEDS.corpseLastsS + 0.5;
     run(0.25); out.before = sim.allCorpses.includes(d);
-    run(0.5); animat.render(); out.after = sim.allCorpses.includes(d); out.drawnAfter = !!animat.spriteEl(d);
+    run(0.5); animat.render(); out.after = sim.allCorpses.includes(d); out.drawnAfter = !!animat.spriteOf(d);
     out.lasts = S.SPEEDS.corpseLastsS; out.wolfMeter = S.SPEEDS.foodFullS.wolf;
     out.real = S.REALISTIC.corpseLastsS / 86400;
     return out;

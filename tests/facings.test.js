@@ -17,7 +17,7 @@ async function main(browser, r) {
   const found = await p.evaluate(() => {
     sim.pause();
     document.getElementById("move-pad").style.display = "none";
-    document.getElementById("dbel-pc-wolf").style.display = "none";
+    animat.showDebug(false);
     // a stag with antlers, if any (any deer else)
     const deer = sim.allCritters.filter(c => c.species === "deer" && sim.isLiveCritter(c));
     window.__facingDeer = deer.find(c => c.isMale && sim.isGrown(c)) ?? deer[0];
@@ -28,7 +28,7 @@ async function main(browser, r) {
     await p.evaluate((species) => {
       const a = species === "wolf" ? sim.pcWolf : window.__facingDeer;
       window.__facing = a;
-      sim.allCritters.forEach(c => { const el = animat.spriteEl(c); if (el) el.style.display = c === a ? "" : "none"; });
+      animat.showOnly([a]);
       animat.setZoom(4);
       animat.pinCamera(a);
     }, species);
@@ -41,9 +41,8 @@ async function main(browser, r) {
           // show animation frame 2 of the walk, the first of idle
           a.poseTick = sim.tickCount - 1 - (pose === "walk" ? 2 * fd.holdTks : 0);
           animat.pinCamera(a);
-          const el = animat.spriteEl(a);
-          const [, y] = el.style.backgroundPosition.split(" ").map(v => parseInt(v));
-          return { row: Math.round(-y / fd.frameH), mirror: el.style.transform === "scaleX(-1)" };
+          const s = animat.spriteOf(a);
+          return { row: s.row, mirror: s.mirror };
         }, [dir, pose]);
         r.check(got.row === EXPECTED_ROW[dir] && got.mirror === EXPECTED_MIRROR[dir],
           `${species} ${pose} ${DIR_LABEL[dir]}: row ${got.row}${got.mirror ? " mirrored" : ""}`);

@@ -66,7 +66,7 @@ async function main(browser, r) {
       sim.internals.tick(); animat.render();
       if (d.pose === "death" && diedAt === null) { diedAt = sim.tickCount; sim.setIntent(d, { dir: sim.DIR_W, gait: "gallop" }); } // told to run while dying
       poses.push(d.pose);
-      if (d.pose === "death" || d.pose === "dead") bgs.push(animat.spriteEl(d).style.backgroundPosition);
+      if (d.pose === "death" || d.pose === "dead") bgs.push([animat.spriteOf(d).col, animat.spriteOf(d).row].join());
     }
     const deadData = animat.frameDataBySpeciesAndPose.deer.dead;
     const deathData = animat.frameDataBySpeciesAndPose.deer.death;
@@ -75,8 +75,8 @@ async function main(browser, r) {
       deathTicks: poses.filter(x => x === "death").length,
       expectedDeathTicks: deathData.nFrames * deathData.holdTks,
       walkedAfterDeath: poses.slice(poses.indexOf("death")).includes("walk"),
-      corpseClass: animat.spriteEl(d).className,
-      corpseLayers: (animat.spriteEl(d).style.backgroundImage.match(/url\(/g) || []).length,
+      corpseClass: animat.spriteOf(d).cls,
+      corpseLayers: animat.spriteOf(d).layers?.length,
     };
   });
   r.check(k.diedAt !== null, "bug 3: a wolf kills an IDLE deer");
@@ -115,8 +115,8 @@ async function main(browser, r) {
 
   // 7: after normal play, every sprite's z-index is a valid integer that follows the
   // drawing order (animat.spriteZIndex: depth-based, swimmers interleaved with land tiles)
-  const z = await soak.evaluate(() => sim.allCritters.map(a => [animat.spriteEl(a).style.zIndex, animat.spriteZIndex(a)]));
-  r.check(z.length > 1 && z.every(([zz, expected]) => zz === String(expected) && Number.isInteger(expected)),
+  const z = await soak.evaluate(() => sim.allCritters.map(a => [animat.spriteOf(a).z, animat.spriteZIndex(a)]));
+  r.check(z.length > 1 && z.every(([zz, expected]) => zz === expected && Number.isInteger(expected)),
     `bug 7: every live sprite's z-index tracks its position (${z.length} checked)`);
   r.noProblems(soak, "during soak");
   await soak.close();

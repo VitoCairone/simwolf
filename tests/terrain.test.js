@@ -59,11 +59,11 @@ async function main(browser, r) {
     if (!tile) return null;
     w.gx = w.nextGX = tile[0] + 0.5; w.gy = w.nextGY = tile[1] + 0.5; w.stunnedUntil = 0;
     sim.internals.setCritterIdle(w); animat.render();
-    const el = animat.spriteEl(w);
+    const s = animat.spriteOf(w);
     const fd = animat.frameDataBySpeciesAndPose.wolf[w.pose];
     const [, isoY] = animat.isoProject(w.gx, w.gy);
     const h = sim.heightAt(w.gx, w.gy);
-    return { h, top: parseFloat(el.style.top), expected: isoY - fd.topToShadow - h * 8 };
+    return { h, top: s.top, expected: isoY - fd.topToShadow - h * 8 };
   });
   r.check(drawn && Math.abs(drawn.top - drawn.expected) < 1e-6 && drawn.h > 0,
     `a wolf on raised ground is drawn ${drawn && (drawn.h * 8).toFixed(1)} px up, at the ground's height`);

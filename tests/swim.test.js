@@ -38,6 +38,7 @@ async function main(browser, r) {
     const w = sim.pcWolf;
     w.gx = w.nextGX = i - 1 + 0.5; w.gy = w.nextGY = j + 0.5; w.wind = 0.4; w.stamina = 0.7; w.stunnedUntil = 0;
     sim.internals.setCritterIdle(w); mind.ignore(w);
+    w.speed = 0; w.climbingUntil = -1; // placed: standing, not slowing or climbing from before
     sim.internals.setCritterMoving(w, sim.DIR_E, "walk");
     let enteredAt = null;
     for (let n = 0; n < 600 && enteredAt === null; n++) { sim.internals.tick(); if (w.pose === "swim") enteredAt = n; }
@@ -45,11 +46,11 @@ async function main(browser, r) {
     for (let n = 0; n < 120; n++) sim.internals.tick(); // 2 s of swimming
     const tilesPerS = (w.gx - startGX) / (120 * sim.tempo);
     animat.render();
-    const el = animat.spriteEl(w);
+    const s = animat.spriteOf(w);
     return {
       enteredAt, inWater: sim.internals.isInWater(w), pose: w.pose, kmh: tilesPerS * 3.6,
-      reservesAtEntry, reserves: [w.wind, w.stamina], cls: el.className,
-      sheet: getComputedStyle(el).backgroundImage, size: [getComputedStyle(el).width, getComputedStyle(el).height],
+      reservesAtEntry, reserves: [w.wind, w.stamina], cls: s.cls,
+      sheet: s.image, size: [s.w + "px", s.h + "px"],
     };
   }, setup.shore);
   r.check(w1.enteredAt !== null && w1.inWater && w1.pose === "swim",
@@ -133,9 +134,8 @@ async function main(browser, r) {
     // (up a bank higher than a step it first walks for a moment: see shorewait.test.js)
     for (let n = 0; n < 200 && sim.pcWolf.climbingUntil >= sim.tickCount; n++) sim.internals.tick();
     animat.render();
-    const el = animat.spriteEl(sim.pcWolf);
-    return { inWater: sim.internals.isInWater(sim.pcWolf), pose: sim.pcWolf.pose, cls: el.className,
-      sheet: getComputedStyle(el).backgroundImage };
+    const s = animat.spriteOf(sim.pcWolf);
+    return { inWater: sim.internals.isInWater(sim.pcWolf), pose: sim.pcWolf.pose, cls: s.cls, sheet: s.image };
   });
   r.check(!back.inWater && back.pose === "gallop" && back.cls === "critter wolf" && back.sheet.includes("wolf-land.png"),
     `climbing out resumes the requested land pose (${back.pose}) and the land sheet (class "${back.cls}")`);
@@ -145,14 +145,14 @@ async function main(browser, r) {
     sim.pcWolf.gx = sim.pcWolf.gy = sim.pcWolf.nextGX = sim.pcWolf.nextGY = -80; sim.internals.setCritterIdle(sim.pcWolf);
     const a = window.__d;
     a.gx = a.nextGX = i - 1 + 0.5; a.gy = a.nextGY = j + 0.5; mind.ignore(a); a.stunnedUntil = 0;
-    sim.internals.setCritterIdle(a); sim.internals.setCritterMoving(a, sim.DIR_E, "walk");
+    sim.internals.setCritterIdle(a); a.speed = 0; a.climbingUntil = -1; sim.internals.setCritterMoving(a, sim.DIR_E, "walk");
     for (let n = 0; n < 600 && a.pose !== "swim"; n++) sim.internals.tick();
     const startGX = a.gx;
     for (let n = 0; n < 120; n++) sim.internals.tick();
     animat.render();
-    const el = animat.spriteEl(a);
+    const s = animat.spriteOf(a);
     return { pose: a.pose, kmh: (a.gx - startGX) / (120 * sim.tempo) * 3.6,
-      cls: el.className, size: [getComputedStyle(el).width, getComputedStyle(el).height] };
+      cls: s.cls, size: [s.w + "px", s.h + "px"] };
   }, setup.shore);
   r.check(d.pose === "swim" && Math.abs(d.kmh - sp.kph.deer.swim) < 0.1,
     `deer swims at ${d.kmh.toFixed(2)} km/h (expected ${sp.kph.deer.swim})`);

@@ -48,10 +48,8 @@ async function main(browser, r) {
     const s = await p.evaluate(() => {
       const d = sim.internals.deer[0];
       animat.render();
-      const el = animat.spriteEl(d);
-      const [x, y] = el.style.backgroundPosition.split(" ").map(v => -parseInt(v));
-      return { pose: d.pose, col: x / 48, row: y / 48, cls: el.className,
-        layers: (el.style.backgroundImage.match(/url\(/g) || []).length };
+      const s = animat.spriteOf(d);
+      return { pose: d.pose, col: s.col, row: s.row, cls: s.cls, layers: s.layers ? s.layers.length : 1 };
     });
     seq.push(s);
     if (s.pose === "death" && n % fd.holdTks === 0 || (s.pose === "dead" && seq[seq.length - 2]?.pose === "death")) {
@@ -80,9 +78,8 @@ async function main(browser, r) {
     const d = sim.internals.deer[0];
     return [0, 1, 2, 3, 4, 5, 6, 7].map(dir => {
       d.currentDirection = dir; animat.render();
-      const el = animat.spriteEl(d);
-      const y = -parseInt(el.style.backgroundPosition.split(" ")[1]);
-      return [y / 48, el.style.transform === "scaleX(-1)"];
+      const s = animat.spriteOf(d);
+      return [s.row, s.mirror];
     });
   });
   facings.forEach(([row, mirror], dir) => {

@@ -63,7 +63,7 @@ async function main(browser, r) {
       const cols = [];
       for (let k = 0; k < n; k++) {
         before(); S.tick(); animat.render();
-        cols.push(Math.round(-parseFloat(animat.spriteEl(w).style.backgroundPosition) / 64));
+        cols.push(animat.spriteOf(w).col);
       }
       return cols;
     };
@@ -105,12 +105,11 @@ async function main(browser, r) {
     const seq = [];
     for (let k = 0; k < 75; k++) {
       S.tick(); animat.render();
-      const el = animat.spriteEl(wolves[0]);
-      seq.push(Math.round(-parseFloat(el.style.backgroundPosition) / 64));
+      seq.push(animat.spriteOf(wolves[0]).col);
     }
     const look = w => {
-      const el = animat.spriteEl(w), pos = el.style.backgroundPosition.split(" ").map(v => -parseFloat(v) / 64);
-      out.push({ dir: w.currentDirection, kind: w.kind, pose: w.pose, col: pos[0], row: pos[1], mirror: el.style.transform.includes("-1") });
+      const s = animat.spriteOf(w);
+      out.push({ dir: w.currentDirection, kind: w.kind, pose: w.pose, col: s.col, row: s.row, mirror: s.mirror });
     };
     wolves.forEach(look);
     wolves[6].currentDirection = 7; animat.render(); look(wolves[6]);

@@ -118,7 +118,7 @@ async function main(browser, r) {
   // 3. boulders are drawn: look at the longest barrier
   const drawn = await p.evaluate(at => {
     animat.setZoom(2); animat.centerCameraOn(at[0], at[1]);
-    return { shown: document.querySelectorAll(".tile.boulder").length };
+    return { shown: animat.tilesInView().filter(t => t.boulder).length };
   }, b.longestAt);
   r.check(drawn.shown > 10, `boulders are drawn (${drawn.shown} in view)`);
   const outDir = ensureOutputDir("obstacles");
@@ -147,10 +147,9 @@ async function main(browser, r) {
     put(deer[1], b[0] + 1.6, b[1] + 1.6);    // in front
     put(deer[2], b[0] + 1.5, b[1] + 0.5);    // in front, down-screen to the right
     animat.setZoom(4); animat.centerCameraOn(b[0] + 0.5, b[1] + 0.5); animat.render();
-    const z = el => +el.style.zIndex;
-    const rock = z(animat.tileEl(b[0], b[1]).boulder);
-    return { rock, behind: [wolf, deer[0]].map(c => z(animat.spriteEl(c)) < rock),
-      front: [deer[1], deer[2]].map(c => z(animat.spriteEl(c)) > rock) };
+    const z = c => animat.spriteOf(c).z;
+    const rock = animat.tileOf(b[0], b[1]).boulder.z;
+    return { rock, behind: [wolf, deer[0]].map(c => z(c) < rock), front: [deer[1], deer[2]].map(c => z(c) > rock) };
   });
   r.check(depth && depth.behind.every(Boolean) && depth.front.every(Boolean),
     `critters behind a boulder are drawn behind it, those in front over it (${JSON.stringify(depth)})`);

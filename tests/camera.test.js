@@ -24,7 +24,7 @@ async function main(browser, r) {
     sim.internals.setCritterIdle(d);
     window.__d = d;
     animat.render();
-    const b = animat.spriteEl(d).getBoundingClientRect();
+    const b = animat.spriteRect(animat.spriteOf(d));
     return { x: b.left + b.width / 2, y: b.top + b.height * 0.6 };
   });
   await p.mouse.click(at.x, at.y);
@@ -85,11 +85,8 @@ async function main(browser, r) {
   // and bottom points land on screen, against the viewport's edges
   const edges = await p.evaluate(() => {
     const wrap = document.getElementById("field-wrapper").getBoundingClientRect();
-    const c = animat.camera, R = c.worldRadPX, D = document.getElementById("tile-layer");
-    const probe = document.createElement("div");
-    probe.style.position = "absolute"; probe.style.width = probe.style.height = "0px";
-    D.appendChild(probe);
-    const at = (x, y) => { probe.style.left = `${x}px`; probe.style.top = `${y}px`; const b = probe.getBoundingClientRect(); return [b.left, b.top]; };
+    const c = animat.camera, R = c.worldRadPX;
+    const at = (x, y) => animat.worldToScreen(x, y);
     const out = {};
     for (const z of [1, 2, 4, 8]) {
       animat.setZoom(z);
@@ -100,7 +97,6 @@ async function main(browser, r) {
       animat.panCamera(0, 2e6); animat.render(); off.push(at(0, animat.camera.worldBottomPY)[1] - wrap.bottom);
       out[z] = off.map(v => +v.toFixed(2));
     }
-    probe.remove();
     return out;
   });
   r.check(Object.values(edges).every(off => off.every(v => Math.abs(v) < 0.5)),

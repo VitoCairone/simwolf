@@ -47,7 +47,7 @@ async function main(browser, r) {
     await p.waitForTimeout(500);
     const after = await p.evaluate(() => ({
       iso: animat.isoProject(sim.pcWolf.gx, sim.pcWolf.gy), pose: sim.pcWolf.pose,
-      row: animat.spriteRow(sim.pcWolf), mirror: animat.spriteEl(sim.pcWolf).style.transform === "scaleX(-1)",
+      row: animat.spriteRow(sim.pcWolf), mirror: animat.spriteOf(sim.pcWolf).mirror,
     }));
     for (const k of keys) await p.keyboard.up(k);
     const dx = after.iso[0] - before[0], dy = after.iso[1] - before[1];

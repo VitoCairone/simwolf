@@ -1,6 +1,6 @@
-// THE VIEW: everything the player sees. It draws the simulation's current state (tiles,
-// critters, the camera, the meters, the movement pad's highlight and the debug readouts)
-// and only ever reads the simulation.
+// THE VIEW: everything the player sees. It draws the simulation's current state (tiles
+// and critters on one canvas, the field; the meters, the movement pad's highlight and the
+// debug readouts) and only ever reads the simulation.
 //
 // Everything it offers is on the one global it defines, `animat`. Connect it with
 // animat.attach(sim); it then redraws after every frame of ticks. controls.js calls the
@@ -26,8 +26,6 @@ let worldDiamPY = 0;
 
 function boundVal(val, min, max) { return Math.max(min, Math.min(val, max)); }
 
-// TODO: drawing breaks down at pixel coordinates around 1.4-1.7 million (likely the
-// browser's limit on CSS positions); far beyond this map's size, but it caps the map.
 function isoProject(gx, gy) {
   const px = (gx - gy) * halfTile;
   const py = (gx + gy) * qtrTile;
@@ -69,8 +67,8 @@ const deerDeathFacing = {
   mirrorByDir: [false, true, true, true, true, false, false, false],
 };
 // Each pose's frames:
-//   sheet           the sheet's CSS class in style.css, which sets its image and frame
-//                   size (frameW and frameH must match it)
+//   sheet           its sheet (sheetImages: which image, by age and antlers)
+//   frameW, frameH  a frame's size on the sheet
 //   colZero, nFrames, holdTks   a run of columns, each shown holdTks ticks, looping
 //   cols, holds, loopFrom       or: columns and ticks each, looping from cols[loopFrom]
 //   topToShadow     y of the shadow's center (the critter's ground point) in a frame
@@ -176,8 +174,7 @@ const frameDataBySpeciesAndPose = {
 // YOUNG STAGES: a critter is drawn from one of 5 versions of each sheet by its size class
 // (sim.youngStage, see SIZES in sim.js): the adult's, or one of 4 shrunk to
 // sim.youngScales (images/young/<sheet>-stage<k>.png, made by
-// spritecraft/make_young_sheets.py; keep its scales in step). style.css sets each stage's
-// images.
+// spritecraft/make_young_sheets.py; keep its scales in step): see sheetImages.
 
 // ANTLERS: only a stag old enough to breed (sim.isGrown) has antlers. Every other deer is
 // drawn from the antlerless sheets (images/hind-*.png, made by
@@ -224,15 +221,15 @@ function frameColumn(a, fd, sinceTick = a.poseTick ?? 0) {
   return fd.cols[k];
 }
 
-// DRAWING ORDER: tiles and sprites share one stacking order (z-index, which must be an
-// integer). Depth = gx + gy, larger nearer the camera:
-//   water tiles      i + j               lowest: the water surface is below all land
-//   land tiles       1000 + 100 * depth  interleaved with swimmers, so land in front of
-//   swimmers         1000 + 100 * depth  a swimmer covers it
-//   land critters    100000 + 100 * depth  above all tiles
-//   boulders         100000 + 100 * depth  among the land critters, by its tile's center
-// A land tile's depth is its center's (i + j + 1); a swimmer counts half a tile further
-// back, so only land clearly in front of it covers it.
+// DRAWING ORDER (as painted, back to front; depth = gx + gy, larger nearer the camera):
+//   1. water tiles, below all land (the water surface is below all land)
+//   2. land tiles, and swimmers among them: land in front of a swimmer covers it. Depth
+//      order (z): a land tile 1000 + 100 * depth of its center (i + j + 1), a swimmer
+//      1000 + 100 * (depth + 0.5), so only land clearly in front of it covers it
+//   3. land critters and corpses (100000 + 100 * depth) and boulders (100000 + 100 * their
+//      tile center's depth), in depth order; on a tie a boulder first; a heart over its pair
+//   4. the debug outline
+// spriteZIndex and the tiles' z keep these numbers (as the DOM view's z-indexes were).
 const zSwimLandBase = 1000;
 const zLandCritterBase = 100000;
 
@@ -251,13 +248,12 @@ function spriteZIndex(a) {
   return zLandCritterBase + Math.round(depth * 100);
 }
 
-// DOM
+// DOM: the field is one canvas; the sidebar and the movement pad are elements.
 const el = id => document.getElementById(id);
 const fieldWrapper = el("field-wrapper");
-const field = el("field");
-const tileLayer = el("tile-layer");
-const spriteLayer = el("sprite-layer");
-const debugWolfEl = el("dbel-pc-wolf");
+const canvas = el("field-canvas");
+const ctx = canvas.getContext("2d");
+const backgroundColor = "#9dd4f3"; // beyond the map
 const windFillEl = el("wind-meter-fill");
 const staminaFillEl = el("stamina-meter-fill");
 const foodFillEl = el("food-meter-fill");
@@ -271,11 +267,67 @@ const cursorCoordsEl = el("cursor-coords");
 const movePadKnob = el("move-pad-knob");
 const movePadRingEls = [...document.querySelectorAll("#move-pad .ring")];
 
-// Writes a style property only when it changes (the view redraws every frame).
+// Writes a style property only when it changes (the meters are updated every frame).
 function setStyle(node, cache, prop, value) {
   if (cache[prop] === value) return;
   cache[prop] = value;
   node.style[prop] = value;
+}
+
+// IMAGES: every sheet, loaded once by its path. Anything drawn before its image has loaded
+// is drawn again once it has, on the next frame (the terrain's chunks painted afresh, for
+// the terrain's sheets: see CHUNKS).
+const images = new Map(); // path -> HTMLImageElement
+let redrawPending = false;
+function image(path) {
+  let im = images.get(path);
+  if (!im) {
+    im = new Image();
+    im.onload = () => {
+      if (terrainImages.includes(path)) clearChunks();
+      if (!sim || redrawPending) return;
+      redrawPending = true;
+      requestAnimationFrame(() => { redrawPending = false; render(); });
+    };
+    im.src = path;
+    images.set(path, im);
+  }
+  return im;
+}
+const IMG = "./images/";
+// Critter sheets, by the sheet named in frameDataBySpeciesAndPose: the grown animal's (a
+// stag's, for deer), an antlerless deer's (see ANTLERS) and the young stages' prefix (see
+// YOUNG STAGES); the frame sizes are frameDataBySpeciesAndPose's.
+const sheetImages = {
+  "wolf":         { adult: "wolf-land.png",    young: "young/wolf-land-stage" },
+  "wolf-swim":    { adult: "wolf-swim.png",    young: "young/wolf-swim-stage" },
+  "deer":         { adult: "stag-land.png",    hind: "hind-land.png",    young: "young/hind-land-stage" },
+  "deer-swim":    { adult: "stag-swim.png",    hind: "hind-swim.png",    young: "young/hind-swim-stage" },
+  "deer-death":   { adult: "stag-death.png",   hind: "hind-death.png",   young: "young/hind-death-stage" },
+  "deer-carcass": { adult: "deer-carcass.png", hind: "hind-carcass.png", young: "young/hind-carcass-stage" },
+};
+function sheetImage(sheet, stage, hind) {
+  const s = sheetImages[sheet];
+  return IMG + (stage ? `${s.young}${stage}.png` : hind && s.hind ? s.hind : s.adult);
+}
+const tilesImage = IMG + "tiles.png";
+const groundImage = IMG + "ground-slopes.png";
+const shoreRotatedImage = IMG + "shore-rotated.png";
+const shoreInnerImage = IMG + "shore-inner.png";
+const heartImage = IMG + "heart.png";
+const debugTileImage = IMG + "debug-tile.png";
+const waterCell = [192, 288]; // plain water in tiles.png
+const terrainImages = [tilesImage, groundImage, shoreRotatedImage, shoreInnerImage];
+
+// PAINTING: a target is a 2D context and how world pixels map to its pixels: x * A + Bx,
+// y * A + By. Pixel art is scaled without smoothing, and every cell lands on whole pixels.
+// drawCell paints a cell of an image (sx, sy, sw, sh) with its top-left at world (left,
+// top), mirrored if asked about the cell's point (ox, oy) (by default its middle).
+function drawCell(t, img, sx, sy, sw, sh, left, top, flipX = false, flipY = false, ox = sw / 2, oy = sh / 2) {
+  const fx = flipX ? -1 : 1, fy = flipY ? -1 : 1;
+  const x0 = left + ox - fx * ox, y0 = top + oy - fy * oy; // where the cell's (0, 0) goes
+  t.ctx.setTransform(fx * t.A, 0, 0, fy * t.A, Math.round(x0 * t.A + t.Bx), Math.round(y0 * t.A + t.By));
+  t.ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
 }
 
 // CAMERA: shiftPX, shiftPY is the world pixel at the viewport's top-left at zoom 1; zoom
@@ -291,11 +343,18 @@ let pinned = null; // the critter or corpse the camera follows
 let playerWolf = null; // the player's wolf when the camera last looked
 let viewportWidth = 0;
 let viewportHeight = 0;
-let drawnCameraKey = null; // the camera the tiles were last drawn for
+let dpr = 1;       // device pixels a CSS pixel
+let screen = null; // the canvas as a target (see PAINTING), for this frame's camera
+let view = null;   // the world rectangle in view: { x0, y0, x1, y1 }
 
 function measureViewport() {
   viewportWidth = fieldWrapper.clientWidth;
   viewportHeight = fieldWrapper.clientHeight;
+  dpr = window.devicePixelRatio || 1;
+  const w = Math.round(viewportWidth * dpr), h = Math.round(viewportHeight * dpr);
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  canvas.style.width = `${viewportWidth}px`;
+  canvas.style.height = `${viewportHeight}px`;
 }
 
 function centerShiftOn(gx, gy) {
@@ -326,80 +385,21 @@ function drawCamera() {
   const lim = panLimits();
   camera.shiftPX = boundVal(camera.shiftPX, lim.minX, lim.maxX);
   camera.shiftPY = boundVal(camera.shiftPY, lim.minY, lim.maxY);
-
-  const key = [camera.shiftPX, camera.shiftPY, camera.zoom, viewportWidth, viewportHeight].join();
-  if (key === drawnCameraKey) return;
-  drawnCameraKey = key;
-
-  renderVisibleTiles();
-  const [zoX, zoY] = [camera.shiftPX + viewportWidth / 2, camera.shiftPY + viewportHeight / 2];
-  field.style.transformOrigin = `${zoX}px ${zoY}px`;
-  field.style.transform = `translate(${-camera.shiftPX}px, ${-camera.shiftPY}px) scale(${camera.zoom})`;
+  const z = camera.zoom, cx = camera.shiftPX + viewportWidth / 2, cy = camera.shiftPY + viewportHeight / 2;
+  const A = z * dpr;
+  screen = { ctx, A, Bx: Math.round(dpr * (viewportWidth / 2) - cx * A), By: Math.round(dpr * (viewportHeight / 2) - cy * A) };
+  view = { x0: cx - viewportWidth / 2 / z, x1: cx + viewportWidth / 2 / z, y0: cy - viewportHeight / 2 / z, y1: cy + viewportHeight / 2 / z };
 }
 
-// TILES
-const renderedTiles = new Map();
-
-function clearAllRenderedTiles() {
-  for (const tile of renderedTiles.values()) removeTile(tile);
-  renderedTiles.clear();
-  shoreTiles.clear();
+// Whether a world rectangle is in view.
+function inView(left, top, w, h) {
+  return left < view.x1 && left + w > view.x0 && top < view.y1 && top + h > view.y0;
 }
 
-// A tile's element, and its boulder's (drawn in the critters' order: see DRAWING ORDER).
-function addTile(tile) {
-  tileLayer.appendChild(tile);
-  if (tile.boulder) tileLayer.appendChild(tile.boulder);
-}
-function removeTile(tile) {
-  tileLayer.removeChild(tile);
-  if (tile.boulder) tileLayer.removeChild(tile.boulder);
-}
-
-// TODO: cache this; tiles coming into view ask for the same terrain again.
-function getTileClassAt(i, j) {
-  return sim.getTerrainAt(i, j);
-}
-
-// Creates the tiles in view and removes those out of it. It takes the grid rectangle
-// around the viewport at zoom 1 (twice the tiles in view), which covers any higher zoom.
-function renderVisibleTiles() {
-  const { shiftPX, shiftPY } = camera;
-  const cornerPs = [
-    [shiftPX, shiftPY],
-    [shiftPX + viewportWidth, shiftPY],
-    [shiftPX, shiftPY + viewportHeight],
-    [shiftPX + viewportWidth, shiftPY + viewportHeight]
-  ];
-  const cornerGs = cornerPs.map(pair => rectiProject(...pair));
-
-  const iMin = Math.max(0, Math.floor(cornerGs[0][0]));
-  const iMax = Math.min(sim.gridWidthN - 1, Math.floor(cornerGs[3][0]));
-  const jMin = Math.max(0, Math.floor(cornerGs[1][1]));
-  const jMax = Math.min(sim.gridHeightN - 1, Math.floor(cornerGs[2][1]));
-  // and further down-screen, where raised ground can reach up into view
-  const raisedRows = Math.ceil(sim.maxLevel * levelHeightPY / qtrTile);
-  const iMaxRaised = Math.min(sim.gridWidthN - 1, iMax + raisedRows);
-  const jMaxRaised = Math.min(sim.gridHeightN - 1, jMax + raisedRows);
-
-  for (const [key, tile] of renderedTiles) {
-    const [i, j] = key.split('_').map(Number);
-    if (i < iMin || i > iMaxRaised || j < jMin || j > jMaxRaised) {
-      removeTile(tile);
-      renderedTiles.delete(key);
-      shoreTiles.delete(tile);
-    }
-  }
-
-  for (let j = jMin; j <= jMaxRaised; j++) {
-    for (let i = iMin; i <= iMaxRaised; i++) {
-      const key = `${i}_${j}`;
-      if (renderedTiles.has(key)) continue;
-      const tile = makeTileElement(i, j);
-      addTile(tile);
-      renderedTiles.set(key, tile);
-    }
-  }
+// Where world pixel (px, py) is on the page (client coordinates).
+function worldToScreen(px, py) {
+  const r = canvas.getBoundingClientRect();
+  return [r.left + (px * screen.A + screen.Bx) / dpr, r.top + (py * screen.A + screen.By) / dpr];
 }
 
 // SHORES: water lapping at the land, drawn as an OUTGOING WAVE: a wave front running out
@@ -428,7 +428,6 @@ const shoreFrameTicks = 24;
 const shoreLoopSteps = 4;       // steps in a loop (the corner set's frames)
 const shoreSheetRowY = 9 * 32;  // y of row 9 in tiles.png
 const shoreLookTiles = 3;
-const shoreTiles = new Set();   // rendered shore tiles (they animate)
 
 const shoreSets = {
   linear: { columns: [0, 1] },
@@ -572,36 +571,28 @@ function shoreVariantAt(i, j) {
 function redrawTerrain() {
   waterKnown = null;
   placements.clear();
-  clearAllRenderedTiles();
-  drawnCameraKey = null;
+  clearChunks();
   render();
 }
 
-const shoreFlipOrigin = "16px 24px"; // the water diamond's center in its 32 x 32 cell
+const shoreFlipOrigin = [16, 24]; // the water diamond's center in its 32 x 32 cell
 
 function shoreClockNow() {
   return Math.floor(sim.tickCount / shoreFrameTicks);
 }
 
-function drawShoreTile(tile, clock) {
-  const columns = shoreSets[tile.shore.set].columns;
+// A water tile's cell at shore clock `clock`: { image, sx, sy, flipX, flipY } (see SHORES).
+function waterCellAt(i, j, clock) {
+  const v = shoreVariantAt(i, j);
+  if (!v) return { image: tilesImage, sx: waterCell[0], sy: waterCell[1], flipX: false, flipY: false };
+  const columns = shoreSets[v.set].columns;
   // the set's frame for this step of the loop
   const k = Math.floor((clock % shoreLoopSteps) * columns.length / shoreLoopSteps);
-  if (k === tile.shoreFrame) return;
-  tile.shoreFrame = k;
   // shore-rotated.png holds just the corner frames, in a row; shore-inner.png a row per
   // drawn notch
-  tile.style.backgroundPosition = tile.shore.rotated ? `-${k * tileSize}px 0px`
-    : tile.shore.set === "inner" ? `-${columns[k] * tileSize}px -${tile.shore.row * tileSize}px`
-    : `-${columns[k] * tileSize}px -${shoreSheetRowY}px`;
-}
-
-let drawnShoreClock = -1;
-function drawShores() {
-  const clock = shoreClockNow();
-  if (clock === drawnShoreClock) return; // new tiles start at the current frame
-  drawnShoreClock = clock;
-  for (const tile of shoreTiles) drawShoreTile(tile, clock);
+  if (v.rotated) return { image: shoreRotatedImage, sx: k * tileSize, sy: 0, flipX: v.flipX, flipY: v.flipY, shore: v, frame: k };
+  if (v.set === "inner") return { image: shoreInnerImage, sx: columns[k] * tileSize, sy: v.row * tileSize, flipX: v.flipX, flipY: v.flipY, shore: v, frame: k };
+  return { image: tilesImage, sx: columns[k] * tileSize, sy: shoreSheetRowY, flipX: v.flipX, flipY: v.flipY, shore: v, frame: k };
 }
 
 // GROUND: each land tile is a column (images/ground-slopes.png, made by
@@ -617,21 +608,6 @@ function groundRowAt(i, j, terrain) {
   return groundRowByTerrain[terrain];
 }
 
-// Redraws the tiles in view whose grass height has changed.
-let grassSerial = 0;
-function drawGrass() {
-  const { serial, tiles } = sim.grassChangesSince(grassSerial);
-  grassSerial = serial;
-  const redraw = tiles || [...renderedTiles.keys()].map(k => k.split("_").map(Number));
-  for (const [i, j] of redraw) {
-    const key = `${i}_${j}`, old = renderedTiles.get(key);
-    if (!old || (!tiles && sim.grassHeightAt(i, j) < 0)) continue;
-    const tile = makeTileElement(i, j);
-    removeTile(old);
-    addTile(tile);
-    renderedTiles.set(key, tile);
-  }
-}
 const groundCellW = 32, groundCellH = 40;
 const groundBaseY = 16;    // y of the base plane's N corner within a shape cell
 const riserCol = 15;       // sheet column of the one-level riser strip
@@ -667,40 +643,17 @@ function frontGroundLevel(i, j) {
   return Math.min(...sim.tileCorners(i, j));
 }
 
-function groundPiece(col, row, top) {
-  const piece = document.createElement("div");
-  piece.className = "ground";
-  piece.style.top = `${top}px`;
-  piece.style.backgroundPosition = `-${col * groundCellW}px -${row * groundCellH}px`;
-  return piece;
-}
-
-function makeTileElement(i, j) {
-  const terrain = getTileClassAt(i, j);
+// What tile (i, j) is drawn as: { i, j, kind, left, top (its cell's, or its column's origin:
+// world px), z, ... }. Water: kind "water", its cell (waterCellAt) at the shore clock. Land:
+// kind "ground", its column's pieces (ground-slopes.png cells: { col, row, top below the
+// origin }) and its boulder if any ({ col, row (tiles.png cells), left, top, z }).
+function describeTile(i, j, clock = shoreClockNow()) {
+  const terrain = sim.getTerrainAt(i, j);
   const [px, py] = isoProject(i, j);
-  const tile = document.createElement("div");
-  tile.style.zIndex = tileZIndex(i, j, terrain);
-  tile.style.left = `${px - halfTile}px`;
-
   if (terrain === "water") {
-    tile.className = `tile ${terrain}`;
-    tile.style.top = `${py - tileRiserPY}px`;
-    const v = shoreVariantAt(i, j);
-    if (v) {
-      tile.shore = v;
-      tile.shoreFrame = -1;
-      if (v.rotated) tile.style.backgroundImage = "url('./images/shore-rotated.png')";
-      if (v.set === "inner") tile.style.backgroundImage = "url('./images/shore-inner.png')";
-      if (v.flipX || v.flipY) {
-        tile.style.transformOrigin = shoreFlipOrigin;
-        tile.style.transform = `scale(${v.flipX ? -1 : 1}, ${v.flipY ? -1 : 1})`;
-      }
-      shoreTiles.add(tile);
-      drawShoreTile(tile, shoreClockNow());
-    }
-    return tile;
+    return { i, j, kind: "water", terrain, left: px - halfTile, top: py - tileRiserPY, z: tileZIndex(i, j, terrain),
+      ...waterCellAt(i, j, clock) };
   }
-
   // the column's origin is its base plane's N corner, less half a tile in x
   const corners = sim.tileCorners(i, j);
   const base = Math.min(...corners);
@@ -708,159 +661,289 @@ function makeTileElement(i, j) {
     | (corners[2] - base) << 2 | (corners[3] - base) << 3;
   const row = groundRowAt(i, j, terrain);
   if (row === undefined) return alert(`animat: no ground sprites for terrain "${terrain}"`);
-  tile.className = "ground-column";
-  tile.style.top = `${py - base * levelHeightPY}px`;
-
-  tile.appendChild(groundPiece(shape, row, -groundBaseY));
+  const t = { i, j, kind: "ground", terrain, left: px - halfTile, top: py - base * levelHeightPY,
+    z: tileZIndex(i, j, terrain), pieces: [{ col: shape, row, top: -groundBaseY }], boulder: null };
   const floor = Math.min(frontGroundLevel(i, j + 1), frontGroundLevel(i + 1, j));
-  for (let k = 1; k <= base - 1 - floor; k++) {
-    tile.appendChild(groundPiece(riserCol, row, k * levelHeightPY));
-  }
+  for (let k = 1; k <= base - 1 - floor; k++) t.pieces.push({ col: riserCol, row, top: k * levelHeightPY });
   if (sim.obstacleAt(i, j) === "boulder") {
-    // its own element, beside the column, drawn among the critters (see DRAWING ORDER)
-    const boulder = document.createElement("div");
-    boulder.className = "tile boulder";
-    const [col, row] = boulderSpriteAt(i, j, terrain);
-    boulder.style.backgroundPosition = `-${col * tileSize}px -${row * tileSize}px`;
-    // the tile's center on its surface, relative to the column's origin
+    // drawn among the critters (see DRAWING ORDER), its foot on the tile's center
+    const [col, brow] = boulderSpriteAt(i, j, terrain);
     const centerAboveBase = (corners[0] + corners[1] + corners[2] + corners[3]) / 4 - base;
     const centerY = isoProject(0.5, 0.5)[1] - centerAboveBase * levelHeightPY;
-    boulder.style.left = tile.style.left;
-    boulder.style.top = `${py - base * levelHeightPY + centerY - boulderFootCenterY}px`;
-    boulder.style.zIndex = boulderZIndex(i, j);
-    tile.boulder = boulder;
+    t.boulder = { col, row: brow, left: t.left, top: t.top + centerY - boulderFootCenterY, z: boulderZIndex(i, j) };
   }
-  return tile;
+  return t;
 }
 
-// CRITTER SPRITES: one element per critter and corpse, by uid, for as long as it exists.
-// TODO: keep elements only for critters in view.
-const sprites = new Map(); // uid -> { node, css, critter }
+function paintWater(target, t) {
+  drawCell(target, image(t.image), t.sx, t.sy, tileSize, tileSize, t.left, t.top, t.flipX, t.flipY, ...shoreFlipOrigin);
+}
 
-function drawCritter(a) {
-  let s = sprites.get(a.uid);
-  if (!s) {
-    s = { node: document.createElement("div"), css: {}, critter: a };
-    spriteLayer.appendChild(s.node);
-    sprites.set(a.uid, s);
+function paintColumn(target, t) {
+  const img = image(groundImage);
+  for (const p of t.pieces)
+    drawCell(target, img, p.col * groundCellW, p.row * groundCellH, groundCellW, groundCellH, t.left, t.top + p.top);
+}
+
+function paintBoulder(target, b) {
+  drawCell(target, image(tilesImage), b.col * tileSize, b.row * tileSize, tileSize, tileSize, b.left, b.top);
+}
+
+// CHUNKS: the terrain is painted once into canvases of chunkTiles x chunkTiles tiles, two
+// a chunk (its water, its land), and those are painted each frame. A chunk is painted
+// afresh when its grass changes height (land), when the shores step (water with shores),
+// or when an image loads; chunks out of view for chunkKeepFrames frames are dropped.
+// PAINTED BACK TO FRONT: within a chunk, tiles by depth (i + j); chunks by i + j of their
+// own (a tile in front of another that it can cover is never in a chunk painted before
+// it). All water before all land.
+const chunkTiles = 16;
+const chunkKeepFrames = 120;
+const chunks = new Map(); // ci * 10000 + cj -> chunk
+let frameCount = 0;
+
+function clearChunks() {
+  for (const c of chunks.values()) for (const k of ["water", "land"]) if (c[k]) c[k].width = 0;
+  chunks.clear();
+}
+
+// Chunk (ci, cj): its tiles' world bounds (every pixel they can paint), and its layers.
+function chunkAt(ci, cj) {
+  const key = ci * 10000 + cj;
+  let c = chunks.get(key);
+  if (c) return c;
+  const i0 = ci * chunkTiles, j0 = cj * chunkTiles;
+  const i1 = Math.min(sim.gridWidthN, i0 + chunkTiles) - 1, j1 = Math.min(sim.gridHeightN, j0 + chunkTiles) - 1;
+  const x0 = (i0 - j1) * halfTile - halfTile, x1 = (i1 - j0) * halfTile + halfTile;
+  const y0 = (i0 + j0) * qtrTile - sim.maxLevel * levelHeightPY - groundBaseY - tileRiserPY;
+  const y1 = (i1 + j1) * qtrTile + groundCellH + tileRiserPY;
+  c = { ci, cj, i0, j0, i1, j1, x0, y0, w: x1 - x0, h: y1 - y0, water: null, land: null,
+    hasWater: false, hasLand: false, shores: false, waterClock: -1, landDirty: true, boulders: [], used: 0, scanned: false };
+  chunks.set(key, c);
+  return c;
+}
+
+function forEachChunkTile(c, f) {
+  for (let s = c.i0 + c.j0; s <= c.i1 + c.j1; s++)
+    for (let i = Math.max(c.i0, s - c.j1); i <= Math.min(c.i1, s - c.j0); i++) f(i, s - i);
+}
+
+function newLayer(c) {
+  const cv = document.createElement("canvas");
+  cv.width = c.w; cv.height = c.h;
+  return cv;
+}
+
+// Paints chunk c's layers that are out of date.
+function paintChunk(c, clock) {
+  if (!c.scanned) {
+    c.scanned = true;
+    forEachChunkTile(c, (i, j) => {
+      if (sim.getTerrainAt(i, j) === "water") { c.hasWater = true; if (shoreVariantAt(i, j)) c.shores = true; }
+      else c.hasLand = true;
+    });
   }
-  if (a.kind === "corpse" && a.carcass) return drawCarcass(a, s);
+  const at = cv => ({ ctx: cv.getContext("2d"), A: 1, Bx: -c.x0, By: -c.y0 });
+  if (c.hasWater && (c.waterClock < 0 || (c.shores && c.waterClock !== clock))) {
+    if (!c.water) c.water = newLayer(c);
+    const t = at(c.water);
+    t.ctx.setTransform(1, 0, 0, 1, 0, 0); t.ctx.clearRect(0, 0, c.w, c.h);
+    forEachChunkTile(c, (i, j) => { if (sim.getTerrainAt(i, j) === "water") paintWater(t, describeTile(i, j, clock)); });
+    c.waterClock = clock;
+  }
+  if (c.hasLand && c.landDirty) {
+    if (!c.land) c.land = newLayer(c);
+    const t = at(c.land);
+    t.ctx.setTransform(1, 0, 0, 1, 0, 0); t.ctx.clearRect(0, 0, c.w, c.h);
+    c.boulders = [];
+    forEachChunkTile(c, (i, j) => {
+      if (sim.getTerrainAt(i, j) === "water") return;
+      const d = describeTile(i, j, clock);
+      paintColumn(t, d);
+      if (d.boulder) c.boulders.push(d.boulder);
+    });
+    c.landDirty = false;
+  }
+}
+
+// The chunks in view, back to front.
+function chunksInView() {
+  // the grid rectangle around the view, and further down-screen, where raised ground can
+  // reach up into view
+  const g = [[view.x0, view.y0], [view.x1, view.y0], [view.x0, view.y1], [view.x1, view.y1]].map(p => rectiProject(...p));
+  const raised = Math.ceil(sim.maxLevel * levelHeightPY / qtrTile) + 2;
+  const n = chunkTiles;
+  const ciMin = Math.max(0, Math.floor((g[0][0] - 2) / n)), ciMax = Math.min(Math.ceil(sim.gridWidthN / n) - 1, Math.floor((g[3][0] + raised) / n));
+  const cjMin = Math.max(0, Math.floor((g[1][1] - 2) / n)), cjMax = Math.min(Math.ceil(sim.gridHeightN / n) - 1, Math.floor((g[2][1] + raised) / n));
+  const out = [];
+  for (let s = ciMin + cjMin; s <= ciMax + cjMax; s++)
+    for (let ci = Math.max(ciMin, s - cjMax); ci <= Math.min(ciMax, s - cjMin); ci++) {
+      const c = chunkAt(ci, s - ci);
+      if (inView(c.x0, c.y0, c.w, c.h)) out.push(c);
+    }
+  return out;
+}
+
+// Marks the chunks whose grass changed height for painting afresh.
+let grassSerial = 0;
+function noteGrass() {
+  const { serial, tiles } = sim.grassChangesSince(grassSerial);
+  grassSerial = serial;
+  if (!tiles) { for (const c of chunks.values()) c.landDirty = true; return; }
+  for (const [i, j] of tiles) {
+    const c = chunks.get(Math.floor(i / chunkTiles) * 10000 + Math.floor(j / chunkTiles));
+    if (c) c.landDirty = true;
+  }
+}
+
+function paintChunkLayer(c, layer) {
+  if (!c[layer]) return;
+  ctx.setTransform(screen.A, 0, 0, screen.A, Math.round(c.x0 * screen.A + screen.Bx), Math.round(c.y0 * screen.A + screen.By));
+  ctx.drawImage(c[layer], 0, 0);
+}
+
+// The tiles in view, as drawn (describeTile), for tests.
+function tilesInView() {
+  const out = [];
+  for (const c of chunksInView()) forEachChunkTile(c, (i, j) => {
+    const t = describeTile(i, j);
+    const h = t.kind === "water" ? tileSize : t.pieces.at(-1).top + groundCellH + groundBaseY;
+    if (inView(t.left, t.top - (t.kind === "water" ? 0 : groundBaseY), tileSize, h)) out.push(t);
+  });
+  return out;
+}
+
+// CRITTER SPRITES: what each critter and corpse is drawn as this frame (describeCritter):
+// { uid, critter, sheet (frameDataBySpeciesAndPose's, or "deer-carcass"), stage, hind,
+// cls (all three in one: "critter <sheet>", and " stage<k>" or " hind"; a carcass just
+// "critter deer-carcass"), image, col, row, w, h, left, top (world px of its frame), mirror
+// (about the frame's middle), z, swim (drawn among the land tiles), layers (a carcass's
+// columns, top first) }.
+// Kept per uid while the critter or corpse exists (spriteOf), with what a deer grazing
+// started at (s.grazeSince).
+const sprites = new Map(); // uid -> { rec, grazeSince }
+let showOnlySet = null;    // for tests: draw only these critters (null: all)
+
+function describeCritter(a, s) {
+  if (a.kind === "corpse" && a.carcass) return describeCarcass(a);
   // a deer standing and eating is drawn grazing, timed from when it started
   const grazing = a.species === "deer" && a.pose === "idle" && a.eating;
   if (grazing && s.grazeSince === undefined) s.grazeSince = sim.tickCount - 1;
   if (!grazing) s.grazeSince = undefined;
   const fd = frameDataBySpeciesAndPose[a.species][grazing ? "graze" : a.pose];
   if (!fd) return alert(`animat: no sprite frames for ${a.species} pose "${a.pose}"`);
-
   const stage = sim.youngStage(a);
   const hind = a.species === "deer" && !stage && !hasAntlers(a);
-  const className = "critter " + fd.sheet + (stage ? " stage" + stage : hind ? " hind" : "");
-  if (s.node.className !== className) s.node.className = className;
-
-  const frameCol = frameColumn(a, fd, grazing ? s.grazeSince : undefined);
+  const col = frameColumn(a, fd, grazing ? s.grazeSince : undefined);
   const row = fd.rowByDir ? fd.rowByDir[a.currentDirection] : spriteRow(a);
-  setStyle(s.node, s.css, "backgroundPosition",
-    `-${frameCol * fd.frameW}px -${row * fd.frameH}px`);
-  // the element is centered on the critter, so mirroring keeps it in place
   const mirror = fd.mirrorByDir ? fd.mirrorByDir[a.currentDirection]
     : (mirrorByDir[a.species]?.[a.currentDirection] ?? false);
-  setStyle(s.node, s.css, "transform", mirror ? "scaleX(-1)" : "");
-
   // the shadow's center on the critter's ground point
   const [isoX, isoY] = groundProject(a.gx, a.gy);
   const topOffset = fd.topToShadow ?? (fd.frameH / 2);
-  setStyle(s.node, s.css, "left", `${isoX - fd.frameW / 2}px`);
-  setStyle(s.node, s.css, "top", `${isoY - topOffset}px`);
-  // (a fractional z-index is silently ignored)
-  setStyle(s.node, s.css, "zIndex", String(spriteZIndex(a)));
+  return { uid: a.uid, critter: a, sheet: fd.sheet, stage, hind, image: sheetImage(fd.sheet, stage, hind),
+    cls: "critter " + fd.sheet + (stage ? " stage" + stage : hind ? " hind" : ""),
+    col, row, w: fd.frameW, h: fd.frameH, left: isoX - fd.frameW / 2, top: isoY - topOffset, mirror,
+    z: spriteZIndex(a), swim: a.pose === "swim", layers: null };
 }
 
-// CARCASSES: 9 background layers of one element: the shadow, then each of the 8 pieces as
-// meat while any is left, else as bones. images/deer-carcass.png (made by
-// spritecraft/make_deer_carcass.py) has the shadow in column 0, then each piece's meat
-// and bones, bottom layer to top in carcassSheetPieces order.
+// CARCASSES: 9 layers: the shadow, then each of the 8 pieces as meat while any is left,
+// else as bones. images/deer-carcass.png (made by spritecraft/make_deer_carcass.py) has
+// the shadow in column 0, then each piece's meat and bones, bottom layer to top in
+// carcassSheetPieces order.
 const carcassSheetPieces = ["groundHind", "groundFore", "hips", "midback", "chest", "head", "skyHind", "skyFore"];
 const carcassFrame = 48, carcassTopToShadow = 40;
 
-function drawCarcass(a, s) {
-  if (s.node.className !== "critter deer-carcass") s.node.className = "critter deer-carcass";
-  const row = deerDeathFacing.rowByDir[a.currentDirection];
+function describeCarcass(a) {
   const layers = []; // top first
   for (let k = carcassSheetPieces.length - 1; k >= 0; k--) {
     layers.push(1 + 2 * k + (sim.carcassPieceKg(a, carcassSheetPieces[k]) > 0 ? 0 : 1));
   }
   layers.push(0); // the shadow, at the bottom
-  const stage = sim.youngStage(a);
-  const url = stage ? `url('./images/young/hind-carcass-stage${stage}.png')`
-    : `url('./images/${hasAntlers(a) ? "deer" : "hind"}-carcass.png')`;
-  setStyle(s.node, s.css, "backgroundImage", layers.map(() => url).join(", "));
-  setStyle(s.node, s.css, "backgroundPosition",
-    layers.map(col => `-${col * carcassFrame}px -${row * carcassFrame}px`).join(", "));
-  setStyle(s.node, s.css, "transform", deerDeathFacing.mirrorByDir[a.currentDirection] ? "scaleX(-1)" : "");
+  const stage = sim.youngStage(a), hind = !hasAntlers(a);
   const [isoX, isoY] = groundProject(a.gx, a.gy);
-  setStyle(s.node, s.css, "left", `${isoX - carcassFrame / 2}px`);
-  setStyle(s.node, s.css, "top", `${isoY - carcassTopToShadow}px`);
-  setStyle(s.node, s.css, "zIndex", String(spriteZIndex(a)));
+  return { uid: a.uid, critter: a, sheet: "deer-carcass", stage, hind, image: sheetImage("deer-carcass", stage, hind),
+    cls: "critter deer-carcass",
+    col: layers[0], row: deerDeathFacing.rowByDir[a.currentDirection], w: carcassFrame, h: carcassFrame,
+    left: isoX - carcassFrame / 2, top: isoY - carcassTopToShadow,
+    mirror: deerDeathFacing.mirrorByDir[a.currentDirection], z: spriteZIndex(a), swim: false, layers };
 }
 
-function drawCritters() {
+function paintSprite(target, r) {
+  const img = image(r.image);
+  for (const col of r.layers ? [...r.layers].reverse() : [r.col])
+    drawCell(target, img, col * r.w, r.row * r.h, r.w, r.h, r.left, r.top, r.mirror);
+}
+
+// This frame's sprites, for every critter and corpse.
+function describeCritters() {
   const present = new Set();
   for (const list of [sim.allCritters, sim.allCorpses]) {
     for (const a of list) {
       present.add(a.uid);
-      drawCritter(a);
+      let s = sprites.get(a.uid);
+      if (!s) { s = { rec: null, grazeSince: undefined }; sprites.set(a.uid, s); }
+      s.rec = describeCritter(a, s);
     }
   }
-  for (const [uid, s] of sprites) {
-    if (!present.has(uid)) {
-      s.node.remove();
-      sprites.delete(uid);
-    }
-  }
-  drawHearts();
+  for (const uid of sprites.keys()) if (!present.has(uid)) sprites.delete(uid);
 }
 
 // HEARTS: a pink heart (images/heart.png) between a mating pair, above both, rising and
-// fading in and out over the act. One element per pair, keyed by the lower uid.
+// fading in and out over the act; keyed by the pair's lower uid: { left, top, opacity, z }.
 const heartW = 11, heartH = 10;
 const heartFromPY = 18, heartRisePY = 22; // above the pair's ground points
-const hearts = new Map(); // lower uid -> { node, css }
+const hearts = new Map(); // lower uid -> heart
 
-function drawHearts() {
-  const now = new Set();
+function describeHearts() {
+  hearts.clear();
   for (const a of sim.allCritters) {
     if (a.pose !== "mate" || a.matingWith === null || a.uid > a.matingWith) continue;
-    const b = sprites.get(a.matingWith)?.critter;
+    const b = sprites.get(a.matingWith)?.rec?.critter;
     if (!b) continue;
-    now.add(a.uid);
-    let h = hearts.get(a.uid);
-    if (!h) {
-      h = { node: document.createElement("div"), css: {} };
-      h.node.className = "heart";
-      spriteLayer.appendChild(h.node);
-      hearts.set(a.uid, h);
-    }
     const p = Math.min(1, Math.max(0, (sim.tickCount - a.poseTick) * sim.tempo / sim.mateActSBySpecies[a.species]));
     const [ax, ay] = groundProject(a.gx, a.gy), [bx, by] = groundProject(b.gx, b.gy);
-    setStyle(h.node, h.css, "left", `${Math.round((ax + bx) / 2 - heartW / 2)}px`);
-    setStyle(h.node, h.css, "top", `${Math.round((ay + by) / 2 - heartFromPY - heartRisePY * p - heartH)}px`);
-    setStyle(h.node, h.css, "opacity", String(Math.min(1, p / 0.15, (1 - p) / 0.25).toFixed(2)));
-    setStyle(h.node, h.css, "zIndex", String(Math.max(spriteZIndex(a), spriteZIndex(b)) + 1));
+    hearts.set(a.uid, { left: Math.round((ax + bx) / 2 - heartW / 2),
+      top: Math.round((ay + by) / 2 - heartFromPY - heartRisePY * p - heartH),
+      opacity: +Math.min(1, p / 0.15, (1 - p) / 0.25).toFixed(2),
+      z: Math.max(spriteZIndex(a), spriteZIndex(b)) + 1 });
   }
-  for (const [uid, h] of hearts) {
-    if (!now.has(uid)) { h.node.remove(); hearts.delete(uid); }
-  }
+}
+
+function paintHeart(target, h) {
+  target.ctx.globalAlpha = Math.max(0, h.opacity);
+  drawCell(target, image(heartImage), 0, 0, heartW, heartH, h.left, h.top);
+  target.ctx.globalAlpha = 1;
 }
 
 // DEBUG: a tile-sized outline centered on the player's wolf (on the water surface when
 // it swims).
-const debugWolfCss = {};
-function drawDebugWolf() {
+let showDebug = true;
+function paintDebugWolf() {
   const w = sim.pcWolf;
   const [isoX, isoY] = groundProject(w.gx, w.gy);
   const surfaceDrop = w.pose === "swim" ? waterSurfaceDropPY : 0;
-  setStyle(debugWolfEl, debugWolfCss, "left", (isoX - halfTile) + "px");
-  setStyle(debugWolfEl, debugWolfCss, "top", (isoY - qtrTile + surfaceDrop) + "px");
+  drawCell(screen, image(debugTileImage), 0, 0, tileSize, halfTile, isoX - halfTile, isoY - qtrTile + surfaceDrop);
+}
+
+// Swimmer r, then the land in front of it that covers it (see DRAWING ORDER): the tiles
+// nearer the camera, in the screen columns it spans, whose columns reach up over it.
+function paintSwimmer(r) {
+  paintSprite(screen, r);
+  const a = r.critter, d0 = Math.floor(a.gx + a.gy);
+  const rows = Math.ceil((sim.maxLevel * levelHeightPY + groundBaseY + r.h) / qtrTile) + 2;
+  // m = i - j: the screen columns the sprite spans (a tile spans (m -+ 1) * halfTile)
+  const mMin = Math.floor(r.left / halfTile) - 1, mMax = Math.ceil((r.left + r.w) / halfTile) + 1;
+  for (let d = d0 - 1; d <= d0 + rows; d++) {
+    for (let m = mMin; m <= mMax; m++) {
+      if ((d + m) & 1) continue;
+      const i = (d + m) / 2, j = (d - m) / 2;
+      if (i < 0 || j < 0 || i >= sim.gridWidthN || j >= sim.gridHeightN) continue;
+      if (tileZIndex(i, j, "land") <= r.z || sim.getTerrainAt(i, j) === "water") continue;
+      const t = describeTile(i, j);
+      const top = t.top - groundBaseY, h = t.pieces.at(-1).top + groundCellH + groundBaseY;
+      if (t.left < r.left + r.w && t.left + tileSize > r.left && top < r.top + r.h && top + h > r.top) paintColumn(screen, t);
+    }
+  }
 }
 
 // METERS: the player's wolf's wind, stamina and food: its body's (a.food) on the left,
@@ -884,14 +967,48 @@ function drawExertion() {
     setStyle(inspectFillEls[k], inspectCss[k], "width", `${100 * v}%`));
 }
 
-// Draws the whole view as the simulation is now: after every frame of ticks, and after
-// any change to the view while paused.
+// Draws the whole view as the simulation is now (see DRAWING ORDER): after every frame of
+// ticks, and after any change to the view while paused.
 function render() {
+  frameCount++;
   drawCamera();
-  drawGrass();
-  drawShores();
-  drawCritters();
-  drawDebugWolf();
+  noteGrass();
+  describeCritters();
+  describeHearts();
+  const clock = shoreClockNow();
+
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.imageSmoothingEnabled = false;
+  ctx.fillStyle = backgroundColor;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const inView2 = chunksInView();
+  for (const c of inView2) { c.used = frameCount; paintChunk(c, clock); }
+  for (const c of inView2) paintChunkLayer(c, "water");
+  for (const c of inView2) paintChunkLayer(c, "land");
+
+  const shown = r => (!showOnlySet || showOnlySet.has(r.critter)) && inView(r.left, r.top, r.w, r.h);
+  const recs = [...sprites.values()].map(s => s.rec).filter(shown);
+  // swimmers among the land tiles
+  recs.filter(r => r.swim).sort((p, q) => p.z - q.z).forEach(paintSwimmer);
+  // land critters, boulders and hearts, by depth (on a tie: boulders, then sprites, then hearts)
+  const items = [];
+  for (const c of inView2) for (const b of c.boulders) if (inView(b.left, b.top, tileSize, tileSize)) items.push([b.z, 0, items.length, () => paintBoulder(screen, b)]);
+  for (const r of recs) if (!r.swim) items.push([r.z, 1, items.length, () => paintSprite(screen, r)]);
+  if (!showOnlySet) for (const h of hearts.values()) items.push([h.z, 2, items.length, () => paintHeart(screen, h)]);
+  items.sort((p, q) => p[0] - q[0] || p[1] - q[1] || p[2] - q[2]);
+  for (const it of items) it[3]();
+  if (showDebug) paintDebugWolf();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+
+  // drop the chunks long out of view
+  if (frameCount % 60 === 0) {
+    for (const [key, c] of chunks) {
+      if (frameCount - c.used < chunkKeepFrames) continue;
+      for (const k of ["water", "land"]) if (c[k]) c[k].width = 0;
+      chunks.delete(key);
+    }
+  }
   drawExertion();
 }
 
@@ -905,11 +1022,7 @@ function updateZoomButtons() {
 function setZoom(z) {
   const newZoom = boundVal(z, zoomMin, zoomMax);
   if (newZoom === camera.zoom) return;
-  // zooming out shows more of the world: start the tiles afresh
-  // TODO: tiles can still be briefly missing when zooming out and then panning.
-  if (newZoom < camera.zoom) clearAllRenderedTiles();
   camera.zoom = newZoom;
-  drawnCameraKey = null;
   updateZoomButtons();
   render();
 }
@@ -946,15 +1059,23 @@ function followWolf() {
   pinCamera(sim.pcWolf);
 }
 
+// Sprite r's frame on the page (client coordinates): { left, top, right, bottom, width, height }.
+function spriteRect(r) {
+  const [left, top] = worldToScreen(r.left, r.top);
+  const width = r.w * camera.zoom, height = r.h * camera.zoom;
+  return { left, top, right: left + width, bottom: top + height, width, height };
+}
+
 // The critter or corpse drawn at a screen position (clientX/Y), or null: of the sprites
 // there, the one whose middle is nearest (a sprite's frame is larger than its drawing).
 function critterAtScreen(clientX, clientY) {
   let best = null, bestL2 = Infinity;
   for (const s of sprites.values()) {
-    const r = s.node.getBoundingClientRect();
+    if (!s.rec) continue;
+    const r = spriteRect(s.rec);
     if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
     const l2 = (clientX - (r.left + r.right) / 2) ** 2 + (clientY - (r.top + r.bottom) / 2) ** 2;
-    if (l2 < bestL2) { best = s.critter; bestL2 = l2; }
+    if (l2 < bestL2) { best = s.rec.critter; bestL2 = l2; }
   }
   return best;
 }
@@ -994,7 +1115,7 @@ function screenToGrid(clientX, clientY) {
   const rect = fieldWrapper.getBoundingClientRect();
   const sx = clientX - rect.left, sy = clientY - rect.top;
   if (sx < 0 || sy < 0 || sx > rect.width || sy > rect.height) return null;
-  // the field is scaled by zoom about the viewport's center
+  // the world is scaled by zoom about the viewport's center
   const px = camera.shiftPX + viewportWidth / 2 + (sx - viewportWidth / 2) / camera.zoom;
   const py = camera.shiftPY + viewportHeight / 2 + (sy - viewportHeight / 2) / camera.zoom;
   return rectiProject(px, py);
@@ -1022,6 +1143,9 @@ function attach(theSim) {
     if (Math.abs(ticks * sim.tempo - deathS) > 1e-9)
       return alert(`animat: ${species} death animation doesn't last sim's ${deathS} s`);
   }
+  // load every image now, so none is missing when first drawn
+  [tilesImage, groundImage, shoreRotatedImage, shoreInnerImage, heartImage, debugTileImage].forEach(image);
+  for (const sheet of Object.keys(sheetImages)) for (const stage of [0, 1, 2, 3, 4]) for (const hind of [false, true]) image(sheetImage(sheet, stage, hind));
 
   measureViewport();
   window.addEventListener("resize", () => { measureViewport(); render(); });
@@ -1039,15 +1163,19 @@ return {
   zoomIn, zoomOut, setZoom, panCamera, centerCameraOn, pinCamera, unpinCamera, followWolf,
   redrawTerrain, showMovePad, showArrowMode, showCursorCoords,
   // reading the view
-  screenToGrid, screenDirToGridDir, screenVecToGridVec, isoProject, critterAtScreen,
+  screenToGrid, worldToScreen, screenDirToGridDir, screenVecToGridVec, isoProject, critterAtScreen,
   get camera() {
     return { ...camera, pinned, viewportWidth, viewportHeight, worldRadPX, worldBottomPY: worldDiamPY + tileRiserPY, zoomMin, zoomMax };
   },
-  // for tests and debugging
-  spriteEl: a => sprites.get(a.uid)?.node,
-  heartEl: a => hearts.get(Math.min(a.uid, a.matingWith ?? a.uid))?.node,
+  // for tests and debugging: what is drawn (spriteOf: see CRITTER SPRITES; heartOf: see
+  // HEARTS, by either of the pair; tileOf, tilesInView: describeTile), with sprites'
+  // frames on the page (spriteRect); drawing only some critters; the debug outline
+  spriteOf: a => sprites.get(a.uid)?.rec, spriteRect,
+  heartOf: a => hearts.get(Math.min(a.uid, a.matingWith ?? a.uid)),
+  tileOf: (i, j) => describeTile(i, j), tilesInView,
+  showOnly: list => { showOnlySet = list ? new Set(list) : null; render(); },
+  showDebug: on => { showDebug = on; render(); },
   youngStage: a => sim.youngStage(a), hasAntlers,
-  tileEl: (i, j) => renderedTiles.get(`${i}_${j}`),
   spriteRow, spriteZIndex, frameDataBySpeciesAndPose,
 };
 

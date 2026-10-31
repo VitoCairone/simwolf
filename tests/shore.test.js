@@ -33,50 +33,48 @@ async function main(browser, r) {
         if (T(i, j) === "water" && T(i + 4, j) !== "water") at = [i, j];
     animat.setZoom(2); animat.centerCameraOn(at[0], at[1]); animat.render();
 
-    const waters = [...document.querySelectorAll(".tile.water")];
-    // a water tile's grid position, from where it is drawn (left = (i - j) * 16 - 16,
-    // top = (i + j) * 8 - 8)
-    const gridOf = el => {
-      const a = (parseFloat(el.style.left) + 16) / 16, b = (parseFloat(el.style.top) + 8) / 8;
+    // the water tiles drawn, by where they are drawn (left = (i - j) * 16 - 16,
+    // top = (i + j) * 8 - 8); each as drawn now (animat.tileOf)
+    const gridOf = t => {
+      const a = (t.left + 16) / 16, b = (t.top + 8) / 8;
       return [Math.round((a + b) / 2), Math.round((b - a) / 2)];
     };
+    const waters = animat.tilesInView().filter(t => t.kind === "water").map(gridOf);
+    const now = ([i, j]) => animat.tileOf(i, j);
     const isLand = (i, j) => i >= 0 && j >= 0 && i < sim.gridWidthN && j < sim.gridHeightN && T(i, j) !== "water";
     // its land edges, by screen edge (TL = grid W, TR = N, BL = S, BR = E)
     const landEdges = ([i, j]) => ["TL", "TR", "BL", "BR"].filter((e, k) =>
       isLand(...[[i - 1, j], [i, j - 1], [i, j + 1], [i + 1, j]][k]));
     // the edges a shown sprite has its light on: as drawn (one-edge TR; two-edge TL+TR, or
     // TR+BR on the rotated sheet), then mirrored
-    const lightEdges = el => {
-      const rotated = (el.style.backgroundImage || "").includes("shore-rotated");
-      const col = frameOf(el)[0];
+    const lightEdges = t => {
+      const rotated = t.image.includes("shore-rotated");
+      const col = frameOf(t)[0];
       let edges = rotated ? ["TR", "BR"] : col <= 1 ? ["TR"] : ["TL", "TR"];
-      const m = /scale\((-?1), (-?1)\)/.exec(el.style.transform || "");
-      const fx = m && m[1] === "-1", fy = m && m[2] === "-1";
+      const fx = t.flipX, fy = t.flipY;
       return edges.map(e => (fy ? (e[0] === "T" ? "B" : "T") : e[0]) + (fx ? (e[1] === "L" ? "R" : "L") : e[1])).sort();
     };
-    const frameOf = el => {
-      const m = /(\d+)px -?(\d+)px/.exec(el.style.backgroundPosition || getComputedStyle(el).backgroundPosition);
-      const img = el.style.backgroundImage || "";
+    const frameOf = t => {
       // (the interior sheet's frames counted as "columns" 10-13, to tell them apart)
-      return m ? (img.includes("shore-rotated") ? [2 + +m[1] / 32, 9]
-        : img.includes("shore-inner") ? [10 + +m[1] / 32, 9] : [+m[1] / 32, +m[2] / 32]) : null;
+      return t.image.includes("shore-rotated") ? [2 + t.sx / 32, 9]
+        : t.image.includes("shore-inner") ? [10 + t.sx / 32, 9] : [t.sx / 32, t.sy / 32];
     };
 
     // each water tile's frame over two whole two-edge loops
     const seq = waters.map(() => []);
     for (let n = 0; n <= 8 * 24; n++) {
       sim.internals.tick(); animat.render();
-      waters.forEach((el, k) => seq[k].push(frameOf(el).join()));
+      waters.forEach((g, k) => seq[k].push(frameOf(now(g)).join()));
     }
     // paused: drawing again without ticking changes nothing
-    const before = waters.map(el => frameOf(el).join()); animat.render(); animat.render();
-    const still = waters.every((el, k) => frameOf(el).join() === before[k]);
+    const before = waters.map(g => frameOf(now(g)).join()); animat.render(); animat.render();
+    const still = waters.every((g, k) => frameOf(now(g)).join() === before[k]);
 
     let open = 0, one = 0, two = 0, other = 0, misplaced = 0, wrongSet = 0, misfaced = 0;
     let openPlain = true, ordered = true;
     const bySet = { one: null, two: null, inner: null }; let together = true; let inner = 0;
     seq.forEach((frames, k) => {
-      const el = waters[k], [i, j] = gridOf(el), land = landEdges([i, j]);
+      const [i, j] = waters[k], el = now(waters[k]), land = landEdges([i, j]);
       const cols = frames.map(f => +f.split(",")[0]);
       const set = cols.every(c => c <= 1) ? "one" : cols.every(c => c >= 2 && c <= 5) ? "two"
         : cols.every(c => c >= 10 && c <= 13) ? "inner" : "?";
@@ -136,12 +134,7 @@ async function main(browser, r) {
     sim.tileCorners = () => [0, 0, 0, 0];
     animat.setZoom(2); animat.centerCameraOn(52, 50);
     animat.redrawTerrain();
-    // each water tile's grid position, from where it is drawn
-    const at = new Map();
-    for (const el of document.querySelectorAll(".tile.water")) {
-      const a = (parseFloat(el.style.left) + 16) / 16, b = (parseFloat(el.style.top) + 8) / 8;
-      at.set(Math.round((a + b) / 2) + "," + Math.round((b - a) / 2), el);
-    }
+    // each water tile as drawn (animat.tileOf)
     const isWater = (i, j) => !land(i, j);
     const step = { TL: [-1, 0], TR: [0, -1], BL: [0, 1], BR: [1, 0] };
     const cornerStep = { T: [-1, -1], R: [1, -1], B: [1, 1], L: [-1, 1] };
@@ -150,10 +143,9 @@ async function main(browser, r) {
     // read back from its sprite (straight: light along TR as drawn; corner: light at T, or
     // at R on the rotated sheet), then its mirroring
     const shown = (i, j) => {
-      const el = at.get(i + "," + j);
-      if (!el || !el.shore) return null;
-      const m = /scale\((-?1), (-?1)\)/.exec(el.style.transform || "");
-      const fx = m && m[1] === "-1", fy = m && m[2] === "-1";
+      const el = animat.tileOf(i, j);
+      if (el.kind !== "water" || !el.shore) return null;
+      const fx = el.flipX, fy = el.flipY;
       const flipEdge = e => (fy ? (e[0] === "T" ? "B" : "T") : e[0]) + (fx ? (e[1] === "L" ? "R" : "L") : e[1]);
       if (el.shore.set === "linear") return { kind: "straight", edge: flipEdge("TR") };
       if (el.shore.set === "inner") {

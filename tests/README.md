@@ -39,14 +39,16 @@ the game reached a state where it should halt.
 
 Set `CHROMIUM_PATH` to use a specific Chromium build instead of Playwright's.
 
-The clock is held at noon in every suite (`openGame` in `helpers.js`), so the time of
-day doesn't upset the others; `daynight.test.js` opts out (`dayNight: true`).
+Every suite starts from the same moment of play (`openGame` in `helpers.js`: the game
+loaded paused, then 12 ticks, then running), however fast the page draws. The clock is
+held at noon in every suite, so the time of day doesn't upset the others;
+`daynight.test.js` opts out (`dayNight: true`).
 
 ## Suites
 
 | File | Checks |
 | --- | --- |
-| `bugfixes.test.js` *(slow)* | First-round fixes: spawning at tile centers, no overlapping spawns, idle deer can be killed, dying deer stay dead, death animation timing and corpse frame, wind/stamina refill at rest and capped at full, sprite z-index. Ends with a 10 s soak run. |
+| `bugfixes.test.js` *(slow)* | First-round fixes: spawning at tile centers, no overlapping spawns, idle deer can be killed, dying deer stay dead, death animation timing and corpse frame, wind/stamina refill at rest and capped at full, sprites' depth order. Ends with a 10 s soak run. |
 | `camera.test.js` | Camera: starts on the player's wolf a step in from the widest zoom; clicking a critter pins the camera to it, and it stays on its corpse; arrows to the wolf pin it back on the wolf, arrows to the camera unpin it in place; arrow panning is slower zoomed in; while it follows a critter other than the player's wolf, that critter's meters show below the wolf's, under an eye; at every zoom panning goes exactly as far as the map's edges, by the zoom factor. |
 | `accel.test.js` | Speed changes: a wolf reaches a full gallop from standing in 2.5 s, a deer in 1.5 s, and stops from one in as long, keeping its gait until stopped, then idling; a stun stops it dead. |
 | `arrowkeys.test.js` | Wolf mode: each arrow key and two-key diagonal moves the wolf in that screen direction; opposite keys cancel; releasing stops; camera mode still pans. |
@@ -80,8 +82,17 @@ Each suite exports `{ name, main(browser, r) }`. Use `openGame(browser)` from
 `helpers.js` to load the page, `page.evaluate(...)` to read or drive the game,
 and `r.check(condition, message)` to record a result. Call `sim.pause()` first and
 then `sim.internals.tick()` to step the simulation deterministically. Ticking by
-hand doesn't redraw: call `animat.render()` before reading anything on the page
-(sprite classes, positions, background frames).
+hand doesn't redraw: call `animat.render()` before reading what is drawn. The world is
+painted on one canvas; what it shows is read from `animat`: `spriteOf(critter)` (its
+sheet, frame, position, mirroring and depth), `heartOf`, `tileOf(i, j)` and
+`tilesInView()` (see CRITTER SPRITES and describeTile in `animat.js`).
+
+## Drawing performance
+
+`node drawperf.js [seconds] [label]` (not a suite) times the simulation's tick and the
+view's render, and the live game's frames (from a Chrome trace), in a normal game and
+while panning at zoom 1. Headless Chromium rasterizes in software: compare runs on one
+machine, not absolute numbers.
 
 Only stags old enough to breed have antlers; a test of the stag's sprites should first
 call `makeStags(page)` from `helpers.js`, which makes every deer one.

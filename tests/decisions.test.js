@@ -30,9 +30,10 @@ const { openGame, runStandalone } = require("./helpers");
 // in the page: put a wolf and a deer on open dry ground, everyone else away
 function setup({ deerAt, deer2At = null, wolfThinks = true, deerThinks = true }) {
   sim.pause();
-  // (live ones: one may have been killed in the moment of play before the test paused)
-  const w = sim.internals.wolves.find(c => c !== sim.pcWolf && sim.isLiveCritter(c));
-  const liveDeer = sim.internals.deer.filter(c => sim.isLiveCritter(c));
+  // (live ones: one may have been killed in the moment of play before the test paused;
+  // and not mating since then: it would carry on)
+  const w = sim.internals.wolves.find(c => c !== sim.pcWolf && sim.isLiveCritter(c) && c.matingWith === null);
+  const liveDeer = sim.internals.deer.filter(c => sim.isLiveCritter(c) && c.matingWith === null);
   const d = liveDeer[0], d2 = deer2At ? liveDeer[1] : null;
   sim.allCritters.filter(c => c !== w && c !== d && c !== d2).forEach(c => {
     c.gx = c.gy = c.nextGX = c.nextGY = -500 - c.uid * 3; c.speed = 0; mind.ignore(c);
@@ -50,7 +51,8 @@ function setup({ deerAt, deer2At = null, wolfThinks = true, deerThinks = true })
   if (d2) { d2.gx = d2.nextGX = w.gx + deer2At[0]; d2.gy = d2.nextGY = w.gy + deer2At[1]; d2.stunnedUntil = 0; }
   for (const c of [w, d, d2].filter(Boolean)) {
     c.wind = 1; c.stamina = 1; c.stunnedUntil = 0; sim.internals.setCritterIdle(c); // (not stunned)
-    c.speed = 0; // placed: standing, not slowing from how it moved before
+    c.speed = 0; // placed: standing, not slowing from how it moved before...
+    c.climbingUntil = -1; // ...nor held to a walk, climbing out of water before
     sim.internals.setFood(c, c.species === "wolf" ? 0.3 : 1); // a hungry wolf (it hunts), a fed deer (it doesn't graze)
     mind.ignore(c, c === w ? !wolfThinks : !deerThinks);
     mind.forget(c); // nothing remembered from before the test
@@ -306,8 +308,10 @@ async function main(browser, r) {
       if (sim.getTerrainAt(b[0] + di, b[1] + dj) === "grass") S.setGrassKg((b[0] + di) * H + b[1] + dj, 0);
     const rockKg = sim.grassMostAt(b[0], b[1]);
     S.setGrassKg(b[0] * H + b[1], rockKg); // only the grass under the rock
-    const [stag, hind] = [true, false].map(male => sim.allCritters.find(c => c.species === "deer" && c.isMale === male && sim.isGrown(c)));
-    const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; c.wind = c.stamina = 1; S.setCritterIdle(c); };
+    // (not one mating since before the test: it would carry on)
+    const [stag, hind] = [true, false].map(male => sim.allCritters.find(c => c.species === "deer" && c.isMale === male && sim.isGrown(c)
+      && c.matingWith === null));
+    const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.climbingUntil = -1; c.stunnedUntil = 0; c.wind = c.stamina = 1; S.setCritterIdle(c); };
     put(hind, b[0] - 1.5, b[1] + 0.5); sim.internals.setFood(hind, 0.5); hind.mateUid = null; mind.forget(hind); mind.ignore(hind, false);
     let eatingTicks = 0, facing = true, inside = false;
     for (let k = 0; k < 15 / sim.tempo && sim.grassFoodAt(b[0], b[1]) > 0; k++) {
@@ -353,10 +357,10 @@ async function main(browser, r) {
     const S = sim.internals, w = __w, out = {};
     w.gx = w.nextGX = w.gy = w.nextGY = -800; mind.ignore(w);
     // (two hinds: one wouldn't court the other)
-    const [a, b] = sim.allCritters.filter(c => c.species === "deer" && sim.isGrown(c) && !c.isMale && c !== __d).slice(0, 2);
+    const [a, b] = sim.allCritters.filter(c => c.species === "deer" && sim.isGrown(c) && !c.isMale && c !== __d && c.matingWith === null).slice(0, 2);
     const at = [__d.gx - 30, __d.gy - 30];
     __d.gx = __d.nextGX = __d.gy = __d.nextGY = -820; mind.ignore(__d);
-    const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; sim.internals.setFood(c, 1); c.wind = c.stamina = 1; c.lifespanS = 1e9; S.setCritterIdle(c); };
+    const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.climbingUntil = -1; c.stunnedUntil = 0; sim.internals.setFood(c, 1); c.wind = c.stamina = 1; c.lifespanS = 1e9; S.setCritterIdle(c); };
     put(a, at[0] + 2, at[1]); mind.forget(a); mind.ignore(a, false);
     put(b, at[0], at[1]); mind.ignore(b);
     // at rest: planning to stand a long while (as a calm critter may: mind.js calm)

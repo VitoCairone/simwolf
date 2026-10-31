@@ -73,13 +73,8 @@
       </div>
     </div>
     <div id="field-wrapper">
-      <div id="field">
-        <div id="tile-layer" class="layer"></div>
-        <div id="sprite-layer" class="layer"></div>
-        <div id="debug-layer" class="layer">
-          <div id="dbel-pc-wolf"></div>
-        </div>
-      </div>
+      <!-- The world: drawn by animat.js -->
+      <canvas id="field-canvas"></canvas>
       <!-- Movement pad: rings for gallop, trot, walk and stop. controls.js reads their
            radii from here. -->
       <div id="move-pad" aria-label="Movement pad">
