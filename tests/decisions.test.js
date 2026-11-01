@@ -349,10 +349,46 @@ async function main(browser, r) {
   r.check(pace && pace.pair.closest <= 3.2 && pace.pair.flagged === 0,
     `a paired stag beyond his limit comes well back to his hind, not to and fro across it (${JSON.stringify(pace && pace.pair)})`);
 
+  // a carcass hard by a boulder: a hungry wolf goes straight to it and eats, though the
+  // boulder is in the way just past it (going round that, it could circle a carcass in a
+  // nook for ever)
+  await fresh();
+  const byRock = await p.evaluate(() => {
+    if (!setup({ deerAt: [30, 30], deerThinks: false })) return null;
+    const S = sim.internals, w = __w, d = __d;
+    const open = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.isBlockedTile(i, j);
+    // a boulder with open, level ground 3 tiles to its west (and the rows either side)
+    let B = null;
+    for (let i = 4; i < sim.gridWidthN - 4 && !B; i++) for (let j = 4; j < sim.gridHeightN - 4 && !B; j++) {
+      if (sim.obstacleAt(i, j) !== "boulder") continue;
+      let ok = true;
+      for (let di = -4; di <= -1 && ok; di++) for (let dj = -1; dj <= 1 && ok; dj++)
+        ok = open(i + di, j + dj) && Math.abs(sim.heightAt(i + di + 0.5, j + dj + 0.5) - sim.heightAt(i - 0.5, j + 0.5)) < 1;
+      if (ok) B = [i, j];
+    }
+    if (!B) return null;
+    const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; S.setCritterIdle(c); };
+    put(d, B[0] - 0.5, B[1] + 0.5); // on the tile beside the boulder
+    put(w, -900, -900); mind.ignore(w);
+    S.setBody(d, d.adultKg, 1);
+    S.startCritterDeath(d, w);
+    for (let n = 0; n < Math.ceil(sim.deathDurationSBySpecies.deer / sim.tempo) + 2; n++) S.tick();
+    // the wolf 1.5 tiles west of it, out of reach, hungry
+    put(w, B[0] - 2, B[1] + 0.5); S.setFood(w, 0.3); mind.forget(w); mind.ignore(w, false);
+    const meat0 = sim.carcassMeatKg(d);
+    let ate = false, n = 0, detour = false;
+    for (; n < 10 / sim.tempo && !ate; n++) {
+      S.tick(); ate = w.eating && sim.carcassMeatKg(d) < meat0; detour = detour || !!mind.stateOf(w).detour;
+    }
+    return { ate, detour, s: +(n * sim.tempo).toFixed(1), d: +Math.hypot(w.gx - d.gx, w.gy - d.gy).toFixed(2) };
+  });
+  r.check(byRock && byRock.ate && !byRock.detour,
+    `a hungry wolf goes straight to a carcass beside a boulder and eats it (${JSON.stringify(byRock)})`);
+
   // GIVING WAY: a deer standing in another's path, bumped, steps aside, and the other walks
   // on through
   await fresh();
-  const way = await p.evaluate(() => {
+  const giveWay = off => p.evaluate(off => {
     if (!setup({ deerAt: [30, 30], deerThinks: false })) return null;
     const S = sim.internals, w = __w, out = {};
     w.gx = w.nextGX = w.gy = w.nextGY = -800; mind.ignore(w);
@@ -362,22 +398,28 @@ async function main(browser, r) {
     __d.gx = __d.nextGX = __d.gy = __d.nextGY = -820; mind.ignore(__d);
     const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.climbingUntil = -1; c.stunnedUntil = 0; sim.internals.setFood(c, 1); c.wind = c.stamina = 1; c.lifespanS = 1e9; S.setCritterIdle(c); };
     put(a, at[0] + 2, at[1]); mind.forget(a); mind.ignore(a, false);
-    put(b, at[0], at[1]); mind.ignore(b);
+    put(b, at[0], at[1] + off); mind.ignore(b);
     // at rest: planning to stand a long while (as a calm critter may: mind.js calm)
     mind.rest(a, 100);
     for (let k = 0; k < 60; k++) S.tick();
     out.standing = a.pose === "idle";
     const a0 = [a.gx, a.gy];
     sim.setIntent(b, { dx: 1, dy: 0, gait: "walk" });
-    const modes = new Set();
+    const modes = new Set(), blocked0 = a.blockedTick;
     for (let k = 0; k < 6 / sim.tempo && b.gx < a0[0] + 1.5; k++) { S.tick(); modes.add(mind.stateOf(a).mode); }
-    out.passed = b.gx >= a0[0] + 1.5; out.modes = [...modes];
+    out.passed = b.gx >= a0[0] + 1.5; out.modes = [...modes]; out.stunned = a.blockedTick !== blocked0;
     out.aside = +Math.hypot(a.gx - a0[0], a.gy - a0[1]).toFixed(2);
     mind.ignore(a);
     return out;
-  });
+  }, off);
+  const way = await giveWay(0);
   r.check(way && way.standing && way.passed && way.modes.includes("yield") && way.aside > 0.3,
     `a deer standing in another's way, bumped, steps aside; the other walks on through (${JSON.stringify(way)})`);
+  // bumped a little off its middle, it steps to the side it is on, not across the other's way
+  await fresh();
+  const offWay = await giveWay(0.3);
+  r.check(offWay && offWay.standing && offWay.passed && offWay.modes.includes("yield") && !offWay.stunned,
+    `...bumped off its middle, it steps aside to the side it is on, without being stunned (${JSON.stringify(offWay)})`);
 
   r.noProblems(p);
   await p.close();

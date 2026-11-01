@@ -108,7 +108,7 @@
       sim.init();
       senses.attach(sim);
       mind.attach(sim, senses);
-      animat.attach(sim);
+      animat.attach(sim, senses);
       controls.attach(sim, animat, mind);
       sim.start();
     });

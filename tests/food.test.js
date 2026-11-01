@@ -259,6 +259,13 @@ async function main(browser, r) {
     const before = sim.carcassMeatKg(d); S.tick();
     const ateWhenFull = before - sim.carcassMeatKg(d);
     const dripATick = S.stomachKg(w) * sim.tempo / S.stomachTS(w);
+    // ...and eating on, it tops its stomach up as it drips through, meal after meal
+    // (setFood keeps it hungry; the stomach as it was)
+    let lowestGut = 1;
+    for (let k = 0; k < 10 / sim.tempo; k++) {
+      const st = w.stomach; S.setFood(w, 0.5); w.stomach = st; S.updateBody(w);
+      S.tick(); lowestGut = Math.min(lowestGut, w.gut);
+    }
     // ...and its body takes it in as it drips through
     sim.setPlayerIntent(null); S.tick(); w.eating = false;
     const t0 = sim.now, f0 = w.food;
@@ -278,7 +285,7 @@ async function main(browser, r) {
     for (let k = 0; k < deathTicks; k++) { S.setFood(w, 0.99); S.tick(); }
     const second = eatUp(d2);
     sim.setPlayerIntent(null); S.tick();
-    return { full, afterFull, ateWhenFull, dripATick, digested, first, second, pieces: sim.carcassPieces.map(p => p[0]),
+    return { full, afterFull, ateWhenFull, dripATick, lowestGut, digested, first, second, pieces: sim.carcassPieces.map(p => p[0]),
       bones, layersSeen, bonesSeen, at: [d.gx, d.gy], deerMeat, deerBones, deerWeight, food0 };
   });
   r.check(eat.full.cls === "critter deer-carcass" && eat.full.layers === 9 && eat.full.bones === 0 && eat.full.shadowLast
@@ -290,6 +297,8 @@ async function main(browser, r) {
     `${F.ateKg.toFixed(1)} kg (its stomach holds ${F.stomachKg.toFixed(1)}, and passed some on meanwhile)`);
   r.check(eat.ateWhenFull <= eat.dripATick + 1e-9,
     `a full stomach takes no more than drips out of it (${(eat.ateWhenFull * 1000).toFixed(1)} g in a tick; ${(eat.dripATick * 1000).toFixed(1)} g drips out)`);
+  r.check(eat.lowestGut > 0.9,
+    `eating on, it keeps its stomach topped up as it passes food on (10 s: never below ${(eat.lowestGut * 100).toFixed(0)}% full)`);
   r.check(Math.abs(eat.digested.s / eat.digested.expectS - 1) < 0.1 && eat.digested.food > 0.2,
     `its stomach empties in ${eat.digested.s.toFixed(1)} s (a full one in ${eat.digested.expectS.toFixed(1)}: ${eat.digested.realH.toFixed(1)} h, REALISTIC), its meter up ${eat.digested.food.toFixed(2)}`);
   const more = eat.bonesSeen.every((x, k) => k === 0 || x >= eat.bonesSeen[k - 1] || x === 0);

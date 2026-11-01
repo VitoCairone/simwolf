@@ -1,12 +1,12 @@
 // Shores (see SHORES in animat.js): an outgoing wave from the land that always joins up.
 //  On the real map:
-//  - shore tiles show the straight sprites (tiles.png row 9, columns 0-1), the corner
-//    sprites (columns 2-5) or the interior corners (images/shore-inner.png); all other
-//    water stays on the plain frame
-//  - one global clock: every corner tile shows the same frame at the same time (2, 3, 4,
-//    5, 2, ...), every interior corner steps with them through its 4 frames, and every
-//    straight tile holds each of its frames twice as long (0, 0, 1, 1, 0, ...), so the
-//    loops repeat in sync; nothing moves while paused
+//  - shore tiles show the straight sprites (tiles.png row 9, columns 0-1), the outer
+//    corners (images/shore-outer.png) or the interior corners (images/shore-inner.png);
+//    all other water stays on the plain frame
+//  - one global clock: every interior corner shows the same frame at the same time (0, 1,
+//    2, 3, 0, ...), and every straight and outer-corner tile holds each of its two frames
+//    twice as long (0, 0, 1, 1, 0, ...), with the interior corner's frames 0-1 and 2-3, so
+//    the loops repeat in sync; nothing moves while paused
 //  On a test map (the terrain swapped for water with shapes of land):
 //  - a straight coast is all straight tiles, light to the land, all the same way round
 //  - a rectangle of land has exactly 4 corner pieces, at its corners, touching land only
@@ -45,18 +45,18 @@ async function main(browser, r) {
     // its land edges, by screen edge (TL = grid W, TR = N, BL = S, BR = E)
     const landEdges = ([i, j]) => ["TL", "TR", "BL", "BR"].filter((e, k) =>
       isLand(...[[i - 1, j], [i, j - 1], [i, j + 1], [i + 1, j]][k]));
-    // the edges a shown sprite has its light on: as drawn (one-edge TR; two-edge TL+TR, or
-    // TR+BR on the rotated sheet), then mirrored
+    // the edges a shown sprite has its light on: as drawn (one-edge TR; a corner or interior
+    // corner TL+TR on its sheet's row 0, TR+BR on row 1), then mirrored
     const lightEdges = t => {
-      const rotated = t.image.includes("shore-rotated");
       const col = frameOf(t)[0];
-      let edges = rotated ? ["TR", "BR"] : col <= 1 ? ["TR"] : ["TL", "TR"];
+      let edges = col <= 1 ? ["TR"] : t.sy ? ["TR", "BR"] : ["TL", "TR"];
       const fx = t.flipX, fy = t.flipY;
       return edges.map(e => (fy ? (e[0] === "T" ? "B" : "T") : e[0]) + (fx ? (e[1] === "L" ? "R" : "L") : e[1])).sort();
     };
     const frameOf = t => {
-      // (the interior sheet's frames counted as "columns" 10-13, to tell them apart)
-      return t.image.includes("shore-rotated") ? [2 + t.sx / 32, 9]
+      // (the outer corners' frames counted as "columns" 20-21, the interior corners' as
+      // 10-13, to tell them apart)
+      return t.image.includes("shore-outer") ? [20 + t.sx / 32, 9]
         : t.image.includes("shore-inner") ? [10 + t.sx / 32, 9] : [t.sx / 32, t.sy / 32];
     };
 
@@ -76,7 +76,7 @@ async function main(browser, r) {
     seq.forEach((frames, k) => {
       const [i, j] = waters[k], el = now(waters[k]), land = landEdges([i, j]);
       const cols = frames.map(f => +f.split(",")[0]);
-      const set = cols.every(c => c <= 1) ? "one" : cols.every(c => c >= 2 && c <= 5) ? "two"
+      const set = cols.every(c => c <= 1) ? "one" : cols.every(c => c >= 20 && c <= 21) ? "two"
         : cols.every(c => c >= 10 && c <= 13) ? "inner" : "?";
       const laps = new Set(frames).size > 1;
       if (!laps) {
@@ -87,7 +87,7 @@ async function main(browser, r) {
       if (set === "one") one++; else if (set === "two") two++; else if (set === "inner") inner++; else wrongSet++;
       if (set === "?") return;
       // in order, round and round
-      const loop = set === "one" ? [0, 1] : set === "two" ? [2, 3, 4, 5] : [10, 11, 12, 13];
+      const loop = set === "one" ? [0, 1] : set === "two" ? [20, 21] : [10, 11, 12, 13];
       for (let n = 1; n < cols.length; n++) {
         const a = loop.indexOf(cols[n - 1]), b = loop.indexOf(cols[n]);
         if (a < 0 || b < 0 || (b !== a && b !== (a + 1) % loop.length)) ordered = false;
@@ -97,18 +97,15 @@ async function main(browser, r) {
       if (!bySet[set]) bySet[set] = cols;
       else if (cols.some((c, n) => c !== bySet[set][n])) together = false;
     });
-    // in sync: wherever the corner loop starts (frame 2), the linear loop starts (frame 0),
-    // and the linear frames last twice as long
-    let synced = !!(bySet.one && bySet.two);
+    // in sync: the outer corners show the straight tiles' frame at every moment; the
+    // interior corners step twice as often, their frames 0-1 with the straight frame 0
+    // and 2-3 with 1
+    let synced = !!(bySet.one && bySet.two && bySet.inner);
     if (synced) {
       const changes = c => c.filter((x, n) => n > 0 && x !== c[n - 1]).length;
-      for (let n = 0; n < bySet.two.length; n++) {
-        if (bySet.two[n] === 2 && bySet.one[n] !== 0) synced = false;
-        if (bySet.two[n] === 4 && bySet.one[n] !== 1) synced = false;
-      }
-      if (changes(bySet.two) !== 2 * changes(bySet.one)) synced = false;
-      // the interior corners step with the corners: frame k of each at the same moment
-      if (bySet.inner && bySet.inner.some((c, n) => c - 10 !== bySet.two[n] - 2)) synced = false;
+      if (bySet.two.some((c, n) => c - 20 !== bySet.one[n])) synced = false;
+      if (bySet.inner.some((c, n) => (c - 10) >> 1 !== bySet.one[n])) synced = false;
+      if (changes(bySet.inner) !== 2 * changes(bySet.one)) synced = false;
     }
     return { synced, inner, open, one, two, other, misplaced, wrongSet, misfaced, openPlain, ordered, together, still };
   });
@@ -117,7 +114,7 @@ async function main(browser, r) {
   r.check(res.openPlain, "open water stays on the plain water frame");
   r.check(res.ordered, "each shore plays its set's frames in order, round and round");
   r.check(res.together, "one clock: every tile of a set shows the same frame at the same time");
-  r.check(res.synced, "the loops repeat in sync: the straight frames last twice as long, the interior corners step with the corners");
+  r.check(res.synced, "the loops repeat in sync: the outer corners with the straight tiles, the interior corners twice as often");
   r.check(res.still, "nothing laps while the game is paused");
 
   await p.screenshot({ path: path.join(outDir, "shore.png") });
@@ -141,7 +138,7 @@ async function main(browser, r) {
     const cornerEdges = { T: ["TL", "TR"], R: ["TR", "BR"], B: ["BR", "BL"], L: ["BL", "TL"] };
     // what a tile shows: { kind: "straight", edge } / { kind: "corner", corner } / null,
     // read back from its sprite (straight: light along TR as drawn; corner: light at T, or
-    // at R on the rotated sheet), then its mirroring
+    // at R on its sheet's row 1), then its mirroring
     const shown = (i, j) => {
       const el = animat.tileOf(i, j);
       if (el.kind !== "water" || !el.shore) return null;
@@ -154,7 +151,7 @@ async function main(browser, r) {
         if (fx) c = { L: "R", R: "L", T: "T", B: "B" }[c];
         return { kind: "inner", corner: c };
       }
-      let c = el.shore.rotated ? "R" : "T";
+      let c = el.shore.row ? "R" : "T";
       if (fy) c = { T: "B", B: "T", L: "L", R: "R" }[c];
       if (fx) c = { L: "R", R: "L", T: "T", B: "B" }[c];
       return { kind: "corner", corner: c };

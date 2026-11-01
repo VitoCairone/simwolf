@@ -1,58 +1,97 @@
-"""Shore sprites made from tiles.png for the shores (see SHORES in animat.js): the corner
-sprites turned a quarter turn, and interior-corner sprites (below).
+"""Shore sprites made from tiles.png's straight shore sprites (see SHORES in animat.js), so
+that every shore tile joins its neighbours seamlessly: outer corners and interior corners.
 
-tiles.png row 9 has the shore water sprites: columns 0-1 for water with land on ONE edge
-(light along its top-right edge, as drawn), columns 2-5 for water with land on TWO
-adjacent edges (light in its top corner, between the top-left and top-right edges); each
-set's columns are the frames of its animation. Mirroring turns the one-edge sprite to
-face any edge, and the two-edge sprite to the top or bottom corner; for land meeting at
-the left or right corner the two-edge sprite has to be truly rotated, which this does.
+tiles.png row 9, columns 0-1 are the straight shore sprites: water with land along ONE
+edge, the light along its top-right edge (as drawn), a band of wave fronts parallel to it;
+the two columns are the animation's frames. (Its columns 2-5, the artist's corner
+sprites, aren't used: they don't match the straight ones.)
 
-  images/shore-rotated.png   tiles.png row 9, columns 2-5, each turned a quarter turn
-                             (in the grid) so its light corner is on the right: four
-                             32 x 32 cells in a row
-
-A quarter turn of the grid moves the diamond's top corner to its right corner. On screen
-it maps an offset (x, y) from the diamond's center to (-2y, x/2): the 2:1 staircases of
-isometric pixel art map onto 2:1 staircases, so the pixels survive it. Each output pixel
-takes the source pixel it comes from (nearest), and the diamond's outline is kept exactly.
+GRID COORDINATES in a 32 x 32 water cell: the diamond's corners T (top) = (0, 0),
+R (right) = (1, 0), B (bottom) = (1, 1), L (left) = (0, 1); a pixel's (u, v) from its
+center (uv, px below). In the straight sprite v is how far a point is from the land edge
+(T-R) and u how far along it.
 
 Run from the project root:  python3 spritecraft/make_shore_tiles.py
 """
+import math
 from PIL import Image
 
 CELL = 32
 ROW = 9
-COLUMNS = [2, 3, 4, 5]
 CX, CY = 16, 24  # the water diamond's center in its cell (pixel corners)
 
 sheet = Image.open("images/tiles.png").convert("RGBA")
-out = Image.new("RGBA", (CELL * len(COLUMNS), CELL), (0, 0, 0, 0))
-for k, col in enumerate(COLUMNS):
-    src = sheet.crop((col * CELL, ROW * CELL, (col + 1) * CELL, (ROW + 1) * CELL))
-    sp = src.load()
+water = sheet.crop((192, ROW * CELL, 224, (ROW + 1) * CELL))  # plain water
+
+
+def straight(col):
+    return sheet.crop((col * CELL, ROW * CELL, (col + 1) * CELL, (ROW + 1) * CELL))
+
+
+def uv(x, y):
+    """Pixel (x, y)'s center in grid coordinates."""
+    a, b = (x + 0.5 - CX) / 16, (y + 0.5 - 16) / 8
+    return (a + b) / 2, (b - a) / 2
+
+
+def sample(src, u, v):
+    """src's pixel at grid point (u, v): the nearest pixel inside the diamond."""
+    x, y = 16 + 16 * (u - v) - 0.5, 16 + 8 * (u + v) - 0.5
+    ix, iy = int(round(x)), int(round(y))
+    best = None
+    for ny in range(iy - 2, iy + 3):
+        for nx in range(ix - 2, ix + 3):
+            if 0 <= nx < CELL and 0 <= ny < CELL and src.getpixel((nx, ny))[3]:
+                d = (nx - x) ** 2 + (ny - y) ** 2
+                if best is None or d < best[0]:
+                    best = (d, src.getpixel((nx, ny)))
+    return best[1]
+
+
+# OUTER CORNERS (water with land only beyond one corner, as off a rectangle's corner): the
+# wave fronts run round that corner in arcs. Each pixel shows the straight sprite at the
+# same distance from the land: r, its distance from the corner (in the grid), as the
+# straight sprite's v. So where the corner tile meets the straight tiles on either side
+# (along its two edges at that corner, each the side of a straight tile whose land edge
+# ends at the same corner), a point r from the corner shows what the straight tile shows r
+# from its land edge: the arcs carry the straight fronts round without a seam. Along the
+# arc, the straight sprite's u: at the two edges the end of the straight sprite those
+# neighbours show there (u = 1 for a corner at T, u = 0 at R), and toward the arc's middle
+# up to SPREAD further in (1 - |cos 2 angle|), the two halves mirroring each other. Beyond
+# r = 1, open water.
+#
+#   images/shore-outer.png   two rows of two 32 x 32 frames (the straight sprite's two):
+#     row 0: land beyond the TOP corner
+#     row 1: land beyond the RIGHT corner
+#   (Land beyond the bottom and left corners: these mirrored, by the game.)
+SPREAD = 0.25
+
+
+def outer(src, corner):
+    out = Image.new("RGBA", (CELL, CELL), (0, 0, 0, 0))
+    vu, vv, end = (0, 0, 1) if corner == "T" else (1, 0, 0)
     for y in range(CELL):
         for x in range(CELL):
-            if sp[x, y][3] == 0:
-                continue  # outside the diamond (it maps onto itself)
-            dx, dy = x + 0.5 - CX, y + 0.5 - CY
-            # where this pixel comes from: the inverse of (x, y) -> (-2y, x/2)
-            sx, sy = 2 * dy, -dx / 2
-            ix = min(max(int((CX + sx) // 1), 0), CELL - 1)
-            iy = min(max(int((CY + sy) // 1), 0), CELL - 1)
-            p = sp[ix, iy]
-            if p[3] == 0:  # just outside the source diamond: take the nearest pixel inside
-                best = None
-                for ny in range(iy - 2, iy + 3):
-                    for nx in range(ix - 2, ix + 3):
-                        if 0 <= nx < CELL and 0 <= ny < CELL and sp[nx, ny][3]:
-                            dd = (nx + 0.5 - CX - sx) ** 2 + (ny + 0.5 - CY - sy) ** 2
-                            if best is None or dd < best[0]:
-                                best = (dd, sp[nx, ny])
-                p = best[1]
-            out.putpixel((k * CELL + x, y), p)
-out.save("images/shore-rotated.png")
-print("wrote images/shore-rotated.png")
+            if not water.getpixel((x, y))[3]:
+                continue  # outside the diamond
+            u, v = uv(x, y)
+            du, dv = abs(u - vu), abs(v - vv)
+            r = math.hypot(du, dv)
+            if r >= 1:
+                out.putpixel((x, y), water.getpixel((x, y)))
+                continue
+            off = SPREAD * (1 - abs(math.cos(2 * math.atan2(dv, du))))
+            along = end - off if end == 1 else end + off
+            out.putpixel((x, y), sample(src, min(max(along, 0.001), 0.999), r))
+    return out
+
+
+outers = Image.new("RGBA", (CELL * 2, CELL * 2), (0, 0, 0, 0))
+for r, corner in enumerate("TR"):
+    for k in (0, 1):
+        outers.paste(outer(straight(k), corner), (k * CELL, r * CELL))
+outers.save("images/shore-outer.png")
+print("wrote images/shore-outer.png")
 
 
 # INTERIOR CORNERS (a notch: water with land along two edges that meet at a corner, as in
@@ -70,17 +109,12 @@ print("wrote images/shore-rotated.png")
 #            bottom (about the diamond's center row)
 #   (Notches at the bottom and left corners are these mirrored, by the game.)
 #
-# Four frames, to keep step with the exterior corner's four: the straight tiles on either
-# side show straight frame 0 for the loop's first two steps and frame 1 for the next two,
-# so frames 0 and 2 are the folds of those; frames 1 and 3 add the crest where the two
+# Four frames: the straight tiles on either side show straight frame 0 for the loop's
+# first two steps and frame 1 for the next two, so frames 0 and 2 are the folds of those; frames 1 and 3 add the crest where the two
 # wave fronts meet along the bisector (one shade lighter there): strong as the swell comes
 # in (1), faint as it ebbs (3).
 SHADES = [(21, 29, 40), (23, 32, 56), (32, 46, 55), (37, 58, 94), (60, 94, 139), (79, 143, 186)]
 SHADE = {c: k for k, c in enumerate(SHADES)}
-
-
-def straight(col):
-    return sheet.crop((col * CELL, ROW * CELL, (col + 1) * CELL, (ROW + 1) * CELL))
 
 
 def fold_top(im):

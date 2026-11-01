@@ -32,8 +32,9 @@ async function openGame(browser, { viewport, initScript, initArg, dayNight = fal
   if (initScript) await page.addInitScript(initScript, initArg);
   // the game starts paused (before the page's own load handler starts it), runs
   // startTicks, and then runs on: so every suite starts from as much play, however fast
-  // the page draws
+  // the page draws (only in the game's own window, not in a frame a test adds)
   await page.addInitScript(() => window.addEventListener("load", () => {
+    if (window.top !== window) return;
     const start = sim.start;
     sim.start = (...args) => { start(...args); sim.pause(); };
   }));

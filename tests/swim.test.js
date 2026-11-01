@@ -4,6 +4,7 @@
 // in water (told to stand or eat, or after a stun, it swims on); swimming uses stamina (a
 // full reserve lasts swimTimeS: GAMIFIED 12 minutes for a wolf, 3 for a deer), a sprint
 // also wind; out of wind a sprint drops to swimming, out of stamina a swimmer can't move.
+// The land in front of a swimmer covers it, and is drawn as it is around it.
 
 const path = require("path");
 const { openGame, makeStags, runStandalone, ensureOutputDir } = require("./helpers");
@@ -161,6 +162,50 @@ async function main(browser, r) {
   await p.evaluate(() => { const a = window.__d; animat.setZoom(4);
     animat.centerCameraOn(a.gx, a.gy); });
   await p.screenshot({ path: path.join(outDir, "deer-swimming.png"), clip });
+
+  // 5b. land just in front of a swimmer (screen-down) is drawn as it is: the view outside
+  // the swimmer's frame is the same with the swimmer as without it
+  const front = await p.evaluate(() => {
+    sim.pause();
+    const T = sim.getTerrainAt, land = (i, j) => T(i, j) !== "water";
+    let at = null;
+    for (let i = 5; i < sim.gridWidthN - 5 && !at; i++) for (let j = 5; j < sim.gridHeightN - 5 && !at; j++)
+      if (T(i, j) === "water" && land(i + 1, j) && land(i, j + 1) && land(i + 1, j + 1)
+        && Math.min(...sim.tileCorners(i + 1, j + 1)) >= 1) at = [i, j];
+    if (!at) return null;
+    const a = window.__d;
+    a.gx = a.nextGX = at[0] + 0.5; a.gy = a.nextGY = at[1] + 0.5;
+    a.pose = "swim"; a.speed = 0; // (as drawn: the view only reads it)
+    animat.setZoom(4); animat.centerCameraOn(a.gx, a.gy);
+    animat.showOnly([a]);
+    return { at, rect: animat.spriteRect(animat.spriteOf(a)) };
+  });
+  let differ = null;
+  if (front) {
+    const withIt = (await p.screenshot()).toString("base64");
+    await p.evaluate(() => animat.showOnly([]));
+    const without = (await p.screenshot()).toString("base64");
+    await p.evaluate(() => animat.showOnly(null));
+    differ = await p.evaluate(async ([a, b, rect]) => {
+      const load = async png => {
+        const im = new Image(); im.src = "data:image/png;base64," + png; await im.decode();
+        const c = document.createElement("canvas"); c.width = im.width; c.height = im.height;
+        const g = c.getContext("2d"); g.drawImage(im, 0, 0);
+        return g.getImageData(0, 0, c.width, c.height);
+      };
+      const [A, B] = [await load(a), await load(b)];
+      const field = document.getElementById("field-wrapper").getBoundingClientRect();
+      let n = 0;
+      for (let y = Math.ceil(field.top); y < field.bottom; y++) for (let x = Math.ceil(field.left); x < field.right; x++) {
+        if (x >= rect.left - 1 && x <= rect.right + 1 && y >= rect.top - 1 && y <= rect.bottom + 1) continue;
+        const k = (y * A.width + x) * 4;
+        if (A.data[k] !== B.data[k] || A.data[k + 1] !== B.data[k + 1] || A.data[k + 2] !== B.data[k + 2]) n++;
+      }
+      return n;
+    }, [withIt, without, front.rect]);
+  }
+  r.check(front && differ === 0,
+    `land in front of a swimmer isn't drawn raised: outside its frame the view is the same without it (${differ} pixels differ, at ${front && front.at})`);
   r.noProblems(p);
   await p.close();
 

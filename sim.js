@@ -1119,7 +1119,7 @@ function eat(a) {
   }
   const c = carcassInReach(a);
   if (!c) { a.meal = null; return; }
-  bite = Math.min(mealKgPerS(a, "meat", SPEEDS.eatKgPerS[a.species]) * tempo, stomachRoomKg(a));
+  bite = Math.min(mealBiteKg(a, "meat", SPEEDS.eatKgPerS[a.species]), stomachRoomKg(a));
   while (bite > 1e-12) {
     const pieces = c.carcass.pieces;
     if (!(biomassKg(pieces[c.eatingPiece] ?? biomass()) > 1e-9)) {
@@ -1130,18 +1130,25 @@ function eat(a) {
     const piece = pieces[c.eatingPiece], kg = biomassKg(piece);
     bite -= moveShare(piece, a.stomach, bite >= kg - 1e-9 ? 1 : bite / kg);
   }
-  if (!(stomachRoomKg(a) > 1e-12)) a.meal = null; // full: its next meal starts afresh
+  mealEaten(a);
 }
 
 // FEEDING TIME: a wolf at a carcass, or an infant suckling, eats a meal: what its stomach
 // has room for when it starts, taken in evenly over at least SPEEDS.feedingMinS, if eating
-// (or suckling) as fast as it can would take less (a.meal: { kind, kgPerS }). The meal
-// ends when its stomach is full, it stops eating, or it eats something else.
-// (Deer cropping grass take long enough on their own.)
-function mealKgPerS(a, kind, fastestKgPerS) {
-  if (!a.meal || a.meal.kind !== kind || !(a.meal.kgPerS > 0))
+// (or suckling) as fast as it can would take less (a.meal: { kind, kgPerS }), as well as
+// what its stomach passes on meanwhile (a.dripKg, the last tick's). The meal ends when its
+// stomach is full, it stops eating, or it eats something else; eating on, it starts
+// another, so it keeps its stomach topped up. (Deer cropping grass take long enough on
+// their own.)
+// The most a's meal lets it eat this tick, kg.
+function mealBiteKg(a, kind, fastestKgPerS) {
+  if (!a.meal || a.meal.kind !== kind)
     a.meal = { kind, kgPerS: Math.min(fastestKgPerS, stomachRoomKg(a) / SPEEDS.feedingMinS) };
-  return a.meal.kgPerS;
+  return Math.min(fastestKgPerS * tempo, a.meal.kgPerS * tempo + (a.dripKg || 0));
+}
+// After a's bite: a full stomach ends its meal.
+function mealEaten(a) {
+  if (!(stomachRoomKg(a) > 1e-12)) a.meal = null;
 }
 
 // BODY: a critter's biomass is in three places: its body's tissues (a.tissues), its
@@ -1155,7 +1162,8 @@ function mealKgPerS(a, kind, fastestKgPerS) {
 //   hunger.
 //   STOMACH METER (a.gut): the energy in its stomach, from 0 (empty) to 1 (a full stomach
 //   of its usual food: usualFoodShares). The stomach holds stomachShareBySpecies of its
-//   frame's weight.
+//   frame's weight; a.stomachFull, whether it is (as good as) full, whatever is in it (a
+//   stomach full of poorer food reads less than full on the meter).
 // METABOLISM: it burns its tissues (carbs, then fat, then protein: burn) so that a full
 // meter lasts SPEEDS.foodFullS (an infant's, SPEEDS.infantFoodFullS), at the same pace
 // whatever its meter.
@@ -1174,6 +1182,7 @@ function mealKgPerS(a, kind, fastestKgPerS) {
 // mineralKeepShare of her frame's, and makes them up from what she digests.
 const growFastestRatio = 2; // the fastest it grows, over a well-fed critter's pace (estimate)
 const mineralKeepShare = 0.8; // estimate
+const stomachFullRoomShare = 0.01; // a stomach with no more room than this share of it is full (a.stomachFull)
 const fullBodyMJPerKg = Object.fromEntries(Object.keys(bodySharesBySpecies).map(sp => [sp, fullMJPerKg(sp)]));
 const lethalBodyMJPerKg = Object.fromEntries(Object.keys(bodySharesBySpecies).map(sp => [sp, lethalMJPerKg(sp)]));
 const leanWaterPerKg = Object.fromEntries(Object.entries(bodySharesBySpecies).map(([sp, s]) => [sp, s.waterKg / s.proteinKg]));
@@ -1278,9 +1287,9 @@ function updateFood(a) {
   const kg = biomassKg(a.stomach);
   if (kg > 0) {
     const drip = biomass();
-    moveShare(a.stomach, drip, Math.min(1, Math.max(kg, stomachDripLeastShare * stomachKg(a)) * tempo / stomachTS(a) / kg));
+    a.dripKg = moveShare(a.stomach, drip, Math.min(1, Math.max(kg, stomachDripLeastShare * stomachKg(a)) * tempo / stomachTS(a) / kg));
     absorb(a, drip);
-  }
+  } else a.dripKg = 0;
   balanceWater(a);
   updateWomb(a);
   updateBody(a);
@@ -1487,6 +1496,7 @@ function growthShare(species, age) {
 function updateBody(a) {
   a.food = Math.min(1, Math.max(0, foodShare(a)));
   a.gut = Math.min(1, energyMJ(a.stomach) / fullStomachMJ(a));
+  a.stomachFull = stomachRoomKg(a) <= stomachFullRoomShare * stomachKg(a);
   a.weightKg = biomassKg(a.tissues) + biomassKg(a.stomach) + biomassKg(a.womb);
   const stage = youngStage(a);
   a.boxRad = stage && stage <= smallBoxStages ? critterBoxRad * youngScales[stage - 1] : critterBoxRad;
@@ -1524,12 +1534,12 @@ function nurse(a) {
   const milk = milkSharesBySpecies[a.species], mjPerKg = energyMJ(milk);
   const spareMJ = (foodShare(mother) - nurseMotherMinFood) * rangeMJ(mother) * milkEfficiency;
   const fastest = rangeMJ(a) / SPEEDS.nurseFullS[a.species] / mjPerKg;
-  const kg = Math.min(mealKgPerS(a, "milk", fastest) * tempo, stomachRoomKg(a), spareMJ / mjPerKg);
+  const kg = Math.min(mealBiteKg(a, "milk", fastest), stomachRoomKg(a), spareMJ / mjPerKg);
   if (!(kg > 0)) return null;
   const got = withdraw(mother.tissues, biomass(milk, kg), a.stomach, mineralKeptKg(mother));
   biomassLedger.burnedKg += burn(mother.tissues, energyMJ(got) * (1 / milkEfficiency - 1));
   updateBody(mother);
-  if (!(stomachRoomKg(a) > 1e-12)) a.meal = null; // full: its next meal starts afresh
+  mealEaten(a);
   return mother.uid;
 }
 
@@ -1695,8 +1705,8 @@ function giveBirth(f) {
 // vector again reuses it. The sprite faces the nearest of 8 directions
 // (a.currentDirection) but keeps its facing while the heading is within facingKeepCos of
 // it, so a heading near a boundary doesn't flip the sprite.
-// STUNNED: a move that fails (another live critter, a boulder, a cliff, the map's
-// edge, or water for a tired critter) leaves the critter at its last legal position,
+// STUNNED: a move that fails (another live critter in its way: see COLLISIONS; a boulder,
+// a cliff, the map's edge, or water for a tired critter) leaves the critter at its last legal position,
 // stopped, for stunMinS to stunMaxS; its intent waits. a.blockedTick and a.stunnedUntil
 // record when, for whoever decides.
 const intents = new Map(); // critter -> its prepared intent
@@ -1978,8 +1988,8 @@ function bankAboveStep(a) {
 }
 
 // Whether critter a could go straight to (gx, gy): inside the map, its box touching no
-// blocked tile, meeting no ledge it can't step, and (if it may not enter water) staying
-// dry. Checked in steps of canStepSampleTiles, as moves are checked tick by tick, so a
+// blocked tile on the way, meeting no ledge it can't step, and (if it may not enter water)
+// staying dry. Checked in steps of canStepSampleTiles, as moves are checked tick by tick, so a
 // walkable run of slopes isn't mistaken for a cliff. Minds ask this many times a tick.
 const canStepSampleTiles = 0.25;
 // Tile facts canStepTo has looked up this tick: the terrain functions recompute
@@ -2008,12 +2018,14 @@ function canStepTo(a, gx, gy) {
     return c[0] * (1 - u) * (1 - v) + c[1] * u * (1 - v) + c[2] * (1 - u) * v + c[3] * u * v;
   };
   const n = Math.max(1, Math.ceil(Math.max(Math.abs(gx - a.gx), Math.abs(gy - a.gy)) / canStepSampleTiles));
-  let h = height(a.gx, a.gy);
+  let h = height(a.gx, a.gy), px = a.gx, py = a.gy;
   for (let s = 1; s <= n; s++) {
     const x = a.gx + (gx - a.gx) * s / n, y = a.gy + (gy - a.gy) * s / n;
     if (x < r || y < r || x >= gridWidthN - r || y >= gridHeightN - r) return false;
-    const i0 = Math.floor(x - r), i1 = Math.floor(x + r);
-    const j0 = Math.floor(y - r), j1 = Math.floor(y + r);
+    // the box over the whole step, so it can't clip a blocked tile's corner between samples
+    const i0 = Math.floor(Math.min(px, x) - r), i1 = Math.floor(Math.max(px, x) + r);
+    const j0 = Math.floor(Math.min(py, y) - r), j1 = Math.floor(Math.max(py, y) + r);
+    px = x; py = y;
     for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) if (blocked(i, j)) return false;
     const hNext = height(x, y);
     if (Math.abs(hNext - h) > maxStepLevels) return false;
@@ -2089,15 +2101,26 @@ function updateAllCritters() {
 // COLLISIONS: every live critter's next position is checked against blocked tiles and
 // every other live critter at once (the dying and corpses are walked over like ground).
 // BUMPED: a critter that another moves into feels it: a.bumpedTick, a.bumpedBy (its uid)
-// and the way it was moving, (a.bumpedDx, a.bumpedDy). A wolf touching a live deer on land kills it; any
-// other collider is stunned where it is. This is the only place positions change.
-// TODO: kill only when the wolf bites, front-on; and let a critter bumped from behind
-// carry on when the space ahead is open.
+// the way it was moving, (a.bumpedDx, a.bumpedDy), and where it was, (a.bumpedX,
+// a.bumpedY). A wolf touching a live deer on land kills it; any other collider is
+// stunned where it is, but of two critters, one whose own move would be clear of the
+// other where it stands goes on (a critter bumped from behind, or stepping away from the
+// one that bumped it) while the other is stunned. This is the only place positions change.
+// TODO: kill only when the wolf bites, front-on.
 function moveAllTogether(movers) {
   const allColliders = movers;
   const collidePairs = findCollidingPairs(allColliders);
   const didCollide = {};
-  collidePairs.forEach(pair => pair.forEach(m => didCollide[m] = true));
+  const clearOf = (a, b) => !(a.nextGX === a.gx && a.nextGY === a.gy)
+    && !doNextMovesCollide(a, { gx: b.gx, gy: b.gy, nextGX: b.gx, nextGY: b.gy, boxRad: b.boxRad });
+  collidePairs.forEach(pair => {
+    if (pair[0] !== -1) {
+      const [c0, c1] = [allColliders[pair[0]], allColliders[pair[1]]];
+      const ok0 = clearOf(c0, c1), ok1 = clearOf(c1, c0);
+      if (ok0 !== ok1) { didCollide[pair[ok0 ? 1 : 0]] = true; return; }
+    }
+    pair.forEach(m => didCollide[m] = true);
+  });
 
   const wasKilledBy = {};
   collidePairs.forEach(pair => {
@@ -2109,6 +2132,7 @@ function moveAllTogether(movers) {
       felt.bumpedTick = g_tick;
       felt.bumpedBy = mover.uid;
       felt.bumpedDx = mover.nextGX - mover.gx; felt.bumpedDy = mover.nextGY - mover.gy;
+      felt.bumpedX = mover.gx; felt.bumpedY = mover.gy;
     }
     if (!isLiveCritter(c0) || !isLiveCritter(c1) || c0.species === c1.species) return;
     // no kills in the water: a wolf couldn't eat the carcass there, or drag it ashore
@@ -2407,10 +2431,10 @@ function start({ consoleOnly = false } = {}) {
 // THE INTERFACE
 // Views and controllers read critters' fields directly (gx, gy, pose, poseTick,
 // currentDirection (the facing), hx, hy (the heading), speed, targetSpeed, species, wind,
-// stamina, food, gut, tissues, stomach, womb, eating, carcass, carcassFullKg, uid,
+// stamina, food, gut, stomachFull, tissues, stomach, womb, eating, carcass, carcassFullKg, uid,
 // blockedTick, stunnedUntil, isMale, birthTime, deathTime, weightKg, adultKg, frameKg,
 // boxRad, mateUid, matingWith, parentUids, youngUids, pregnancy, nursingOn, bumpedTick,
-// bumpedBy, bumpedDx, bumpedDy)
+// bumpedBy, bumpedDx, bumpedDy, bumpedX, bumpedY)
 // but change the world only through these functions.
 return {
   // lifecycle and time

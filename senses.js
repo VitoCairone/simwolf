@@ -33,7 +33,8 @@
 //   as faint as the critter's nose can still smell (trailMinStrength).
 // TOUCH: a mother feels which of her young is suckling from her (nursingOnMe), and
 // perceives it by "touch" if by nothing else.
-// The player sees the whole screen, whatever the player's wolf can perceive.
+// The player sees what the player's wolf sees while the camera follows it (animat.js,
+// SIGHT VIEW: canSeePoint, seesCreature), and the whole screen otherwise.
 // TODO: uncertainty (sound and scent give only rough places); field of view; scent that
 // takes time to drift.
 
@@ -97,14 +98,15 @@ function sightHeightAt(i, j) {
   return z;
 }
 
-// Whether the straight line from point (ex, ey) at height ez to (tx, ty) at height tz
-// passes above every tile in between, each compared at the point where the line comes
-// nearest that tile's center. The line is walked tile by tile (a grid traversal), with
-// distances along it as fractions: no square roots.
-function clearLine(ex, ey, ez, tx, ty, tz) {
+// Walks the straight line from point (ex, ey) at height ez to (tx, ty) at height tz, tile
+// by tile (a grid traversal), over every tile in between (not the first or the last),
+// calling stop(i, j, z) with the line's height z where it comes nearest the tile's
+// center, until stop returns true; whether it did. Distances along the line are
+// fractions: no square roots.
+function walkLine(ex, ey, ez, tx, ty, tz, stop) {
   let ci = Math.floor(ex), cj = Math.floor(ey);
   const ti = Math.floor(tx), tj = Math.floor(ty);
-  if (ci === ti && cj === tj) return true;
+  if (ci === ti && cj === tj) return false;
   const dx = tx - ex, dy = ty - ey, dz = tz - ez, len2 = dx * dx + dy * dy;
   // t (0 at the eye, 1 at the target) at which the line next crosses a vertical (i) and a
   // horizontal (j) tile edge, and how much t each whole tile takes
@@ -115,12 +117,19 @@ function clearLine(ex, ey, ez, tx, ty, tz) {
   let tMaxJ = dy !== 0 ? (dy > 0 ? cj + 1 - ey : ey - cj) * tDeltaJ : Infinity;
   for (let n = Math.abs(ti - ci) + Math.abs(tj - cj); n > 0; n--) {
     if (tMaxI < tMaxJ) { ci += stepI; tMaxI += tDeltaI; } else { cj += stepJ; tMaxJ += tDeltaJ; }
-    if (ci === ti && cj === tj) return true;
+    if (ci === ti && cj === tj) return false;
     let t = ((ci + 0.5 - ex) * dx + (cj + 0.5 - ey) * dy) / len2;
     t = t < 0 ? 0 : t > 1 ? 1 : t;
-    if (sightHeightAt(ci, cj) > ez + dz * t) return false;
+    if (stop(ci, cj, ez + dz * t)) return true;
   }
-  return true;
+  return false;
+}
+
+// Whether the line passes above every tile in between: the ground at each one's center,
+// and any obstacle on it.
+const sightBlocked = (i, j, z) => sightHeightAt(i, j) > z;
+function clearLine(ex, ey, ez, tx, ty, tz) {
+  return !walkLine(ex, ey, ez, tx, ty, tz, sightBlocked);
 }
 
 // Whether critter a, sight aside, has a line of sight from its eye to b's.
@@ -130,12 +139,32 @@ function canSee(a, b) {
     b.gx, b.gy, sim.heightAt(b.gx, b.gy) + eyeLevels(b));
 }
 
-// Whether critter a sees the ground at the center of tile (i, j) (in its sight rectangle
-// and line of sight).
-function canSeeTile(a, i, j) {
-  if (!sim.can(a, "see") || !inSight(i + 0.5 - a.gx, j + 0.5 - a.gy, sightShare(a))) return false;
+// Whether critter a sees grid point (gx, gy) at height gz (by default, the ground there):
+// in its sight rectangle and line of sight.
+function canSeePoint(a, gx, gy, gz = sim.heightAt(gx, gy)) {
+  if (!sim.can(a, "see") || !inSight(gx - a.gx, gy - a.gy, sightShare(a))) return false;
   if (!use.lineOfSight) return true;
-  return clearLine(a.gx, a.gy, sim.heightAt(a.gx, a.gy) + eyeLevels(a), i + 0.5, j + 0.5, sim.heightAt(i + 0.5, j + 0.5));
+  return clearLine(a.gx, a.gy, sim.heightAt(a.gx, a.gy) + eyeLevels(a), gx, gy, gz);
+}
+
+// Whether critter a sees the ground at the center of tile (i, j).
+function canSeeTile(a, i, j) {
+  return canSeePoint(a, i + 0.5, j + 0.5);
+}
+
+// Whether an obstacle (sim.obstacleHeightAt) stands in the way of critter a's line of
+// sight to grid point (gx, gy) at height gz (by default, the ground there), whatever else
+// does.
+const obstacleBlocks = (i, j, z) => sim.obstacleHeightAt(i, j) > 0 && sightHeightAt(i, j) > z;
+function obstacleInWay(a, gx, gy, gz = sim.heightAt(gx, gy)) {
+  if (!use.lineOfSight) return false;
+  return walkLine(a.gx, a.gy, sim.heightAt(a.gx, a.gy) + eyeLevels(a), gx, gy, gz,
+    obstacleBlocks);
+}
+
+// Whether critter a sees creature b (alive or a corpse), as perceive tells by sight.
+function seesCreature(a, b) {
+  return sim.can(a, "see") && inSight(b.gx - a.gx, b.gy - a.gy, sightShare(a)) && canSee(a, b);
 }
 
 // HEARING: how far a creature moving on each ground, at each gait, can be heard, in tiles
@@ -280,7 +309,7 @@ function attach(theSim) {
 }
 
 return {
-  attach, perceive, grassAround, trailsAround, inSight, canSee, canSeeTile, use, sightShare, sky, nightSightShare,
+  attach, perceive, grassAround, trailsAround, inSight, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
   sightHalfWidthTiles, sightHalfHeightTiles, hearingRangeTiles, airScentRangeTiles, eyeLevelsBySpecies, sniffTiles,
 };
 

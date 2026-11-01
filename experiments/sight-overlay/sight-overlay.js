@@ -1,4 +1,6 @@
 // SIGHT OVERLAY - a shelved experiment, kept for reference. NOT LOADED by the game.
+// Superseded by the SIGHT VIEW in animat.js (line of sight now in senses.js), which shows
+// what the player's wolf sees on the canvas, with straight-edged shadows.
 // (Written for the view as it was then, of DOM elements; animat.js now paints one canvas,
 // so its animat.js and style.css parts, and sight.test.js, would need rewriting for that.)
 //

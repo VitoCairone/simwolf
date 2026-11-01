@@ -67,6 +67,12 @@ art from them.
   young sheets) are the artist's corpse frame, edited (mouth and eye closed, a breathing
   frame): `extract_wolf_sheet.py`. A stopgap until real lying-down frames are drawn.
 
+- **Shore corners.** `images/shore-outer.png` (outer corners, water off a corner of land)
+  and `images/shore-inner.png` (interior corners, water in a notch of land) are made from
+  the artist's straight shore sprites (`tiles.png` row 9, columns 0-1) by
+  `spritecraft/make_shore_tiles.py`, so they join the straight ones seamlessly. The
+  artist's own corner sprites (columns 2-5) are not used: they don't match the straight
+  ones.
 - **Deer facing up, right and down.** The artist drew the stag on the 4 diagonals only
   (`images/deer-land.png`). Rows 4 (↑), 5 (→) and 6 (↓) of the game's sheet
   `images/stag-land.png` (← is → mirrored) are drawn by `spritecraft/deer_facings.py`:

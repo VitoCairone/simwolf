@@ -36,7 +36,8 @@
 // it, it steps aside first (giveWay).
 // HUNGER: its two meters (sim.js, BODY): a.food, the energy its body holds, and a.gut, how
 // full its stomach is. It eats while its body is hungry, until its stomach is full
-// (gutFullAt) or its body is; and starts again only with room in its stomach.
+// (a.stomachFull: it can take no more; or a.gut at gutFullAt) or its body is; and starts
+// again only with room in its stomach.
 // Every move goes through steer, which finds a way round obstacles.
 
 const mind = (() => {
@@ -51,7 +52,7 @@ const deerCommitS = 0.75;        // keep to a chosen way to flee at least this l
 const deerCaughtBetween = 0.3;   // the pulls of wolves cancel to below this share: break sideways
 // Above this share of a full meter, courting and mating come before eating.
 const romanceAbove = 0.5;
-const gutFullAt = 0.99;          // stops eating with its stomach this full
+const gutFullAt = 0.99;          // stops eating with its stomach this full (or full: see HUNGER)
 const deerGrazeBelow = 0.8;      // a deer starts grazing with its food meter below this...
 const deerGrazeGutBelow = 0.5;   // ...and its stomach below this
 const deerFullAt = 0.99;         // ...and grazes until it is this full (or its stomach is)
@@ -109,6 +110,10 @@ const keepHeadingCos2 = 0.97;    // keep the current heading within 10 degrees (
 const detourS = 3;               // keep going round an obstacle the same way this long
 const reverseAgainS = 1;         // don't turn right round again sooner than this
 const decideEveryS = 0.1;
+
+// Whether a's stomach can take no more: full to the brim, or its meter full (see HUNGER).
+// (A stomach full of poorer food than its usual reads less than full.)
+function stomachFull(a) { return a.stomachFull || a.gut >= gutFullAt; }
 
 const IDLE = { gait: "idle" };
 const EAT = { gait: "eat" };
@@ -230,10 +235,11 @@ function expectedAt(k, now) {
 // the rest of the detour. It avoids a direction it was just blocked in (by a critter,
 // say), and keeps its heading while within keepHeadingCos2 of the wanted way, since each
 // new heading costs the simulation a square root. Carrying on needs one tile clear
-// ahead, turning needs two, so it doesn't flip between ways. With dry, it also keeps out
-// of the water (while on land).
+// ahead, turning needs two, so it doesn't flip between ways; but going to a spot (goal:
+// (dx, dy) is the way there), it looks no further than the spot, so what lies beyond a
+// carcass doesn't keep it away. With dry, it also keeps out of the water (while on land).
 const KEEP = "keep";
-function steer(a, m, dx, dy, now, dry = false) {
+function steer(a, m, dx, dy, now, dry = false, goal = false) {
   const moving = a.targetSpeed > 0;
   const keepDry = dry && a.pose !== "swim";
   const bin = (vx, vy) => sim.getDir(vx, vy, a.currentDirection || 0);
@@ -267,7 +273,8 @@ function steer(a, m, dx, dy, now, dry = false) {
     const along = a.hx * dx + a.hy * dy;
     if (along > 0 && along * along >= keepHeadingCos2 * (dx * dx + dy * dy) && clear(a.hx, a.hy, 1)) return KEEP;
   }
-  if (clear(dx, dy, 1) && clear(dx, dy, 2)) { m.detour = null; return [dx, dy]; }
+  const far = goal ? Math.min(2, Math.max(Math.abs(dx), Math.abs(dy))) : 2;
+  if (clear(dx, dy, Math.min(1, far)) && clear(dx, dy, far)) { m.detour = null; return [dx, dy]; }
 
   const want = bin(dx, dy);
   const turned = k => (want + 8 + m.detour.side * k) % 8;
@@ -297,8 +304,8 @@ function steer(a, m, dx, dy, now, dry = false) {
 
 // The intent to go along (dx, dy) at a gait, steering round what's in the way. Rather
 // than turn right round twice within reverseAgainS, it stands still.
-function move(a, m, dx, dy, gait, now, dry = false) {
-  const way = steer(a, m, dx, dy, now, dry);
+function move(a, m, dx, dy, gait, now, dry = false, goal = false) {
+  const way = steer(a, m, dx, dy, now, dry, goal);
   if (way === null) return IDLE;
   if (way === KEEP) {
     // the same vector as before, so the simulation keeps its heading
@@ -380,7 +387,7 @@ function decideDeer(a, m, now) {
 // An intent, or null if not grazing or no grass worth it is in sight.
 function graze(a, m, now) {
   if (a.pose === "swim" || !sim.can(a, "eat")) return null;
-  if (m.grazing && (a.food >= deerFullAt || a.gut >= gutFullAt)) m.grazing = false;
+  if (m.grazing && (a.food >= deerFullAt || stomachFull(a))) m.grazing = false;
   if (!m.grazing && a.food < deerGrazeBelow && a.gut < deerGrazeGutBelow) m.grazing = true;
   if (!m.grazing) return null;
   const worth = deerBiteShare * sim.grassMaxKg * 0.999; // (grass is stored as 32-bit floats)
@@ -461,7 +468,7 @@ function decideWolf(a, m, now) {
   const suckling = sim.isInfant(a) && nurseOrSuckle(a, m, now);
   if (suckling) return suckling;
   const feeding = m.mode === "feed"
-    ? a.food < wolfFullAt && a.gut < gutFullAt : a.food < wolfFeedBelow && a.gut < wolfFeedGutBelow;
+    ? a.food < wolfFullAt && !stomachFull(a) : a.food < wolfFeedBelow && a.gut < wolfFeedGutBelow;
   if (feeding && sim.can(a, "eat")) {
     let carcass = null, bestD2 = Infinity;
     for (const k of m.known.values()) {
@@ -475,7 +482,7 @@ function decideWolf(a, m, now) {
       // crowded out near it (others eating): waits its turn rather than circling
       if (bestD2 <= feedQueueTiles * feedQueueTiles && a.blockedTick > m.lastTurn) m.feedWaitUntil = now + ticks(feedWaitS);
       if (now < (m.feedWaitUntil ?? -Infinity)) return IDLE;
-      return move(a, m, carcass.gx - a.gx, carcass.gy - a.gy, "trot", now);
+      return move(a, m, carcass.gx - a.gx, carcass.gy - a.gy, "trot", now, false, true);
     }
   }
   const nursing = nurseOrSuckle(a, m, now);
@@ -640,7 +647,7 @@ function nurseOrSuckle(a, m, now) {
   }
   if (!sim.isInfant(a) || a.pose === "swim") { m.suckle = null; return null; }
   const s = m.suckle;
-  const full = a.food >= suckleFullAt || a.gut >= gutFullAt;
+  const full = a.food >= suckleFullAt || stomachFull(a);
   if (s && (full || s.retry > now)) { if (full) m.suckle = null; return null; }
   if (!s && (a.food >= suckleBelow || a.gut >= suckleGutBelow)) return null;
   if (!s) m.suckle = { since: null, retry: -Infinity };
@@ -850,7 +857,7 @@ function findNearestLand(a, gx, gy, maxR = Infinity) {
 
 // GIVING WAY: a critter at ease (standing still, wandering or keeping near kin)
 // that another has just moved into (sim's BUMPED: it feels it) steps aside for yieldS,
-// across the bumper's way, to the side it can step to; so a family around one of them
+// across the bumper's way, to the side it is on if it can step there; so a family around one of them
 // never pens it in. Then it carries on.
 function giveWay(a, m, intent, now) {
   const atEase = intent === IDLE || (intent && intent.gait === "idle")
@@ -858,9 +865,12 @@ function giveWay(a, m, intent, now) {
   if (m.yield && now < m.yield.until && atEase) return m.yield.intent;
   m.yield = null;
   if (!atEase || a.pose === "swim" || !(sim.tickCount - a.bumpedTick <= turnTicks)) return intent;
-  // across the bumper's way: whichever side it can step to (the left first)
+  // across the bumper's way, to the side of it it is on (so it draws apart from it), else
+  // the other
   const dx = a.bumpedDx, dy = a.bumpedDy;
-  for (const [sx, sy] of [[-dy, dx], [dy, -dx]]) {
+  const left = -dy * (a.gx - a.bumpedX) + dx * (a.gy - a.bumpedY) >= 0;
+  const sides = [[-dy, dx], [dy, -dx]];
+  for (const [sx, sy] of left ? sides : sides.reverse()) {
     const k = 1 / Math.max(Math.abs(sx), Math.abs(sy), 1e-6);
     if (!sim.canStepTo(a, a.gx + sx * k, a.gy + sy * k)) continue;
     m.yield = { until: now + ticks(yieldS), intent: { dx: sx, dy: sy, gait: "walk" } };

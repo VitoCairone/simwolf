@@ -9,6 +9,7 @@
 const animat = (() => {
 
 let sim = null; // set by attach()
+let senses = null; // set by attach(), if given: for the SIGHT VIEW
 
 // PROJECTION: isometric, a grid square drawn as a diamond half as high as it is wide.
 const tileSize = 32;
@@ -229,6 +230,7 @@ function frameColumn(a, fd, sinceTick = a.poseTick ?? 0) {
 //   3. land critters and corpses (100000 + 100 * depth) and boulders (100000 + 100 * their
 //      tile center's depth), in depth order; on a tie a boulder first; a heart over its pair
 //   4. the debug outline
+// In the SIGHT VIEW each chunk's mask of unseen ground goes right after its terrain.
 // spriteZIndex and the tiles' z keep these numbers (as the DOM view's z-indexes were).
 const zSwimLandBase = 1000;
 const zLandCritterBase = 100000;
@@ -254,6 +256,7 @@ const fieldWrapper = el("field-wrapper");
 const canvas = el("field-canvas");
 const ctx = canvas.getContext("2d");
 const backgroundColor = "#9dd4f3"; // beyond the map
+const sightBackgroundColor = "#000"; // beyond the map in the SIGHT VIEW
 const windFillEl = el("wind-meter-fill");
 const staminaFillEl = el("stamina-meter-fill");
 const foodFillEl = el("food-meter-fill");
@@ -312,12 +315,12 @@ function sheetImage(sheet, stage, hind) {
 }
 const tilesImage = IMG + "tiles.png";
 const groundImage = IMG + "ground-slopes.png";
-const shoreRotatedImage = IMG + "shore-rotated.png";
+const shoreOuterImage = IMG + "shore-outer.png";
 const shoreInnerImage = IMG + "shore-inner.png";
 const heartImage = IMG + "heart.png";
 const debugTileImage = IMG + "debug-tile.png";
 const waterCell = [192, 288]; // plain water in tiles.png
-const terrainImages = [tilesImage, groundImage, shoreRotatedImage, shoreInnerImage];
+const terrainImages = [tilesImage, groundImage, shoreOuterImage, shoreInnerImage];
 
 // PAINTING: a target is a 2D context and how world pixels map to its pixels: x * A + Bx,
 // y * A + By. Pixel art is scaled without smoothing, and every cell lands on whole pixels.
@@ -407,8 +410,10 @@ function worldToScreen(px, py) {
 // wave, never stopping short in open water. Three sprite sets draw it, each set's
 // columns being its animation frames:
 //   STRAIGHT  tiles.png row 9, columns 0-1: light along one edge, the front parallel to it
-//   CORNER    tiles.png row 9, columns 2-5: light in one corner, the front an arc around it
+//   CORNER    images/shore-outer.png: light in one corner, the front an arc around it
 //   INTERIOR  images/shore-inner.png: light along two edges that meet, the front a V
+// (both made from the straight sprites by spritecraft/make_shore_tiles.py, so the three
+// join seamlessly; tiles.png's own corner sprites, row 9 columns 2-5, aren't used)
 // Which water tile gets which (shorePlacementAt), by the land along its edges:
 //   one edge          STRAIGHT, light to it
 //   two edges meeting INTERIOR, carrying the straight waves either side round the bend
@@ -419,19 +424,20 @@ function worldToScreen(px, py) {
 //                     corner have a wave crossing to it, so a rectangle of land gets
 //                     exactly 4 corners
 //   otherwise         plain water
-// Sprites are mirrored about the diamond's center, or for a corner on the left or right,
-// taken from images/shore-rotated.png (a quarter turn no mirroring can make). One clock
-// steps every shore together: every shoreFrameTicks of game time, 4-frame sets advance a
-// frame and 2-frame sets hold each frame for two steps, so all loops stay in step.
+// Sprites are mirrored about the diamond's center; the corner and interior sets have a
+// row for a light corner at the top and one at the right (a quarter turn no mirroring can
+// make). One clock steps every shore together: every shoreFrameTicks of game time, 4-frame
+// sets advance a frame and 2-frame sets hold each frame for two steps, so all loops stay
+// in step.
 // Water and placements are worked out once per tile and kept: the terrain never changes.
 const shoreFrameTicks = 24;
-const shoreLoopSteps = 4;       // steps in a loop (the corner set's frames)
+const shoreLoopSteps = 4;       // steps in a loop (the interior set's frames)
 const shoreSheetRowY = 9 * 32;  // y of row 9 in tiles.png
 const shoreLookTiles = 3;
 
 const shoreSets = {
   linear: { columns: [0, 1] },
-  corner: { columns: [2, 3, 4, 5] },
+  corner: { columns: [0, 1] },     // (columns of images/shore-outer.png)
   inner: { columns: [0, 1, 2, 3] }, // (columns of images/shore-inner.png)
 };
 // A tile's edges as drawn: TL top-left (grid W), TR top-right (N), BL bottom-left (S),
@@ -448,16 +454,16 @@ const cornerStep = { T: [-1, -1], R: [1, -1], B: [1, 1], L: [-1, 1] };
 // is at.
 const shoreVariants = {
   linear: {
-    TR: { set: "linear", flipX: false, flipY: false, rotated: false },
-    TL: { set: "linear", flipX: true,  flipY: false, rotated: false },
-    BR: { set: "linear", flipX: false, flipY: true,  rotated: false },
-    BL: { set: "linear", flipX: true,  flipY: true,  rotated: false },
+    TR: { set: "linear", flipX: false, flipY: false },
+    TL: { set: "linear", flipX: true,  flipY: false },
+    BR: { set: "linear", flipX: false, flipY: true },
+    BL: { set: "linear", flipX: true,  flipY: true },
   },
-  corner: {
-    T: { set: "corner", flipX: false, flipY: false, rotated: false },
-    B: { set: "corner", flipX: false, flipY: true,  rotated: false },
-    R: { set: "corner", flipX: false, flipY: false, rotated: true },
-    L: { set: "corner", flipX: true,  flipY: false, rotated: true },
+  corner: { // row: of images/shore-outer.png
+    T: { set: "corner", flipX: false, flipY: false, row: 0 },
+    B: { set: "corner", flipX: false, flipY: true,  row: 0 },
+    R: { set: "corner", flipX: false, flipY: false, row: 1 },
+    L: { set: "corner", flipX: true,  flipY: false, row: 1 },
   },
   inner: { // row: of images/shore-inner.png
     T: { set: "inner", flipX: false, flipY: false, row: 0 },
@@ -588,9 +594,8 @@ function waterCellAt(i, j, clock) {
   const columns = shoreSets[v.set].columns;
   // the set's frame for this step of the loop
   const k = Math.floor((clock % shoreLoopSteps) * columns.length / shoreLoopSteps);
-  // shore-rotated.png holds just the corner frames, in a row; shore-inner.png a row per
-  // drawn notch
-  if (v.rotated) return { image: shoreRotatedImage, sx: k * tileSize, sy: 0, flipX: v.flipX, flipY: v.flipY, shore: v, frame: k };
+  // shore-outer.png and shore-inner.png have a row per light corner (see shoreVariants)
+  if (v.set === "corner") return { image: shoreOuterImage, sx: columns[k] * tileSize, sy: v.row * tileSize, flipX: v.flipX, flipY: v.flipY, shore: v, frame: k };
   if (v.set === "inner") return { image: shoreInnerImage, sx: columns[k] * tileSize, sy: v.row * tileSize, flipX: v.flipX, flipY: v.flipY, shore: v, frame: k };
   return { image: tilesImage, sx: columns[k] * tileSize, sy: shoreSheetRowY, flipX: v.flipX, flipY: v.flipY, shore: v, frame: k };
 }
@@ -670,7 +675,7 @@ function describeTile(i, j, clock = shoreClockNow()) {
     const [col, brow] = boulderSpriteAt(i, j, terrain);
     const centerAboveBase = (corners[0] + corners[1] + corners[2] + corners[3]) / 4 - base;
     const centerY = isoProject(0.5, 0.5)[1] - centerAboveBase * levelHeightPY;
-    t.boulder = { col, row: brow, left: t.left, top: t.top + centerY - boulderFootCenterY, z: boulderZIndex(i, j) };
+    t.boulder = { i, j, col, row: brow, left: t.left, top: t.top + centerY - boulderFootCenterY, z: boulderZIndex(i, j) };
   }
   return t;
 }
@@ -690,19 +695,21 @@ function paintBoulder(target, b) {
 }
 
 // CHUNKS: the terrain is painted once into canvases of chunkTiles x chunkTiles tiles, two
-// a chunk (its water, its land), and those are painted each frame. A chunk is painted
-// afresh when its grass changes height (land), when the shores step (water with shores),
-// or when an image loads; chunks out of view for chunkKeepFrames frames are dropped.
+// a chunk (its water, its land), and those are painted each frame (with their masks in the
+// SIGHT VIEW). A chunk is painted afresh when its grass changes height (land), when the
+// shores step (water with shores), or when an image loads; chunks out of view for
+// chunkKeepFrames frames are dropped.
 // PAINTED BACK TO FRONT: within a chunk, tiles by depth (i + j); chunks by i + j of their
 // own (a tile in front of another that it can cover is never in a chunk painted before
 // it). All water before all land.
-const chunkTiles = 16;
+const chunkTiles = 8;
 const chunkKeepFrames = 120;
 const chunks = new Map(); // ci * 10000 + cj -> chunk
 let frameCount = 0;
 
+const chunkLayers = ["water", "land", "waterMask", "landMask"];
 function clearChunks() {
-  for (const c of chunks.values()) for (const k of ["water", "land"]) if (c[k]) c[k].width = 0;
+  for (const c of chunks.values()) for (const k of chunkLayers) if (c[k]) c[k].width = 0;
   chunks.clear();
 }
 
@@ -717,7 +724,8 @@ function chunkAt(ci, cj) {
   const y0 = (i0 + j0) * qtrTile - sim.maxLevel * levelHeightPY - groundBaseY - tileRiserPY;
   const y1 = (i1 + j1) * qtrTile + groundCellH + tileRiserPY;
   c = { ci, cj, i0, j0, i1, j1, x0, y0, w: x1 - x0, h: y1 - y0, water: null, land: null,
-    hasWater: false, hasLand: false, shores: false, waterClock: -1, landDirty: true, boulders: [], used: 0, scanned: false };
+    hasWater: false, hasLand: false, shores: false, waterClock: -1, landDirty: true, boulders: [], used: 0, scanned: false,
+    waterMask: null, landMask: null, maskDirty: true, maskScale: 0 };
   chunks.set(key, c);
   return c;
 }
@@ -788,10 +796,11 @@ let grassSerial = 0;
 function noteGrass() {
   const { serial, tiles } = sim.grassChangesSince(grassSerial);
   grassSerial = serial;
-  if (!tiles) { for (const c of chunks.values()) c.landDirty = true; return; }
+  // (the masks too: grass changes its tiles' shapes; see SIGHT VIEW)
+  if (!tiles) { for (const c of chunks.values()) c.landDirty = c.maskDirty = true; return; }
   for (const [i, j] of tiles) {
     const c = chunks.get(Math.floor(i / chunkTiles) * 10000 + Math.floor(j / chunkTiles));
-    if (c) c.landDirty = true;
+    if (c) c.landDirty = c.maskDirty = true;
   }
 }
 
@@ -810,6 +819,348 @@ function tilesInView() {
     if (inView(t.left, t.top - (t.kind === "water" ? 0 : groundBaseY), tileSize, h)) out.push(t);
   });
   return out;
+}
+
+// SIGHT VIEW: while the camera follows the player's wolf, the view shows what it sees
+// (senses.canSeePoint, seesCreature): ground it can see as usual; ground it has seen
+// before but can't see now greyed out (no colour, darker: sightGrey), with its boulders;
+// tiles it has never seen black, and the map's surroundings black. Only the critters and
+// corpses it sees are drawn (and itself). What it has seen is the wolf's own: a new
+// player's wolf starts having seen nothing.
+// FIELD: whether the wolf sees the ground is sampled every sightSampleTiles over its sight
+// rectangle, worked out again at most every sightEveryS of game time while it moves (or
+// the light changes its sight). A tile is seen if its center or the middle of an edge is.
+// A tile seen before but not all of it now is shown as seen all the same if a grown deer
+// standing on its center would be seen (eye to eye), and no obstacle stands in the way of
+// any part of it the wolf doesn't see (looksSeen): so the terrain's own shadows don't
+// flicker over every fold of the ground, while an obstacle's stay sharp. (Critters hide
+// nothing from one another: see SIGHT in senses.js.) Otherwise a tile it partly sees is
+// split along the line between seen and unseen ground: on each side of a sample cell
+// whose ends differ, where it changes is found by halving (sightBisectSteps), so a
+// shadow's edges run straight, where the lines of sight run.
+// MASKS: each chunk keeps a mask for its water and one for its land, painted back to front
+// like its terrain: each tile first clears what it covers, then paints its unseen part
+// from greyed-out or black copies of its sprites (sightSheet); seen ground is left clear.
+// They are painted at sight.maskScale times the world's pixels (2 from zoom 2), so the
+// shadows' edges are finer than the art's pixels, and afresh when their tiles' states
+// change (or a partly seen tile's line moves, or its grass): sightMasksAFrame a frame,
+// the nearest the wolf first. Each chunk's mask is painted right after its terrain
+// layer, so the chunks in front cover it as their terrain does.
+// Boulders, swimmers (and the land in front of them) and critters, drawn after, are
+// greyed out or left out by the same rules. Water is greyed as plain water (its shores
+// still).
+const sightSampleTiles = 0.5;
+const sightEveryS = 0.1;
+const sightBisectSteps = 6;
+const sightClipPadTiles = 0.1;
+const sightMasksAFrame = 4;
+const sightTuftsPY = 6; // grass tufts stand up to this above a tile's back edges
+const sightGrey = "#8c8c8c"; // greying out: no colour, then darkened by this
+// a tile's state in the view
+const SEEN = 0, PART = 1, GREYED = 2, BLACK = 3;
+const sight = {
+  wolf: null,       // whose sight
+  seen: null,       // by tile: 1 once the wolf has seen it
+  shown: null,      // by tile: its state (SEEN ... BLACK) as last worked out
+  field: null,      // { eye (a copy of the wolf as it was), ox, oy, n, vis, crossings, boulders }
+  tick: -Infinity, gx: NaN, gy: NaN, share: NaN, stage: -1,
+  maskScale: 0,
+};
+
+function sightViewOn() {
+  return !!senses && pinned === sim.pcWolf && sim.isLiveCritter(sim.pcWolf);
+}
+
+// Every chunk's masks to be painted afresh at once.
+function resetSightMasks() {
+  for (const c of chunks.values()) c.maskScale = 0;
+}
+
+// Works out the field again when due (see FIELD), and what the wolf has now seen.
+function updateSight() {
+  const w = sim.pcWolf, W = sim.gridWidthN, H = sim.gridHeightN;
+  if (w !== sight.wolf) {
+    sight.wolf = w; sight.seen = new Uint8Array(W * H); sight.shown = new Uint8Array(W * H).fill(BLACK);
+    sight.field = null; sight.tick = -Infinity; resetSightMasks();
+  }
+  if (!sim.isLiveCritter(w)) return;
+  const share = sim.can(w, "see") ? senses.sightShare(w) : 0, stage = sim.youngStage(w);
+  const changed = w.gx !== sight.gx || w.gy !== sight.gy || Math.abs(share - sight.share) > 0.005 || stage !== sight.stage;
+  if (sight.field && (!changed || sim.tickCount - sight.tick < Math.round(sightEveryS / sim.tempo))) return;
+  Object.assign(sight, { tick: sim.tickCount, gx: w.gx, gy: w.gy, share, stage });
+  // the rectangle's bounds: |dx - dy| <= a, |dx + dy| <= b, so |dx|, |dy| <= (a + b) / 2
+  const reach = Math.ceil(share * (senses.sightHalfWidthTiles + senses.sightHalfHeightTiles) / 2) + 1;
+  const ox = Math.floor(w.gx) - reach, oy = Math.floor(w.gy) - reach, tiles = 2 * reach + 1;
+  const per = Math.round(1 / sightSampleTiles), n = tiles * per + 1;
+  const eye = { ...w };
+  const vis = new Uint8Array(n * n);
+  if (share > 0) for (let u = 0; u < n; u++) for (let v = 0; v < n; v++)
+    vis[u * n + v] = senses.canSeePoint(eye, ox + u / per, oy + v / per) ? 1 : 0;
+  const old = sight.field;
+  sight.field = { eye, ox, oy, n, per, tiles, vis, crossings: new Map(), boulders: new Map() };
+  // what it has seen, and each tile's state, over the old field's tiles and the new
+  const at = (i, j) => i * H + j;
+  const boxes = [[ox, oy, tiles]];
+  if (old) boxes.push([old.ox, old.oy, old.tiles]);
+  const dirty = new Set();
+  for (const [bx, by, bt] of boxes) for (let i = Math.max(0, bx); i < Math.min(W, bx + bt); i++)
+    for (let j = Math.max(0, by); j < Math.min(H, by + bt); j++) {
+      const st = fieldTileState(i, j);
+      const was = sight.shown[at(i, j)];
+      if (st !== was || st === PART) dirty.add(Math.floor(i / chunkTiles) * 10000 + Math.floor(j / chunkTiles));
+      sight.shown[at(i, j)] = st;
+    }
+  for (const key of dirty) { const c = chunks.get(key); if (c) c.maskDirty = true; }
+}
+
+// Tile (i, j)'s state by the field (marking it seen if it is), or by what was seen.
+function fieldTileState(i, j) {
+  const f = sight.field, k = i * sim.gridHeightN + j;
+  const u0 = (i - f.ox) * f.per, v0 = (j - f.oy) * f.per;
+  if (u0 < 0 || v0 < 0 || u0 + f.per >= f.n || v0 + f.per >= f.n) return sight.seen[k] ? GREYED : BLACK;
+  let any = 0, all = 1;
+  for (let u = u0; u <= u0 + f.per; u++) for (let v = v0; v <= v0 + f.per; v++) {
+    const s = f.vis[u * f.n + v]; any |= s; all &= s;
+  }
+  const h = f.per / 2, mid = (u, v) => f.vis[(u0 + u) * f.n + v0 + v];
+  if (mid(h, h) || mid(h, 0) || mid(0, h) || mid(f.per, h) || mid(h, f.per)) sight.seen[k] = 1;
+  if (!sight.seen[k]) return BLACK;
+  if (all || looksSeen(i, j, u0, v0)) return SEEN;
+  return any ? PART : GREYED;
+}
+
+// Whether tile (i, j), seen before but not all of it now, is shown as seen all the same
+// (see FIELD): a deer standing on it would be seen, and no obstacle hides any of it.
+function looksSeen(i, j, u0, v0) {
+  const f = sight.field, cx = i + 0.5, cy = j + 0.5;
+  if (sim.obstacleAt(i, j)) return false;
+  if (!senses.canSeePoint(f.eye, cx, cy, sim.heightAt(cx, cy) + senses.eyeLevelsBySpecies.deer)) return false;
+  for (let u = u0; u <= u0 + f.per; u++) for (let v = v0; v <= v0 + f.per; v++)
+    if (!f.vis[u * f.n + v] && senses.obstacleInWay(f.eye, f.ox + u / f.per, f.oy + v / f.per)) return false;
+  return true;
+}
+
+function tileSightState(i, j) {
+  return sight.shown ? sight.shown[i * sim.gridHeightN + j] : SEEN;
+}
+
+// Where the wolf's sight changes between samples (u0, v0) and (u1, v1) (neighbours, one
+// seen and one not): a grid point, found by halving.
+function sightCrossing(u0, v0, u1, v1) {
+  const f = sight.field;
+  const key = (Math.min(u0, u1) * f.n + Math.min(v0, v1)) * 2 + (u0 === u1 ? 1 : 0);
+  let p = f.crossings.get(key);
+  if (p) return p;
+  const x0 = f.ox + u0 / f.per, y0 = f.oy + v0 / f.per, x1 = f.ox + u1 / f.per, y1 = f.oy + v1 / f.per;
+  const seen0 = f.vis[u0 * f.n + v0] === 1;
+  let lo = 0, hi = 1; // lo on (u0, v0)'s side
+  for (let k = 0; k < sightBisectSteps; k++) {
+    const t = (lo + hi) / 2;
+    if (senses.canSeePoint(f.eye, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t) === seen0) lo = t; else hi = t;
+  }
+  const t = (lo + hi) / 2;
+  p = [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t];
+  f.crossings.set(key, p);
+  return p;
+}
+
+// The unseen parts of partly seen tile (i, j): polygons of grid points, one or two a sample
+// cell (marching squares: each cell's unseen corners, and where its sides change).
+function unseenPolygons(i, j) {
+  const f = sight.field, out = [];
+  const u0 = (i - f.ox) * f.per, v0 = (j - f.oy) * f.per;
+  const pt = (u, v) => [f.ox + u / f.per, f.oy + v / f.per];
+  for (let a = 0; a < f.per; a++) for (let b = 0; b < f.per; b++) {
+    const cs = [[u0 + a, v0 + b], [u0 + a + 1, v0 + b], [u0 + a + 1, v0 + b + 1], [u0 + a, v0 + b + 1]];
+    const s = cs.map(([u, v]) => f.vis[u * f.n + v]);
+    const hidden = s.filter(x => !x).length;
+    if (hidden === 0) continue;
+    if (hidden === 4) { out.push(cs.map(c => pt(...c))); continue; }
+    const cross = k => sightCrossing(...cs[k], ...cs[(k + 1) % 4]);
+    // two unseen corners across from each other: one piece if the cell's middle is unseen
+    const saddle = hidden === 2 && s[0] === s[2];
+    if (saddle && senses.canSeePoint(f.eye, ...pt(u0 + a + 0.5, v0 + b + 0.5))) {
+      for (let k = 0; k < 4; k++) if (!s[k]) out.push([cross((k + 3) % 4), pt(...cs[k]), cross(k)]);
+      continue;
+    }
+    const poly = [];
+    for (let k = 0; k < 4; k++) {
+      if (!s[k]) poly.push(pt(...cs[k]));
+      if (s[k] !== s[(k + 1) % 4]) poly.push(cross(k));
+    }
+    out.push(poly);
+  }
+  return out;
+}
+
+// Whether the wolf sees the top of the boulder on tile (i, j) (kept for the field).
+function seesBoulder(i, j) {
+  const f = sight.field;
+  if (!f) return false;
+  const k = i * sim.gridHeightN + j;
+  let v = f.boulders.get(k);
+  if (v === undefined) {
+    v = senses.canSeePoint(f.eye, i + 0.5, j + 0.5, sim.heightAt(i + 0.5, j + 0.5) + sim.obstacleHeightAt(i, j));
+    f.boulders.set(k, v);
+  }
+  return v;
+}
+
+// SHEETS for the masks, boulders and swimmers' land: a sheet greyed out ("greyed": its
+// colour taken out (blend "saturation"), then darkened (blend "multiply")), or its shapes
+// in black ("black"); null until its image has loaded.
+const sightSheets = new Map();
+function sightSheet(path, kind) {
+  const key = kind + " " + path;
+  let cv = sightSheets.get(key);
+  if (cv) return cv;
+  const im = image(path);
+  if (!im.complete || !im.naturalWidth) return null;
+  cv = document.createElement("canvas");
+  cv.width = im.naturalWidth; cv.height = im.naturalHeight;
+  const g = cv.getContext("2d");
+  g.drawImage(im, 0, 0);
+  const fill = (op, colour) => { g.globalCompositeOperation = op; g.fillStyle = colour; g.fillRect(0, 0, cv.width, cv.height); };
+  if (kind === "greyed") {
+    fill("saturation", sightGrey); fill("multiply", sightGrey);
+    g.globalCompositeOperation = "destination-in"; g.drawImage(im, 0, 0);
+  } else fill("source-in", "#000");
+  sightSheets.set(key, cv);
+  return cv;
+}
+
+// Paints tile d from a sight sheet ("greyed" or "black"), water as plain water.
+function paintTileShape(t, d, kind) {
+  if (d.kind === "water") {
+    const img = sightSheet(tilesImage, kind);
+    if (img) drawCell(t, img, waterCell[0], waterCell[1], tileSize, tileSize, d.left, d.top);
+    return;
+  }
+  const img = sightSheet(groundImage, kind);
+  if (!img) return;
+  for (const p of d.pieces)
+    drawCell(t, img, p.col * groundCellW, p.row * groundCellH, groundCellW, groundCellH, d.left, d.top + p.top);
+}
+
+// Clips target t to the unseen part of partly seen tile d: its unseen polygons on its
+// surface; below its front edges (S and E), its sides and any cliff under them; and above
+// its back edges, the grass standing up from them.
+function clipToUnseen(t, d) {
+  const water = d.kind === "water";
+  const proj = (gx, gy) => {
+    const [px, py] = water ? isoProject(gx, gy) : groundProject(gx, gy);
+    return [px * t.A + t.Bx, (py + (water ? waterSurfaceDropPY : 0)) * t.A + t.By];
+  };
+  const drop = ((water ? 1 : d.pieces.length + 1) * levelHeightPY + groundBaseY) * t.A;
+  const rise = sightTuftsPY * t.A;
+  const ctx = t.ctx;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.beginPath();
+  // every piece wound the same way, so together they make their union
+  const addPoly = pts => {
+    let area = 0;
+    for (let k = 0; k < pts.length; k++) {
+      const [x0, y0] = pts[k], [x1, y1] = pts[(k + 1) % pts.length];
+      area += x0 * y1 - x1 * y0;
+    }
+    if (area < 0) pts = [...pts].reverse();
+    ctx.moveTo(...pts[0]);
+    for (let k = 1; k < pts.length; k++) ctx.lineTo(...pts[k]);
+    ctx.closePath();
+  };
+  const eps = 1e-9, fi = d.i + 1, fj = d.j + 1;
+  // points on the tile's edges pushed out a little, to take in the edges of its sprites
+  const out = (x, lo) => Math.abs(x - lo) < eps ? lo - sightClipPadTiles : Math.abs(x - lo - 1) < eps ? lo + 1 + sightClipPadTiles : x;
+  for (const poly of unseenPolygons(d.i, d.j)) {
+    const pts = poly.map(([x, y]) => proj(out(x, d.i), out(y, d.j)));
+    addPoly(pts);
+    for (let k = 0; k < poly.length; k++) {
+      const p = poly[k], q = poly[(k + 1) % poly.length];
+      const on = (c, v) => Math.abs(p[c] - v) < eps && Math.abs(q[c] - v) < eps;
+      const front = on(0, fi) || on(1, fj), back = on(0, d.i) || on(1, d.j);
+      if (!front && !back) continue;
+      const P = pts[k], Q = pts[(k + 1) % poly.length], dy = front ? drop : -rise;
+      addPoly([P, Q, [Q[0], Q[1] + dy], [P[0], P[1] + dy]]);
+    }
+  }
+  ctx.clip();
+}
+
+// Paints tile d's unseen part (state st) from the sight sheets.
+function paintUnseenPart(t, d, st) {
+  if (st === SEEN) return;
+  if (st === PART) { t.ctx.save(); clipToUnseen(t, d); paintTileShape(t, d, "greyed"); t.ctx.restore(); }
+  else paintTileShape(t, d, st === BLACK ? "black" : "greyed");
+}
+
+// Paints chunk c's masks (see MASKS). A layer with no unseen ground has none.
+function paintChunkMasks(c) {
+  const S = sight.maskScale;
+  for (const [layer, isWater] of [["waterMask", true], ["landMask", false]]) {
+    if (!(isWater ? c.hasWater : c.hasLand)) continue;
+    const mine = (i, j) => (sim.getTerrainAt(i, j) === "water") === isWater;
+    let any = false;
+    forEachChunkTile(c, (i, j) => { if (!any && mine(i, j) && tileSightState(i, j) !== SEEN) any = true; });
+    if (!any) { if (c[layer]) c[layer].width = 0; c[layer] = null; continue; }
+    const cv = c[layer] || (c[layer] = document.createElement("canvas"));
+    if (cv.width !== c.w * S || cv.height !== c.h * S) { cv.width = c.w * S; cv.height = c.h * S; }
+    const t = { ctx: cv.getContext("2d"), A: S, Bx: -c.x0 * S, By: -c.y0 * S };
+    t.ctx.setTransform(1, 0, 0, 1, 0, 0);
+    t.ctx.imageSmoothingEnabled = false;
+    t.ctx.globalCompositeOperation = "source-over";
+    t.ctx.clearRect(0, 0, cv.width, cv.height);
+    let painted = false; // (until something is, there is nothing to clear)
+    forEachChunkTile(c, (i, j) => {
+      if (!mine(i, j)) return;
+      const st = tileSightState(i, j);
+      if (st === SEEN && !painted) return;
+      const d = describeTile(i, j);
+      if (painted) {
+        t.ctx.globalCompositeOperation = "destination-out";
+        paintTileShape(t, d, "black");
+        t.ctx.globalCompositeOperation = "source-over";
+      }
+      paintUnseenPart(t, d, st);
+      painted = painted || st !== SEEN;
+    });
+  }
+  c.maskDirty = false;
+  c.maskScale = S;
+}
+
+// Brings the masks of the chunks in view up to date: out-of-date ones at most
+// sightMasksAFrame a frame, the nearest the wolf first (the rest on later frames), but a
+// chunk's first, or at a new scale, at once.
+function updateChunkMasks(chunksShown) {
+  const S = sight.maskScale, w = sim.pcWolf;
+  const stale = [];
+  for (const c of chunksShown) {
+    if (c.maskScale !== S) paintChunkMasks(c);
+    else if (c.maskDirty) stale.push(c);
+  }
+  const d2 = c => ((c.i0 + c.i1) / 2 - w.gx) ** 2 + ((c.j0 + c.j1) / 2 - w.gy) ** 2;
+  stale.sort((a, b) => d2(a) - d2(b)).slice(0, sightMasksAFrame).forEach(paintChunkMasks);
+}
+
+// Paints chunk c's mask layer (after its terrain layer: see MASKS).
+function paintChunkMask(c, layer) {
+  const cv = c[layer], S = sight.maskScale;
+  if (!cv) return;
+  ctx.setTransform(screen.A / S, 0, 0, screen.A / S, Math.round(c.x0 * screen.A + screen.Bx), Math.round(c.y0 * screen.A + screen.By));
+  ctx.drawImage(cv, 0, 0);
+}
+
+// Whether a sprite is drawn in the sight view: the wolf's own, and what it sees.
+function sightShows(a) {
+  return a === sim.pcWolf || senses.seesCreature(sim.pcWolf, a);
+}
+
+function paintBoulderSeen(b) {
+  const st = tileSightState(b.i, b.j);
+  if (st === BLACK) return;
+  if (st === SEEN || seesBoulder(b.i, b.j)) { paintBoulder(screen, b); return; }
+  const img = sightSheet(tilesImage, "greyed");
+  if (img) drawCell(screen, img, b.col * tileSize, b.row * tileSize, tileSize, tileSize, b.left, b.top);
 }
 
 // CRITTER SPRITES: what each critter and corpse is drawn as this frame (describeCritter):
@@ -889,7 +1240,8 @@ function describeCritters() {
 }
 
 // HEARTS: a pink heart (images/heart.png) between a mating pair, above both, rising and
-// fading in and out over the act; keyed by the pair's lower uid: { left, top, opacity, z }.
+// fading in and out over the act; keyed by the pair's lower uid: { pair, left, top, opacity,
+// z }.
 const heartW = 11, heartH = 10;
 const heartFromPY = 18, heartRisePY = 22; // above the pair's ground points
 const hearts = new Map(); // lower uid -> heart
@@ -902,7 +1254,7 @@ function describeHearts() {
     if (!b) continue;
     const p = Math.min(1, Math.max(0, (sim.tickCount - a.poseTick) * sim.tempo / sim.mateActSBySpecies[a.species]));
     const [ax, ay] = groundProject(a.gx, a.gy), [bx, by] = groundProject(b.gx, b.gy);
-    hearts.set(a.uid, { left: Math.round((ax + bx) / 2 - heartW / 2),
+    hearts.set(a.uid, { pair: [a, b], left: Math.round((ax + bx) / 2 - heartW / 2),
       top: Math.round((ay + by) / 2 - heartFromPY - heartRisePY * p - heartH),
       opacity: +Math.min(1, p / 0.15, (1 - p) / 0.25).toFixed(2),
       z: Math.max(spriteZIndex(a), spriteZIndex(b)) + 1 });
@@ -926,9 +1278,18 @@ function paintDebugWolf() {
 }
 
 // Swimmer r, then the land in front of it that covers it (see DRAWING ORDER): the tiles
-// nearer the camera, in the screen columns it spans, whose columns reach up over it.
-function paintSwimmer(r) {
+// nearer the camera, in the screen columns it spans, whose columns reach up over it,
+// painted again back to front within the swimmer's frame only (outside it, a tile's sides
+// would be drawn over the land in front of it, as if raised). In the sight view that land
+// is greyed out or black as its tiles are (SIGHT VIEW).
+function paintSwimmer(r, sightOn) {
   paintSprite(screen, r);
+  const c = screen.ctx;
+  c.save();
+  c.setTransform(1, 0, 0, 1, 0, 0);
+  c.beginPath();
+  c.rect(Math.round(r.left * screen.A + screen.Bx), Math.round(r.top * screen.A + screen.By), r.w * screen.A, r.h * screen.A);
+  c.clip();
   const a = r.critter, d0 = Math.floor(a.gx + a.gy);
   const rows = Math.ceil((sim.maxLevel * levelHeightPY + groundBaseY + r.h) / qtrTile) + 2;
   // m = i - j: the screen columns the sprite spans (a tile spans (m -+ 1) * halfTile)
@@ -941,9 +1302,12 @@ function paintSwimmer(r) {
       if (tileZIndex(i, j, "land") <= r.z || sim.getTerrainAt(i, j) === "water") continue;
       const t = describeTile(i, j);
       const top = t.top - groundBaseY, h = t.pieces.at(-1).top + groundCellH + groundBaseY;
-      if (t.left < r.left + r.w && t.left + tileSize > r.left && top < r.top + r.h && top + h > r.top) paintColumn(screen, t);
+      if (!(t.left < r.left + r.w && t.left + tileSize > r.left && top < r.top + r.h && top + h > r.top)) continue;
+      paintColumn(screen, t);
+      if (sightOn) paintUnseenPart(screen, t, tileSightState(i, j));
     }
   }
+  c.restore();
 }
 
 // METERS: the player's wolf's wind, stamina and food: its body's (a.food) on the left,
@@ -976,26 +1340,37 @@ function render() {
   describeCritters();
   describeHearts();
   const clock = shoreClockNow();
+  if (senses) updateSight();
+  const sightOn = sightViewOn();
+  if (sightOn) {
+    const S = camera.zoom >= 2 ? 2 : 1;
+    sight.maskScale = S;
+  }
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.imageSmoothingEnabled = false;
-  ctx.fillStyle = backgroundColor;
+  ctx.fillStyle = sightOn ? sightBackgroundColor : backgroundColor;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   const inView2 = chunksInView();
   for (const c of inView2) { c.used = frameCount; paintChunk(c, clock); }
-  for (const c of inView2) paintChunkLayer(c, "water");
-  for (const c of inView2) paintChunkLayer(c, "land");
+  if (sightOn) updateChunkMasks(inView2);
+  for (const c of inView2) { paintChunkLayer(c, "water"); if (sightOn) paintChunkMask(c, "waterMask"); }
+  for (const c of inView2) { paintChunkLayer(c, "land"); if (sightOn) paintChunkMask(c, "landMask"); }
 
-  const shown = r => (!showOnlySet || showOnlySet.has(r.critter)) && inView(r.left, r.top, r.w, r.h);
+  // (in the sight view, only what the wolf sees: see SIGHT VIEW)
+  for (const s of sprites.values()) s.rec.hidden = sightOn && !sightShows(s.rec.critter);
+  const shown = r => (!showOnlySet || showOnlySet.has(r.critter)) && !r.hidden && inView(r.left, r.top, r.w, r.h);
   const recs = [...sprites.values()].map(s => s.rec).filter(shown);
   // swimmers among the land tiles
-  recs.filter(r => r.swim).sort((p, q) => p.z - q.z).forEach(paintSwimmer);
+  recs.filter(r => r.swim).sort((p, q) => p.z - q.z).forEach(r => paintSwimmer(r, sightOn));
   // land critters, boulders and hearts, by depth (on a tie: boulders, then sprites, then hearts)
   const items = [];
-  for (const c of inView2) for (const b of c.boulders) if (inView(b.left, b.top, tileSize, tileSize)) items.push([b.z, 0, items.length, () => paintBoulder(screen, b)]);
+  const boulderPaint = b => sightOn ? () => paintBoulderSeen(b) : () => paintBoulder(screen, b);
+  for (const c of inView2) for (const b of c.boulders) if (inView(b.left, b.top, tileSize, tileSize)) items.push([b.z, 0, items.length, boulderPaint(b)]);
   for (const r of recs) if (!r.swim) items.push([r.z, 1, items.length, () => paintSprite(screen, r)]);
-  if (!showOnlySet) for (const h of hearts.values()) items.push([h.z, 2, items.length, () => paintHeart(screen, h)]);
+  const heartShown = h => !sightOn || h.pair.every(a => !sprites.get(a.uid)?.rec?.hidden);
+  if (!showOnlySet) for (const h of hearts.values()) if (heartShown(h)) items.push([h.z, 2, items.length, () => paintHeart(screen, h)]);
   items.sort((p, q) => p[0] - q[0] || p[1] - q[1] || p[2] - q[2]);
   for (const it of items) it[3]();
   if (showDebug) paintDebugWolf();
@@ -1005,7 +1380,7 @@ function render() {
   if (frameCount % 60 === 0) {
     for (const [key, c] of chunks) {
       if (frameCount - c.used < chunkKeepFrames) continue;
-      for (const k of ["water", "land"]) if (c[k]) c[k].width = 0;
+      for (const k of chunkLayers) if (c[k]) c[k].width = 0;
       chunks.delete(key);
     }
   }
@@ -1071,7 +1446,7 @@ function spriteRect(r) {
 function critterAtScreen(clientX, clientY) {
   let best = null, bestL2 = Infinity;
   for (const s of sprites.values()) {
-    if (!s.rec) continue;
+    if (!s.rec || s.rec.hidden) continue;
     const r = spriteRect(s.rec);
     if (clientX < r.left || clientX > r.right || clientY < r.top || clientY > r.bottom) continue;
     const l2 = (clientX - (r.left + r.right) / 2) ** 2 + (clientY - (r.top + r.bottom) / 2) ** 2;
@@ -1128,11 +1503,14 @@ function showCursorCoords(g) {
     : `x: –, y: –`;
 }
 
-function attach(theSim) {
+function attach(theSim, theSenses = null) {
   if (sim) return alert("animat.attach called twice");
   if (!theSim || typeof theSim.onFrame !== "function")
     return alert("animat.attach needs the simulation (load sim.js before animat.js)");
+  if (theSenses && typeof theSenses.canSeePoint !== "function")
+    return alert("animat.attach: that's not the senses (load senses.js)");
   sim = theSim;
+  senses = theSenses;
 
   worldRadPX = halfTile + (sim.gridWidthN + sim.gridHeightN - 2) * qtrTile;
   worldDiamPY = worldRadPX;
@@ -1144,7 +1522,7 @@ function attach(theSim) {
       return alert(`animat: ${species} death animation doesn't last sim's ${deathS} s`);
   }
   // load every image now, so none is missing when first drawn
-  [tilesImage, groundImage, shoreRotatedImage, shoreInnerImage, heartImage, debugTileImage].forEach(image);
+  [...terrainImages, heartImage, debugTileImage].forEach(image);
   for (const sheet of Object.keys(sheetImages)) for (const stage of [0, 1, 2, 3, 4]) for (const hind of [false, true]) image(sheetImage(sheet, stage, hind));
 
   measureViewport();
@@ -1175,6 +1553,9 @@ return {
   tileOf: (i, j) => describeTile(i, j), tilesInView,
   showOnly: list => { showOnlySet = list ? new Set(list) : null; render(); },
   showDebug: on => { showDebug = on; render(); },
+  // the sight view: whether it is on, and tile (i, j)'s state in it ("seen", "part",
+  // "greyed", "black")
+  sightViewOn: () => sightViewOn(), tileSight: (i, j) => ["seen", "part", "greyed", "black"][tileSightState(i, j)],
   youngStage: a => sim.youngStage(a), hasAntlers,
   spriteRow, spriteZIndex, frameDataBySpeciesAndPose,
 };
