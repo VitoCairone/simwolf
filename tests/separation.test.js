@@ -1,8 +1,9 @@
 // The parts of the game stay separate:
-//  - sim.js runs on its own in Node, with no browser, page or view at all; on its own it
+//  - sim.js runs on its own in Node (with hydrology.js, which it builds its map with), with
+//    no browser, page or view at all; on its own it
 //    decides nothing (no critter moves unless told to), and with a mind (senses.js and
 //    mind.js, also running in Node) critters move by themselves
-//  - the page defines exactly five globals (sim, senses, mind, animat, controls)
+//  - the page defines exactly six globals (hydrology, sim, senses, mind, animat, controls)
 
 const path = require("path");
 const vm = require("vm");
@@ -22,11 +23,11 @@ const load = (context, file) =>
   vm.runInContext(fs.readFileSync(path.join(ROOT, file), "utf8"), context, { filename: file });
 
 async function main(browser, r) {
-  // 1a. sim.js alone, in a bare JavaScript context
+  // 1a. sim.js alone (and hydrology.js), in a bare JavaScript context
   let alone = null;
   try {
     const context = bareContext();
-    load(context, "sim.js");
+    load(context, "hydrology.js"); load(context, "sim.js");
     alone = vm.runInContext(`
       sim.init();
       const start = sim.allCritters.map(a => [a.gx, a.gy]);
@@ -49,7 +50,7 @@ async function main(browser, r) {
   let minded = null;
   try {
     const context = bareContext();
-    load(context, "sim.js"); load(context, "senses.js"); load(context, "mind.js");
+    load(context, "hydrology.js"); load(context, "sim.js"); load(context, "senses.js"); load(context, "mind.js");
     minded = vm.runInContext(`
       sim.init(); senses.attach(sim); mind.attach(sim, senses);
       const start = sim.allCritters.map(a => [a.gx, a.gy]);
@@ -75,9 +76,9 @@ async function main(browser, r) {
       "frameDataBySpeciesAndPose", "renderedTiles", "keysPressed", "isoProject", "getTerrainAt",
       "perceive", "memories", "think", "canSee", "canHear"];
     const leaked = oldNames.filter(n => { try { eval(n); return true; } catch { return false; } });
-    return { added, leaked, types: [typeof sim, typeof senses, typeof mind, typeof animat, typeof controls] };
+    return { added, leaked, types: [typeof hydrology, typeof sim, typeof senses, typeof mind, typeof animat, typeof controls] };
   });
-  r.check(g.types.every(t => t === "object"), "sim, senses, mind, animat and controls are defined");
+  r.check(g.types.every(t => t === "object"), "hydrology, sim, senses, mind, animat and controls are defined");
   r.check(g.added.length === 0, `no other window properties (${g.added.join(", ") || "none"})`);
   r.check(g.leaked.length === 0, `no old shared globals (${g.leaked.join(", ") || "none"})`);
   r.noProblems(p);

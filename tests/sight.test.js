@@ -42,9 +42,9 @@ async function main(browser, r) {
   // west of it
   const at = await p.evaluate(() => {
     sim.pause();
-    const S = sim.internals, R = 6, W = sim.gridWidthN, H = sim.gridHeightN;
+    const S = sim.internals, R = 6, A = sim.startNear;
     const tiles = [];
-    for (let i = R + 1; i < W - R - 1; i++) for (let j = R + 1; j < H - R - 1; j++) tiles.push([i, j]);
+    for (let i = A.i0; i < A.i1; i++) for (let j = A.j0; j < A.j1; j++) tiles.push([i, j]);
     const B = tiles.find(([i, j]) => {
       if (sim.obstacleAt(i, j) !== "boulder") return false;
       const level = sim.tileCorners(i, j)[0];

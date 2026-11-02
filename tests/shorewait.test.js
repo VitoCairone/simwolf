@@ -14,7 +14,7 @@ async function main(browser, r) {
     sim.pause();
     sim.allCritters.forEach(c => { c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = c.targetSpeed = 0; mind.ignore(c); });
     const T = (i, j) => sim.getTerrainAt(i, j);
-    for (let i = 8; i < sim.gridWidthN - 12; i++) for (let j = 8; j < sim.gridHeightN - 8; j++) {
+    for (let i = sim.startNear.i0; i < sim.startNear.i1; i++) for (let j = sim.startNear.j0; j < sim.startNear.j1; j++) {
       let ok = true;
       for (let dj = -4; dj <= 4 && ok; dj++) {
         if (!sim.isLandTile(i - 1, j + dj)) ok = false; // low enough to step onto from the water
@@ -157,33 +157,47 @@ async function main(browser, r) {
   // 4. a critter climbing out up a bank higher than a step is slowed; onto a flat beach,
   // not; either way it speeds up out of the water as on land
   const climb = await p.evaluate(() => {
-    const S = sim.internals, W = sim.gridWidthN, H = sim.gridHeightN;
+    const S = sim.internals, A = sim.startNear;
     const water = (i, j) => sim.getTerrainAt(i, j) === "water";
     const maxC = (i, j) => Math.max(...sim.tileCorners(i, j));
-    // water at i-3..i, land at i+1..i+4 (open), along +i; bank: the first land tile rises
-    const find = bank => {
-      for (let i = 4; i < W - 6; i++) for (let j = 2; j < H - 2; j++) {
-        if (![-3, -2, -1, 0].every(d => water(i + d, j) && water(i + d, j - 1) && water(i + d, j + 1))) continue;
-        if (![1, 2, 3, 4].every(d => sim.isLandTile(i + d, j) && !sim.isBlockedTile(i + d, j))) continue;
-        if (bank ? maxC(i + 1, j) !== 1 : [1, 2, 3, 4].some(d => maxC(i + d, j) !== 0)) continue;
-        return [i, j];
+    // water 4 tiles wide back from (i, j), a flat beach 4 tiles on (open, at the water's
+    // level), along one of the 4 grid directions (u: [di, dj]). The shores here are
+    // beaches; for a bank, a second one's land is raised a level.
+    const ways = [[[1, 0], sim.DIR_E], [[-1, 0], sim.DIR_W], [[0, 1], sim.DIR_S], [[0, -1], sim.DIR_N]];
+    const find = skip => {
+      for (let i = A.i0; i < A.i1; i++) for (let j = A.j0; j < A.j1; j++) for (const [[ui, uj], dir] of ways) {
+        if (skip && Math.abs(i - skip.i) < 12 && Math.abs(j - skip.j) < 12) continue;
+        const at = (d, side = 0) => [i + ui * d + uj * side, j + uj * d + ui * side];
+        if (![-3, -2, -1, 0].every(d => water(...at(d)) && water(...at(d, -1)) && water(...at(d, 1)))) continue;
+        if (![1, 2, 3, 4].every(d => sim.isLandTile(...at(d)) && !sim.isBlockedTile(...at(d)))) continue;
+        const w = sim.waterLevelAt(i, j);
+        if ([1, 2, 3, 4].some(d => maxC(...at(d)) !== w)) continue;
+        return { i, j, ui, uj, dir, at, w };
       }
       return null;
     };
-    const spots = { bank: find(true), flat: find(false) };
+    const spots = { flat: find(null) };
+    spots.bank = find(spots.flat);
+    if (spots.bank) {
+      const b = spots.bank;
+      for (let d = 1; d <= 6; d++) for (let side = -2; side <= 2; side++) {
+        const [i, j] = b.at(d, side);
+        if (!water(i, j)) S.setTileCorners(i, j, [b.w + 1, b.w + 1, b.w + 1, b.w + 1]);
+      }
+    }
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     const w = sim.allCritters.find(c => c.species === "wolf" && c !== sim.pcWolf && sim.isLiveCritter(c));
     sim.allCritters.forEach(c => { c.gx = c.nextGX = c.gy = c.nextGY = -50 - c.uid * 3; mind.ignore(c); });
     const run = (c, spot) => {
       if (!spot) return null;
-      c.gx = c.nextGX = spot[0] - 2.5; c.gy = c.nextGY = spot[1] + 0.5; c.speed = 0; c.stunnedUntil = 0;
+      c.gx = c.nextGX = spot.i + 0.5 - 3 * spot.ui; c.gy = c.nextGY = spot.j + 0.5 - 3 * spot.uj; c.speed = 0; c.stunnedUntil = 0;
       c.wind = c.stamina = 1; c.climbingUntil = 0;
       S.setCritterIdle(c);
       const poses = [], speeds = [];
       let swimSpeed = null;
       for (let k = 0; k < 6 / sim.tempo; k++) {
         c.wind = c.stamina = 1;
-        sim.setIntent(c, { dir: sim.DIR_E, gait: "gallop" });
+        sim.setIntent(c, { dir: spot.dir, gait: "gallop" });
         if (c.pose === "swim") swimSpeed = c.speed;
         S.tick();
         if (c.pose !== "swim") { poses.push(c.pose); speeds.push(c.speed); }

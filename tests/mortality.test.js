@@ -21,6 +21,7 @@ function loadSim(source) {
     console: { log() {} }, Math, Date, Map, Set, Array, Object, Number, String, JSON,
     alert: msg => { throw new Error("alert: " + msg); }, setTimeout, clearTimeout,
   });
+  vm.runInContext(fs.readFileSync(path.join(ROOT, "hydrology.js"), "utf8"), context, { filename: "hydrology.js" });
   vm.runInContext(source, context, { filename: "sim.js" });
   vm.runInContext("sim.init()", context);
   return context;

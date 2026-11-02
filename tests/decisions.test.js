@@ -290,7 +290,7 @@ async function main(browser, r) {
     const free = (i, j) => sim.getTerrainAt(i, j) === "grass" && !sim.isBlockedTile(i, j);
     // a boulder on grass with open grass around it
     let b = null;
-    for (let i = 8; i < sim.gridWidthN - 8 && !b; i++) for (let j = 8; j < sim.gridHeightN - 8 && !b; j++) {
+    for (let i = sim.startNear.i0; i < sim.startNear.i1 && !b; i++) for (let j = sim.startNear.j0; j < sim.startNear.j1 && !b; j++) {
       if (sim.obstacleAt(i, j) !== "boulder" || sim.getTerrainAt(i, j) !== "grass") continue;
       let ok = true;
       for (let di = -4; di <= 4 && ok; di++) for (let dj = -4; dj <= 4 && ok; dj++)
@@ -359,7 +359,7 @@ async function main(browser, r) {
     const open = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.isBlockedTile(i, j);
     // a boulder with open, level ground 3 tiles to its west (and the rows either side)
     let B = null;
-    for (let i = 4; i < sim.gridWidthN - 4 && !B; i++) for (let j = 4; j < sim.gridHeightN - 4 && !B; j++) {
+    for (let i = sim.startNear.i0; i < sim.startNear.i1 && !B; i++) for (let j = sim.startNear.j0; j < sim.startNear.j1 && !B; j++) {
       if (sim.obstacleAt(i, j) !== "boulder") continue;
       let ok = true;
       for (let di = -4; di <= -1 && ok; di++) for (let dj = -1; dj <= 1 && ok; dj++)

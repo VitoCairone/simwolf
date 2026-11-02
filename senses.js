@@ -13,7 +13,7 @@
 // MacBook, about 1,290 x 810 CSS pixels; in grid terms, screen-horizontal is dx - dy and
 // screen-vertical dx + dy, so the rectangle needs no square root) and in its LINE OF
 // SIGHT: the straight line from its eye to the other's (eyeLevelsBySpecies, by its size)
-// passes above the ground and boulders (sim.obstacleHeightAt) of every tile in between.
+// passes above the ground and boulders (sim.sightHeightAt) of every tile in between.
 // Only creatures inside the rectangle are traced: O(n^2) in critters, for now. Sight
 // alone tells a creature's sex, age (an infant, grown), its partner, and whether a female
 // is in heat (as smell would, up close). Grass and land a critter can see are likewise
@@ -39,6 +39,9 @@
 // takes time to drift.
 
 const senses = (() => {
+
+// (a local Math: looking globals up is slow where the code runs in a Node vm context)
+const Math = globalThis.Math;
 
 let sim = null; // set by attach()
 
@@ -83,21 +86,6 @@ function eyeLevels(a) {
   return eyeLevelsBySpecies[a.species] * (stage ? sim.youngScales[stage - 1] : 1);
 }
 
-// The height a line of sight must clear over tile (i, j): the ground at its center plus
-// any obstacle. Worked out once per tile (the terrain doesn't change).
-let sightZ = null; // by tile index; NaN: not yet known
-function sightHeightAt(i, j) {
-  if (i < 0 || j < 0 || i >= sim.gridWidthN || j >= sim.gridHeightN) return 0;
-  if (!sightZ) sightZ = new Float32Array(sim.gridWidthN * sim.gridHeightN).fill(NaN);
-  const k = i * sim.gridHeightN + j;
-  let z = sightZ[k];
-  if (z !== z) {
-    z = sim.heightAt(i + 0.5, j + 0.5) + sim.obstacleHeightAt(i, j);
-    sightZ[k] = z;
-  }
-  return z;
-}
-
 // Walks the straight line from point (ex, ey) at height ez to (tx, ty) at height tz, tile
 // by tile (a grid traversal), over every tile in between (not the first or the last),
 // calling stop(i, j, z) with the line's height z where it comes nearest the tile's
@@ -127,7 +115,7 @@ function walkLine(ex, ey, ez, tx, ty, tz, stop) {
 
 // Whether the line passes above every tile in between: the ground at each one's center,
 // and any obstacle on it.
-const sightBlocked = (i, j, z) => sightHeightAt(i, j) > z;
+const sightBlocked = (i, j, z) => sim.sightHeightAt(i, j) > z;
 function clearLine(ex, ey, ez, tx, ty, tz) {
   return !walkLine(ex, ey, ez, tx, ty, tz, sightBlocked);
 }
@@ -155,7 +143,7 @@ function canSeeTile(a, i, j) {
 // Whether an obstacle (sim.obstacleHeightAt) stands in the way of critter a's line of
 // sight to grid point (gx, gy) at height gz (by default, the ground there), whatever else
 // does.
-const obstacleBlocks = (i, j, z) => sim.obstacleHeightAt(i, j) > 0 && sightHeightAt(i, j) > z;
+const obstacleBlocks = (i, j, z) => sim.obstacleHeightAt(i, j) > 0 && sim.sightHeightAt(i, j) > z;
 function obstacleInWay(a, gx, gy, gz = sim.heightAt(gx, gy)) {
   if (!use.lineOfSight) return false;
   return walkLine(a.gx, a.gy, sim.heightAt(a.gx, a.gy) + eyeLevels(a), gx, gy, gz,

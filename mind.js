@@ -42,6 +42,9 @@
 
 const mind = (() => {
 
+// (a local Math: looking globals up is slow where the code runs in a Node vm context)
+const Math = globalThis.Math;
+
 let sim = null;    // set by attach()
 let senses = null;
 

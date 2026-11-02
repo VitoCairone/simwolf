@@ -16,10 +16,11 @@ async function main(browser, r) {
   // 1. where the boulders are
   const b = await p.evaluate(() => {
     sim.pause();
-    const W = sim.gridWidthN, H = sim.gridHeightN;
-    const isB = (i, j) => i >= 0 && j >= 0 && i < W && j < H && sim.obstacleAt(i, j) === "boulder";
+    // (over the ground about the start: the map is far too big to look at whole)
+    const A = sim.startNear;
+    const isB = (i, j) => i >= A.i0 && j >= A.j0 && i < A.i1 && j < A.j1 && sim.obstacleAt(i, j) === "boulder";
     let land = 0, boulders = 0, onWater = 0; const onGround = {};
-    for (let i = 0; i < W; i++) for (let j = 0; j < H; j++) {
+    for (let i = A.i0; i < A.i1; i++) for (let j = A.j0; j < A.j1; j++) {
       const t = sim.getTerrainAt(i, j);
       if (t !== "water") land++;
       if (!isB(i, j)) continue;
@@ -29,7 +30,7 @@ async function main(browser, r) {
     // the longest run of boulders touching (also diagonally: a critter can't squeeze
     // between two boulders that meet at a corner)
     const seen = new Set(); let longest = 0, longestAt = null;
-    for (let i = 0; i < W; i++) for (let j = 0; j < H; j++) {
+    for (let i = A.i0; i < A.i1; i++) for (let j = A.j0; j < A.j1; j++) {
       if (!isB(i, j) || seen.has(i + "_" + j)) continue;
       const q = [[i, j]]; seen.add(i + "_" + j); let n = 0, sum = [0, 0];
       while (q.length) {
@@ -60,7 +61,7 @@ async function main(browser, r) {
     const level = (i, j) => { const c = sim.tileCorners(i, j); return Math.max(...c) === Math.min(...c); };
     const ok = (i, j) => T(i, j) !== "water" && level(i, j);
     const find = test => {
-      for (let i = 2; i < sim.gridWidthN - 4; i++) for (let j = 2; j < sim.gridHeightN - 2; j++)
+      for (let i = sim.startNear.i0; i < sim.startNear.i1; i++) for (let j = sim.startNear.j0; j < sim.startNear.j1; j++)
         if (ok(i, j) && ok(i + 1, j) && ok(i + 2, j) && !sim.isBlockedTile(i, j)
           && sim.tileCorners(i, j)[0] === sim.tileCorners(i + 1, j)[0]
           && sim.tileCorners(i + 1, j)[0] === sim.tileCorners(i + 2, j)[0] && test(i, j)) return [i, j];
@@ -129,7 +130,7 @@ async function main(browser, r) {
     const S = sim.internals;
     const free = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.isBlockedTile(i, j);
     let b = null;
-    for (let i = 3; i < sim.gridWidthN - 3 && !b; i++) for (let j = 3; j < sim.gridHeightN - 3 && !b; j++) {
+    for (let i = sim.startNear.i0; i < sim.startNear.i1 && !b; i++) for (let j = sim.startNear.j0; j < sim.startNear.j1 && !b; j++) {
       if (sim.obstacleAt(i, j) !== "boulder") continue;
       const lv = sim.tileCorners(i, j)[0];
       let ok = true;

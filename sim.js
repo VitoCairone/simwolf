@@ -10,6 +10,9 @@
 
 const sim = (() => {
 
+// (a local Math: looking globals up is slow where the code runs in a Node vm context)
+const Math = globalThis.Math;
+
 const tempo = 1 / 60;          // game seconds per tick
 let consoleOnlyMode = false;   // set by start(): run as fast as possible, logging each tick
 let g_tick = 0;                // ticks run so far; changed only by tick()
@@ -17,12 +20,13 @@ let g_now = 0;                 // game seconds so far; changed only by tick()
 let g_next_uid = 0;
 let isPaused = false;
 
-// The map is square. Its grass feeds about 59 deer: a deer eats ~639 kg of grass (dry) a
-// year and a tile grows back 0.4 kg a year (see FOOD), so a deer needs ~1,600 grass tiles;
-// 414 x 414 has 94,881. The sea's ring scales with the map; land features are sized in
-// tiles.
-const gridWidthN = 414;
-const gridHeightN = 414;
+// The map is square, 50 km a side. A deer eats ~639 kg of grass (dry) a year and a tile
+// grows back 0.4 kg a year (see FOOD), so a deer needs ~1,600 grass tiles. Nothing is
+// kept for the whole map: the terrain is worked out where it is wanted (TERRAIN CACHE),
+// and grass, scent and the like are kept only where something has changed them.
+const gridWidthN = 50000;
+const gridHeightN = 50000;
+const terrainSeed = 1;
 
 // GAME SPEEDS
 // Every constant that sets how fast things happen is in one of two datasets: REALISTIC
@@ -383,15 +387,16 @@ function sample(list) {
 }
 
 // TERRAIN
-// Everything about the ground is a pure function of the tile (no stored map, no random
-// numbers), built from independent fields:
-//   SEA           seaFieldAt     where the sea is
-//   RELIEF        reliefAt       where the lakes are, and how high the land is
-//   GROUND COVER  groundCoverAt  grass, dirt or stone
-//   OBSTACLES     obstacleAt     boulders
-// getTerrainAt is the one place that decides what is water. Because the sea and relief
-// are independent, the coast cuts across land at any height (making sea cliffs), while
-// lakes, being the lowest relief, always have gentle shores.
+// Everything about the ground is a pure function of the tile (no random numbers), built
+// from independent parts:
+//   LAND AND WATER  hydrology.js (terrainMap)  the land's height in metres, and the sea,
+//                   lakes and rivers on it (worked out once, at load, for the whole map:
+//                   a coarse graph of a few MB; then any tile from the graph near it)
+//   GROUND COVER    groundCoverAt              grass, dirt or stone, on land
+//   OBSTACLES       obstacleAt                 boulders, on land
+// They are worked out a block at a time and kept for a while (TERRAIN CACHE): getTerrainAt
+// and the rest read the cache.
+const terrainMap = hydrology.makeMap({ seed: terrainSeed, width: gridWidthN, height: gridHeightN });
 
 // Triangle wave: 0 at whole numbers, 1 halfway between.
 function jag(x) {
@@ -404,72 +409,13 @@ function wave(x) {
   return t * t * (3 - 2 * t);
 }
 
-// SEA: rings around the map's center (a ring of sea, land in the corners) from a
-// triangle wave of the squared distance from the center, q. Inside the land ring's crest
-// (seaCrestQ) the field holds at the crest's value, so the middle of the map is all land
-// (no inner sea; lakes come from the relief). Four slow waves in four directions push the
-// coasts in and out so the ring isn't a circle.
-const seaBelow = 0.2;
-const seaCrestQ = 0.5; // jag(q) peaks here
-const mapCenterX = gridWidthN / 2;
-const mapCenterY = gridHeightN / 2;
-const mapCornerDist = Math.sqrt(mapCenterX * mapCenterX + mapCenterY * mapCenterY);
-
-function seaFieldAt(x, y) {
-  const [rx, ry] = [x - mapCenterX, y - mapCenterY].map(v => v * 1.25 / mapCornerDist);
-  const q = Math.max(seaCrestQ, rx * rx + ry * ry);
-  return jag(q) - 0.7 + (
-    jag(x / 103) + jag(y / 109) + jag ((x + y) / 127) + jag((x - y) / 199)
-  ) * 0.25
-}
-
-// RELIEF, about 0..1. Below lakeBelow is a lake; above it, the land's elevation is how
-// far above lakeBelow it is. It sums:
-//   regions (hundreds of tiles across): hilliness, 0 in plains to 1 in hill country, and
-//     upland, -1 to 1, how high the land lies overall
-//   detail (tens of tiles across): hills and hollows scaled by hilliness, on warped
-//     coordinates so they don't repeat regularly
-const lakeBelow = 0.44;
-const reliefBase = 0.52;           // relief of the average plain
-const reliefUplandRange = 0.08;    // how much higher uplands are, and lowlands lower
-const reliefHillsLift = 0.06;      // hill country also lies a little higher
-const reliefPlainsDetail = 0.1;    // share of the full detail left in plains
-const hillinessFrom = 0.35;        // the hilliness field's plains (below) ...
-const hillinessTo = 0.65;          // ... and hill country (above)
-
-function reliefAt(x, y) {
-  const h = (wave(x / 311 + 0.6 * wave(y / 263)) + wave(y / 337 + 0.6 * wave(x / 229))) / 2;
-  const t = Math.min(1, Math.max(0, (h - hillinessFrom) / (hillinessTo - hillinessFrom)));
-  const hilliness = t * t * (3 - 2 * t);
-  const upland = wave(x / 401 + 0.3) + wave(y / 367 + 0.7) - 1;
-
-  const wx = x + 22 * (wave(y / 97 + 0.5 * wave(x / 71)) - 0.5) + 12 * (wave((x + y) / 53) - 0.5);
-  const wy = y + 22 * (wave(x / 89 + 0.5 * wave(y / 83)) - 0.5) + 12 * (wave((x - y) / 59) - 0.5);
-  const sum = wx + wy;
-  const dif = wx - wy;
-  const fastNoise = wave(wx / 19) + wave(wy / 23) + wave(sum / 29) + wave(dif / 31); // 0..4
-  const slowNoise = (jag(wx / 37) + jag(wy / 41) + jag(sum / 43) + jag(dif / 47)) * 0.3
-    + (jag(wx / 53) + jag(wy / 59) + jag(sum / 61) + jag(dif / 67)) * 0.2; // 0..2
-  const detail = (fastNoise + slowNoise) / 6 - 0.5; // -0.5..0.5
-
-  return reliefBase + reliefUplandRange * upland + reliefHillsLift * hilliness
-    + detail * (reliefPlainsDetail + (1 - reliefPlainsDetail) * hilliness);
-}
-
-// The highest relief reliefAt can return. Keep in step with reliefAt.
-const reliefHighest = reliefBase + reliefUplandRange + reliefHillsLift + 0.5;
-
-// Elevation above the lakes' level, in relief units (negative: a lake).
-function landElevationAt(x, y) {
-  return reliefAt(x, y) - lakeBelow;
-}
-
-// The terrain of the tile containing (gx, gy): "water", "grass", "dirt" or "stone".
+// The terrain of the tile containing (gx, gy): "water", "grass", "dirt" or "stone". Off
+// the map, the sea.
 function getTerrainAt(gx, gy) {
-  const [x, y] = [gx, gy].map(v => Math.floor(v));
-  if (seaFieldAt(x, y) < seaBelow) return "water";
-  if (landElevationAt(x, y) < 0) return "water";
-  return groundCoverAt(x, y);
+  const i = Math.floor(gx), j = Math.floor(gy);
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return "water";
+  const b = terrainBlock(i, j);
+  return terrainKinds[b.kind[(i - b.i0) * terrainBlockTiles + j - b.j0]];
 }
 
 // GROUND COVER of land, independent of height and all passable: a patch value from four
@@ -520,8 +466,10 @@ const loneBoulderAbove = 0.8;      // ...and there, larger: fewer of them
 
 // "boulder" if one stands on the tile containing (gx, gy), else null.
 function obstacleAt(gx, gy) {
-  const x = Math.floor(gx), y = Math.floor(gy);
-  return isBoulderSite(x, y) && getTerrainAt(x, y) !== "water" ? "boulder" : null;
+  const i = Math.floor(gx), j = Math.floor(gy);
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return null;
+  const b = terrainBlock(i, j);
+  return b.boulder[(i - b.i0) * terrainBlockTiles + j - b.j0] ? "boulder" : null;
 }
 
 function isBoulderSite(x, y) {
@@ -558,50 +506,158 @@ function obstacleHeightAt(i, j) {
 }
 
 // TERRAIN HEIGHT, in whole levels at tile corners; a tile's surface blends its four
-// corners bilinearly. Land rises with its elevation; water, and every corner touching
-// water, is level 0. A tile whose corners would differ by 2 levels or more becomes a
-// cliff tile: its corners are squeezed into [m, m + 1] (m: the floor of their average),
-// so a cliff face stands between it and its neighbours. A critter can step up or down
-// at most maxStepLevels. (One level is drawn one block riser high: see animat.js.)
-const maxElevation = 14;  // the highest level any terrain could reach; scales all heights
-const levelsPerReliefUnit = maxElevation / (reliefHighest - lakeBelow);
+// corners bilinearly. One level is a metre (drawn one block riser high: see animat.js),
+// so a vertex is at the floor of the land's height there (terrainMap). Water is flat, at
+// the floor of its surface's height (waterLevelAt): the sea at 0, a lake at its level, a
+// river falling from tile to tile; a vertex touching water is at the lowest water it
+// touches. A tile whose corners would differ by 2 levels or more becomes a cliff tile:
+// its corners are squeezed into [m, m + 1] (m: the floor of their average), so a cliff
+// face stands between it and its neighbours. A critter can step up or down at most
+// maxStepLevels.
 const maxStepLevels = 1.5;
 
-function isWaterTile(i, j) {
-  return i >= 0 && j >= 0 && i < gridWidthN && j < gridHeightN && getTerrainAt(i, j) === "water";
+// TERRAIN CACHE: the terrain in blocks of terrainBlockTiles square, each worked out the
+// first time anything asks about one of its tiles (a few milliseconds), kept while used,
+// and the least recently used dropped beyond terrainBlocksKept (so memory stays bounded
+// however far critters and the camera roam). A block holds, by tile: its kind (an index
+// into terrainKinds), water's kind (into waterKinds) and level, its corners' levels and
+// whether a boulder stands on it; and its lowest and highest corner.
+const terrainBlockTiles = 64;
+const terrainBlocksKept = 800;
+const terrainKinds = ["grass", "dirt", "stone", "water"];
+const waterKinds = [null, "sea", "lake", "river"];
+const noWater = -32768;
+const terrainBlocks = new Map(); // bi * 100000 + bj -> block
+let terrainBlockClock = 0;
+let lastTerrainBlock = null;
+
+function terrainBlock(i, j) {
+  const B = terrainBlockTiles, bi = Math.floor(i / B), bj = Math.floor(j / B);
+  let b = lastTerrainBlock;
+  if (!b || b.bi !== bi || b.bj !== bj) {
+    const key = bi * 100000 + bj;
+    b = terrainBlocks.get(key);
+    if (!b) {
+      b = makeTerrainBlock(bi, bj);
+      terrainBlocks.set(key, b);
+      if (terrainBlocks.size > terrainBlocksKept) dropOldTerrainBlocks();
+    }
+    lastTerrainBlock = b;
+  }
+  b.used = ++terrainBlockClock;
+  return b;
 }
 
-// Corner levels, 4 per tile: NW, NE, SW, SE (NW is the tile's top corner on screen).
-const tileCornerLevels = new Int16Array(gridWidthN * gridHeightN * 4);
-let maxLevel = 0;
-(function computeTerrainHeights() {
-  const W = gridWidthN, H = gridHeightN;
-  const vertex = new Int16Array((W + 1) * (H + 1)); // level of vertex (i, j) at i * (H + 1) + j
-  for (let i = 0; i <= W; i++) for (let j = 0; j <= H; j++) {
-    const touchesWater = isWaterTile(i, j) || isWaterTile(i - 1, j)
-      || isWaterTile(i, j - 1) || isWaterTile(i - 1, j - 1);
-    vertex[i * (H + 1) + j] = touchesWater ? 0
-      : Math.max(0, Math.floor(landElevationAt(i, j) * levelsPerReliefUnit));
-  }
-  for (let i = 0; i < W; i++) for (let j = 0; j < H; j++) {
-    let c = [vertex[i * (H + 1) + j], vertex[(i + 1) * (H + 1) + j],
-             vertex[i * (H + 1) + j + 1], vertex[(i + 1) * (H + 1) + j + 1]];
-    if (isWaterTile(i, j)) c = [0, 0, 0, 0];
-    if (Math.max(...c) - Math.min(...c) >= 2) {
-      const m = Math.floor((c[0] + c[1] + c[2] + c[3]) / 4);
-      c = c.map(l => Math.min(m + 1, Math.max(m, l)));
-    }
-    tileCornerLevels.set(c, (i * H + j) * 4);
-    maxLevel = Math.max(maxLevel, ...c);
-  }
-})();
+// Drops the least recently used tenth of the blocks.
+function dropOldTerrainBlocks() {
+  const byUse = [...terrainBlocks.entries()].sort((p, q) => p[1].used - q[1].used);
+  for (const [key] of byUse.slice(0, Math.ceil(terrainBlocksKept / 10))) terrainBlocks.delete(key);
+}
 
-// The corner levels [NW, NE, SW, SE] of tile (i, j), read only; all 0 off the map.
+function makeTerrainBlock(bi, bj) {
+  const B = terrainBlockTiles, i0 = bi * B, j0 = bj * B;
+  // the water on each tile of the block and a tile around it: its kind and level
+  const n = B + 2, wKind = new Uint8Array(n * n), wLevel = new Int16Array(n * n).fill(noWater);
+  for (let a = 0; a < n; a++) for (let c = 0; c < n; c++) {
+    const i = i0 - 1 + a, j = j0 - 1 + c, k = a * n + c;
+    if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) { wKind[k] = 1; wLevel[k] = 0; continue; }
+    const t = terrainMap.terrainAt(i, j);
+    if (t.kind === "land") continue;
+    wKind[k] = waterKinds.indexOf(t.kind);
+    wLevel[k] = Math.floor(t.height);
+  }
+  // each vertex's level: the lowest water it touches, else the land's
+  const m = B + 1, vertex = new Int16Array(m * m);
+  for (let a = 0; a < m; a++) for (let c = 0; c < m; c++) {
+    let w = noWater;
+    for (const k of [a * n + c, (a + 1) * n + c, a * n + c + 1, (a + 1) * n + c + 1])
+      if (wLevel[k] !== noWater && (w === noWater || wLevel[k] < w)) w = wLevel[k];
+    vertex[a * m + c] = w !== noWater ? w : Math.max(0, Math.floor(terrainMap.sampleAt(i0 + a, j0 + c).height));
+  }
+  const kind = new Uint8Array(B * B), waterKind = new Uint8Array(B * B), waterLevel = new Int16Array(B * B);
+  const corners = new Int16Array(B * B * 4), boulder = new Uint8Array(B * B);
+  let minLevel = Infinity, maxLevel = -Infinity;
+  for (let a = 0; a < B; a++) for (let c = 0; c < B; c++) {
+    const i = i0 + a, j = j0 + c, k = a * B + c, wk = (a + 1) * n + c + 1;
+    let cs;
+    if (wLevel[wk] !== noWater) {
+      kind[k] = 3; waterKind[k] = wKind[wk]; waterLevel[k] = wLevel[wk];
+      cs = [wLevel[wk], wLevel[wk], wLevel[wk], wLevel[wk]];
+    } else {
+      kind[k] = terrainKinds.indexOf(groundCoverAt(i, j));
+      waterLevel[k] = noWater;
+      boulder[k] = isBoulderSite(i, j) ? 1 : 0;
+      cs = [vertex[a * m + c], vertex[(a + 1) * m + c], vertex[a * m + c + 1], vertex[(a + 1) * m + c + 1]];
+      if (Math.max(...cs) - Math.min(...cs) >= 2) {
+        const mid = Math.floor((cs[0] + cs[1] + cs[2] + cs[3]) / 4);
+        cs = cs.map(l => Math.min(mid + 1, Math.max(mid, l)));
+      }
+    }
+    corners.set(cs, k * 4);
+    minLevel = Math.min(minLevel, ...cs); maxLevel = Math.max(maxLevel, ...cs);
+  }
+  return { bi, bj, i0, j0, kind, waterKind, waterLevel, corners, boulder, minLevel, maxLevel, used: 0 };
+}
+
+// The kind of water on tile (i, j) ("sea", "lake", "river"), or null on land. Off the
+// map, the sea.
+function waterKindAt(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return "sea";
+  const b = terrainBlock(i, j);
+  return waterKinds[b.waterKind[(i - b.i0) * terrainBlockTiles + j - b.j0]];
+}
+
+// The level of the water's surface on tile (i, j), or null on land.
+function waterLevelAt(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 0;
+  const b = terrainBlock(i, j), w = b.waterLevel[(i - b.i0) * terrainBlockTiles + j - b.j0];
+  return w === noWater ? null : w;
+}
+
+// The lowest water level on the tiles around tile (i, j) and on it, or null if none.
+function waterLevelNear(i, j) {
+  let w = null;
+  for (let a = i - 1; a <= i + 1; a++) for (let c = j - 1; c <= j + 1; c++) {
+    const l = waterLevelAt(a, c);
+    if (l !== null && (w === null || l < w)) w = l;
+  }
+  return w;
+}
+
+// The corner levels [NW, NE, SW, SE] of tile (i, j), read only; off the map, the sea's.
 const offMapCorners = new Int16Array(4);
 function tileCorners(i, j) {
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return offMapCorners;
-  const k = (i * gridHeightN + j) * 4;
-  return tileCornerLevels.subarray(k, k + 4);
+  const b = terrainBlock(i, j), k = ((i - b.i0) * terrainBlockTiles + j - b.j0) * 4;
+  return b.corners.subarray(k, k + 4);
+}
+
+// For tests: sets tile (i, j)'s corner levels (while its block is kept).
+function setTileCorners(i, j, cs) {
+  const b = terrainBlock(i, j), k = ((i - b.i0) * terrainBlockTiles + j - b.j0) * 4;
+  b.corners.set(cs, k);
+  b.minLevel = Math.min(b.minLevel, ...cs); b.maxLevel = Math.max(b.maxLevel, ...cs);
+}
+
+// The lowest and highest corner levels of the tiles in [i0, i1] x [j0, j1] at most, by
+// whole blocks: [min, max] (it may be a little wider).
+function levelRangeIn(i0, j0, i1, j1) {
+  const B = terrainBlockTiles;
+  let lo = Infinity, hi = -Infinity;
+  for (let bi = Math.floor(Math.max(0, i0) / B); bi <= Math.floor(Math.min(gridWidthN - 1, i1) / B); bi++)
+    for (let bj = Math.floor(Math.max(0, j0) / B); bj <= Math.floor(Math.min(gridHeightN - 1, j1) / B); bj++) {
+      const b = terrainBlock(bi * B, bj * B);
+      lo = Math.min(lo, b.minLevel); hi = Math.max(hi, b.maxLevel);
+    }
+  return lo <= hi ? [lo, hi] : [0, 0];
+}
+
+// The height a line of sight must clear over tile (i, j): the ground at its center plus
+// any obstacle on it (for senses.js).
+function sightHeightAt(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 0;
+  const b = terrainBlock(i, j), k = (i - b.i0) * terrainBlockTiles + j - b.j0, c = b.corners;
+  return (c[k * 4] + c[k * 4 + 1] + c[k * 4 + 2] + c[k * 4 + 3]) / 4 + (b.boulder[k] ? obstacleHeightLevels.boulder : 0);
 }
 
 // The ground's height, in levels, at any grid point.
@@ -612,12 +668,13 @@ function heightAt(gx, gy) {
   return nw * (1 - u) * (1 - v) + ne * u * (1 - v) + sw * (1 - u) * v + se * u * v;
 }
 
-// Land a swimmer can climb onto: dry, unblocked, and low enough somewhere to step up
-// onto from the water.
+// Land a swimmer can climb onto: dry, unblocked, and with its lowest corner within a step
+// of the water beside it (if any).
 function isLandTile(i, j) {
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return false;
-  const t = getTerrainAt(i, j);
-  return t !== "water" && !isBlockedTile(i, j) && Math.min(...tileCorners(i, j)) <= maxStepLevels;
+  if (getTerrainAt(i, j) === "water" || isBlockedTile(i, j)) return false;
+  const w = waterLevelNear(i, j);
+  return w === null || Math.min(...tileCorners(i, j)) <= w + maxStepLevels;
 }
 
 // CRITTERS
@@ -634,7 +691,7 @@ const deer = Array.from({length: nDeer}, () => ({}));
 
 const allCritters = [];
 const allCorpses = [];
-const allLandTiles = [];  // every dry, unblocked tile: where critters are placed
+const allLandTiles = [];  // every dry, unblocked tile of the start square (THE START)
 
 // Half the side of an adult's square collision box; each critter's is a.boxRad (see SIZES).
 const critterBoxRad = 0.4;
@@ -723,19 +780,52 @@ function initCritter(a, species, tissues = null) {
   return a;
 }
 
-// On a random land tile's center, facing one of the 4 diagonals, standing.
-function randomlyPlaceCritter(a) {
-  if (!allLandTiles.length) {
-    // TODO: for maps over 1M tiles, sample tiles at random instead of listing them all.
-    if (gridHeightN * gridWidthN > 1000000) {
-      alert("ERORR: randomlyPlaceCritter not implemented yet for maps > 1M tiles");
+// THE START: every critter starts on a random land tile's center (allLandTiles) in one
+// square, startTiles a side (startArea: { i0, j0, i1, j1 }, i1 and j1 just past it): the
+// first, spiralling out from the map's center by startSearchStepTiles, that is mostly land
+// (startLandShare of startSamples^2 points in it) with standing water near (a lake or the
+// sea at startWaterMin of startSamples^2 points in the square startNearTiles a side about
+// it), for drinking, swimming and shores. Sampled from terrainMap, not the cache.
+const startTiles = 256;
+const startNearTiles = 1024;
+const startSearchStepTiles = 512;
+const startSamples = 16;
+const startLandShare = 0.85;
+const startWaterMin = 3;
+let startArea = null;
+
+function chooseStartArea() {
+  const k = startSamples, c0 = Math.floor(gridWidthN / 2), c1 = Math.floor(gridHeightN / 2);
+  const fits = (ci, cj) => {
+    let land = 0, water = 0;
+    for (let a = 0; a < k; a++) for (let b = 0; b < k; b++) {
+      const near = terrainMap.terrainAt(ci + Math.floor((a + 0.5) / k * startNearTiles - startNearTiles / 2),
+        cj + Math.floor((b + 0.5) / k * startNearTiles - startNearTiles / 2));
+      if (near.kind === "lake" || near.kind === "sea") water++;
+      const t = terrainMap.terrainAt(ci + Math.floor((a + 0.5) / k * startTiles - startTiles / 2),
+        cj + Math.floor((b + 0.5) / k * startTiles - startTiles / 2));
+      if (t.kind === "land") land++;
     }
-    for (var i = 0; i < gridWidthN; i++) {
-      for (var j = 0; j < gridHeightN; j++) {
-        if (getTerrainAt(i, j) !== "water" && !isBlockedTile(i, j)) allLandTiles.push([i, j]);
-      }
-    }
+    return land >= startLandShare * k * k && water >= startWaterMin;
+  };
+  const most = Math.floor(Math.min(gridWidthN, gridHeightN) / 2 / startSearchStepTiles) - 1;
+  let at = [c0, c1];
+  search: for (let r = 0; r <= most; r++) for (let di = -r; di <= r; di++) for (let dj = -r; dj <= r; dj++) {
+    if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
+    const ci = c0 + di * startSearchStepTiles, cj = c1 + dj * startSearchStepTiles;
+    if (fits(ci, cj)) { at = [ci, cj]; break search; }
   }
+  const i0 = at[0] - startTiles / 2, j0 = at[1] - startTiles / 2;
+  startArea = { i0, j0, i1: i0 + startTiles, j1: j0 + startTiles };
+  allLandTiles.length = 0;
+  for (let i = startArea.i0; i < startArea.i1; i++) for (let j = startArea.j0; j < startArea.j1; j++)
+    if (getTerrainAt(i, j) !== "water" && !isBlockedTile(i, j)) allLandTiles.push([i, j]);
+}
+
+// On a random land tile's center in the start square, facing one of the 4 diagonals,
+// standing.
+function randomlyPlaceCritter(a) {
+  if (!startArea) chooseStartArea();
   const [randLandX, randLandY] = sample(allLandTiles);
   a.gx = randLandX + 0.5;
   a.gy = randLandY + 0.5;
@@ -844,7 +934,8 @@ function startCritterDeath(a) {
 // energy, and their mass (the balance is water: fatPerCarbsKg); nothing makes protein.
 // THE LEDGER (biomassLedger) adds up, in kg, all grass has grown and all that has left the
 // world, by how: so the world's biomass (worldBiomassKg) is always what it was, plus what
-// grew, less what left (tests/biomass.test.js).
+// grew, less what left (tests/biomass.test.js). Grass counts only as it differs from
+// ungrazed grass, and its growth likewise (see KEPT ONLY WHERE GRAZED in FOOD).
 const NUTRIENTS = ["fatKg", "carbsKg", "proteinKg", "waterKg", "mineralKg"];
 const fatPerCarbsKg = carbsMJPerKg / fatMJPerKg;
 const biomassLedger = { grownKg: 0, burnedKg: 0, excretedKg: 0, rottedKg: 0, lostKg: 0 };
@@ -932,7 +1023,8 @@ function burn(b, mj) {
 // (under a boulder, rockGrassShare of that: grassMostAt), starting at grassStartShare of
 // that, regrowing at SPEEDS.grassRegrowKgPerS (grass is the only maker of biomass). Its
 // HEIGHT (bare, short, medium, tall) is for the view; tiles whose height changes are
-// logged (grassChangesSince) so the view redraws only those.
+// logged (grassChangesSince) so the view redraws only those. It grows on every tile at
+// once, and is kept only where grazed (KEPT ONLY WHERE GRAZED).
 // UNDER A BOULDER: a deer eats grass under a boulder it stands right beside
 // (inGrassReach), turning to face it: the EAT intent with `at`, the boulder's tile. It
 // eats at the same rate, so the little there is goes in a third of the time.
@@ -992,9 +1084,15 @@ function carcassMeatKg(c) {
   return c.carcass ? carcassPieces.reduce((sum, [name]) => sum + biomassKg(c.carcass.pieces[name]), 0) : 0;
 }
 
-// By tile index (i * gridHeightN + j): grass in kg, NaN where the terrain isn't grass;
-// and its height, 0 bare to 3 tall, 255 where not grass.
-let grassKg = null, grassHeight = null, grassMostKg = null;
+// KEPT ONLY WHERE GRAZED: untouched grass is the same on every tile with the same most
+// (grassMostAt): the start, plus all that has grown since (grassGrownKg), up to the most.
+// A grazed tile is kept (grassTouched, by tile index i * gridHeightN + j: its kg as of
+// grassGrownKg then, its most and its height) until it has grown back to its most and
+// untouched grass has too. So the world's grass counts in the biomass only as it differs
+// from untouched grass (grassTotalKg): grazing takes from that, and the ledger's grownKg
+// is what grazed tiles regrow beyond what untouched grass does meanwhile.
+const grassTouched = new Map();
+let grassGrownKg = 0;
 const grassChanges = [];   // tile indices whose height changed, oldest first
 let grassChangesBase = 0;  // the serial number of grassChanges[0]
 
@@ -1003,49 +1101,71 @@ function heightOfGrass(kg) {
   return share >= grassTallFrom ? 3 : share >= grassMediumFrom ? 2 : share >= grassShortFrom ? 1 : 0;
 }
 
+function untouchedGrassKg(most, grown = grassGrownKg) {
+  return Math.min(most, grassStartShare * SPEEDS.grassMaxKg + grown);
+}
+
+function grassNow(e) {
+  return Math.min(e.most, e.kg + grassGrownKg - e.at);
+}
+
 function initGrass() {
-  grassKg = new Float32Array(gridWidthN * gridHeightN).fill(NaN);
-  grassHeight = new Uint8Array(gridWidthN * gridHeightN).fill(255);
-  grassMostKg = new Float32Array(gridWidthN * gridHeightN);
-  for (let i = 0; i < gridWidthN; i++) for (let j = 0; j < gridHeightN; j++) {
-    if (getTerrainAt(i, j) !== "grass") continue;
-    const k = i * gridHeightN + j;
-    grassMostKg[k] = SPEEDS.grassMaxKg * (isBlockedTile(i, j) ? rockGrassShare : 1);
-    grassKg[k] = grassStartShare * SPEEDS.grassMaxKg;
-    grassHeight[k] = heightOfGrass(grassKg[k]);
+  grassTouched.clear();
+  grassGrownKg = 0;
+  grassChangesAll();
+}
+
+function logGrassChange(k) {
+  grassChanges.push(k);
+  if (grassChanges.length > 50000) { // drop the older half
+    grassChanges.splice(0, 25000);
+    grassChangesBase += 25000;
   }
 }
 
-// Sets the grass on tile index k to kg: how much it changed by, as stored.
+// Every tile may have changed height: the log starts afresh, past every serial given out.
+function grassChangesAll() {
+  grassChangesBase += grassChanges.length + 1;
+  grassChanges.length = 0;
+}
+
+// Sets the grass on tile index k to kg: how much it changed by.
 function setGrassKg(k, kg) {
-  const before = grassKg[k];
-  grassKg[k] = kg;
-  const h = heightOfGrass(kg);
-  if (h !== grassHeight[k]) {
-    grassHeight[k] = h;
-    grassChanges.push(k);
-    if (grassChanges.length > 50000) { // drop the older half
-      grassChanges.splice(0, 25000);
-      grassChangesBase += 25000;
-    }
-  }
-  return grassKg[k] - before;
+  const i = Math.floor(k / gridHeightN), j = k % gridHeightN;
+  if (getTerrainAt(i, j) !== "grass") return 0;
+  let e = grassTouched.get(k);
+  const most = grassMostAt(i, j);
+  const before = e ? grassNow(e) : untouchedGrassKg(most);
+  if (!e) grassTouched.set(k, e = { kg, at: grassGrownKg, most, h: heightOfGrass(before) });
+  e.kg = Math.min(most, kg); e.at = grassGrownKg;
+  const h = heightOfGrass(e.kg);
+  if (h !== e.h) { e.h = h; logGrassChange(k); }
+  return e.kg - before;
 }
 
+// Grass grows on every tile for dtS seconds.
 function growGrass(dtS) {
-  const add = SPEEDS.grassRegrowKgPerS * dtS;
+  const g0 = grassGrownKg, g1 = g0 + SPEEDS.grassRegrowKgPerS * dtS;
   let grown = 0;
-  for (let k = 0; k < grassKg.length; k++) {
-    const kg = grassKg[k], most = grassMostKg[k];
-    if (kg < most) grown += setGrassKg(k, Math.min(most, kg + add)); // (false for NaN: not grass)
+  grassGrownKg = g1;
+  for (const [k, e] of grassTouched) {
+    const was = Math.min(e.most, e.kg + g0 - e.at), now = grassNow(e);
+    const untouchedNow = untouchedGrassKg(e.most, g1);
+    grown += (now - untouchedNow) - (was - untouchedGrassKg(e.most, g0));
+    const h = heightOfGrass(now);
+    if (h !== e.h) { e.h = h; logGrassChange(k); }
+    if (now >= e.most && untouchedNow >= e.most) grassTouched.delete(k);
   }
   biomassLedger.grownKg += grown;
+  // untouched grass taller: everywhere at once
+  for (const most of [SPEEDS.grassMaxKg, SPEEDS.grassMaxKg * rockGrassShare])
+    if (heightOfGrass(untouchedGrassKg(most, g0)) !== heightOfGrass(untouchedGrassKg(most, g1))) grassChangesAll();
 }
 
 // The most grass tile (i, j) can hold, kg (0 where it isn't grass).
 function grassMostAt(i, j) {
-  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 0;
-  return grassMostKg[i * gridHeightN + j];
+  if (getTerrainAt(i, j) !== "grass") return 0;
+  return SPEEDS.grassMaxKg * (isBlockedTile(i, j) ? rockGrassShare : 1);
 }
 
 // Whether critter a stands right beside the boulder on tile (i, j), so it can reach the
@@ -1059,15 +1179,16 @@ function inGrassReach(a, i, j) {
 // The grass on tile (i, j), in kg; 0 where it isn't grass.
 function grassFoodAt(i, j) {
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 0;
-  const kg = grassKg[i * gridHeightN + j];
-  return kg === kg ? kg : 0;
+  const e = grassTouched.get(i * gridHeightN + j);
+  if (e) return grassNow(e);
+  const most = grassMostAt(i, j);
+  return most ? untouchedGrassKg(most) : 0;
 }
 
 // The height of the grass on tile (i, j): 0 bare, 1 short, 2 medium, 3 tall; -1 if not grass.
 function grassHeightAt(i, j) {
-  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return -1;
-  const h = grassHeight[i * gridHeightN + j];
-  return h === 255 ? -1 : h;
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN || getTerrainAt(i, j) !== "grass") return -1;
+  return heightOfGrass(grassFoodAt(i, j));
 }
 
 // The tiles whose grass height changed since `serial` (0 at first, then the serial the
@@ -1081,10 +1202,10 @@ function grassChangesSince(serial) {
   return { serial: end, tiles };
 }
 
-// All the grass on the map, kg.
+// The world's grass as it differs from untouched grass, kg (see KEPT ONLY WHERE GRAZED).
 function grassTotalKg() {
   let kg = 0;
-  for (let k = 0; k < grassKg.length; k++) if (grassKg[k] === grassKg[k]) kg += grassKg[k];
+  for (const e of grassTouched.values()) kg += grassNow(e) - untouchedGrassKg(e.most);
   return kg;
 }
 
@@ -1366,22 +1487,21 @@ function updateClock() {
 // SCENT TRAILS: every live critter on dry land marks the tile under it with its species'
 // scent each tick: the tile keeps when it was last marked by each species, and by whom.
 // Scent fades: at age t its strength is 2^(-t / SPEEDS.scentHalfLifeS) (senses.js decides
-// how faint a scent each critter can still smell). Water holds no scent.
+// how faint a scent each critter can still smell). Water holds no scent. Only marked tiles
+// are kept, until scentKeepHalfLives half-lives old (fainter than anything can smell).
 // WIND: one breeze over the whole map, blowing toward the unit vector (windX, windY); every
 // SPEEDS.windChangeEveryS it turns by up to windTurnMaxRad either way. It carries critters'
 // scent downwind (see senses.js).
 const scentSpecies = ["wolf", "deer"];
 const windTurnMaxRad = Math.PI / 6;
-let scentTime = null, scentUid = null; // by species: by tile index, game time and uid of the last mark
+const scentKeepHalfLives = 4; // (senses.js: the faintest smelled is 1/8, 3 half-lives)
+let scentMarks = null; // by species: tile index -> [game time, uid] of the last mark
 let windAngle = Math.random() * 2 * Math.PI;
 let windX = Math.cos(windAngle), windY = Math.sin(windAngle);
 
 function initScent() {
-  scentTime = {}; scentUid = {};
-  for (const sp of scentSpecies) {
-    scentTime[sp] = new Float64Array(gridWidthN * gridHeightN).fill(-Infinity);
-    scentUid[sp] = new Int32Array(gridWidthN * gridHeightN).fill(-1);
-  }
+  scentMarks = {};
+  for (const sp of scentSpecies) scentMarks[sp] = new Map();
 }
 
 function markScent() {
@@ -1389,17 +1509,23 @@ function markScent() {
     if (!isLiveCritter(a) || isInWater(a)) continue;
     const i = Math.floor(a.gx), j = Math.floor(a.gy);
     if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) continue;
-    const k = i * gridHeightN + j;
-    scentTime[a.species][k] = g_now;
-    scentUid[a.species][k] = a.uid;
+    const k = i * gridHeightN + j, marks = scentMarks[a.species];
+    marks.delete(k); // (so the map stays in order of marking, oldest first)
+    marks.set(k, [g_now, a.uid]);
+  }
+  // the marks too old to matter, oldest first
+  const oldest = g_now - scentKeepHalfLives * SPEEDS.scentHalfLifeS;
+  for (const sp of scentSpecies) for (const [k, m] of scentMarks[sp]) {
+    if (m[0] >= oldest) break;
+    scentMarks[sp].delete(k);
   }
 }
 
 // The latest scent of species on tile (i, j): { ageS, uid }, or null if none.
 function scentAt(i, j, species) {
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return null;
-  const k = i * gridHeightN + j, t = scentTime[species][k];
-  return t === -Infinity ? null : { ageS: g_now - t, uid: scentUid[species][k] };
+  const m = scentMarks[species].get(i * gridHeightN + j);
+  return m ? { ageS: g_now - m[0], uid: m[1] } : null;
 }
 
 function shiftWind() {
@@ -1978,12 +2104,15 @@ function updateTerrainPose(a) {
 }
 
 // Whether the land critter a is climbing onto rises more than one step above the water:
-// the water's surface is a level below level-0 land, so a tile (of those its box touches)
-// with any corner above level 0 is a bank higher than the smallest step.
+// the water's surface is drawn a level below land at its level, so a tile (of those its
+// box touches) with any corner above the water beside it is a bank higher than the
+// smallest step.
 function bankAboveStep(a) {
+  const w = waterLevelNear(Math.floor(a.gx), Math.floor(a.gy));
+  if (w === null) return false;
   return getOccupiedTiles(a.gx, a.gy, a.boxRad).some(tile => {
     const c = tileCorners(...tile.split("_").map(Number));
-    return c[0] > 0 || c[1] > 0 || c[2] > 0 || c[3] > 0;
+    return c[0] > w || c[1] > w || c[2] > w || c[3] > w;
   });
 }
 
@@ -2447,8 +2576,11 @@ return {
 
   // the world
   gridWidthN, gridHeightN, getTerrainAt, obstacleAt,
-  tileCorners, heightAt, get maxLevel() { return maxLevel; },
-  isBlockedTile, isLandTile, isWaterAt, canStepTo, obstacleHeightAt, isLiveCritter,
+  tileCorners, heightAt, levelRangeIn, waterKindAt, waterLevelAt, waterLevelNear,
+  get startArea() { return startArea; }, // where the critters started (THE START)
+  // the square startNearTiles a side about it (for tests: where to look for features)
+  get startNear() { const m = (startNearTiles - startTiles) / 2; return startArea && { i0: startArea.i0 - m, j0: startArea.j0 - m, i1: startArea.i1 + m, j1: startArea.j1 + m }; },
+  isBlockedTile, isLandTile, isWaterAt, canStepTo, obstacleHeightAt, sightHeightAt, isLiveCritter,
   // scent and wind
   scentAt, get wind() { return { x: windX, y: windY }; },
   get scentHalfLifeS() { return SPEEDS.scentHalfLifeS; },
@@ -2475,7 +2607,8 @@ return {
 
   // For tests and debugging only; views and controllers must not use these.
   internals: {
-    tick, wolves, deer, allLandTiles,
+    tick, wolves, deer, allLandTiles, terrainMap, terrainBlocks, terrainBlocksKept, grassTouched, setTileCorners,
+    get scentMarks() { return scentMarks; },
     setCritterIdle, setCritterMoving, setCritterHeading, isInWater, getOccupiedTiles,
     forbidOverlapsOnStart, critterBoxRad, travelSpeedBySpeciesAndPose,
     REALISTIC, GAMIFIED, SPEEDS, drawLifespanS, startCritterDeath, growGrass, setGrassKg, stun,

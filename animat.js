@@ -473,15 +473,9 @@ const shoreVariants = {
   },
 };
 
-// Whether tile (i, j) is water; off the map counts as water. Kept per tile: 0 unknown,
-// 1 water, 2 land.
-let waterKnown = null;
+// Whether tile (i, j) is water; off the map counts as water.
 function isWaterAt(i, j) {
-  if (i < 0 || j < 0 || i >= sim.gridWidthN || j >= sim.gridHeightN) return true;
-  if (!waterKnown) waterKnown = new Uint8Array(sim.gridWidthN * sim.gridHeightN);
-  const k = i * sim.gridHeightN + j;
-  if (!waterKnown[k]) waterKnown[k] = sim.getTerrainAt(i, j) === "water" ? 1 : 2;
-  return waterKnown[k] === 1;
+  return sim.getTerrainAt(i, j) === "water";
 }
 
 // The edges of water tile (i, j) with land beyond them.
@@ -529,11 +523,13 @@ function acrossEdge(e, c) {
 }
 
 // Water tile (i, j)'s wave: { kind: "straight", edge }, { kind: "corner" | "inner",
-// corner }, or null for plain water.
+// corner }, or null for plain water. Kept, up to placementsKept tiles, then forgotten.
 const placements = new Map();
+const placementsKept = 200000;
 function shorePlacementAt(i, j) {
   const key = i * sim.gridHeightN + j;
   if (placements.has(key)) return placements.get(key);
+  if (placements.size >= placementsKept) placements.clear();
   let p = null;
   if (isWaterAt(i, j) && i >= 0 && j >= 0 && i < sim.gridWidthN && j < sim.gridHeightN) {
     const land = landEdgesOf(i, j);
@@ -575,7 +571,6 @@ function shoreVariantAt(i, j) {
 
 // For tests: forget what is known about the terrain and draw it afresh.
 function redrawTerrain() {
-  waterKnown = null;
   placements.clear();
   clearChunks();
   render();
@@ -640,11 +635,11 @@ function boulderSpriteAt(i, j, terrain) {
 }
 
 // The level a tile's front sides must reach down to, given the tile (i, j) in front of
-// it: its lowest corner, or -1 for water and off the map (the water surface is drawn a
-// level below level-0 land).
+// it: its lowest corner, or for water a level below its surface's (the water surface is
+// drawn a level below land at the same level; off the map, the sea's).
 function frontGroundLevel(i, j) {
   if (i >= sim.gridWidthN || j >= sim.gridHeightN) return -1;
-  if (sim.getTerrainAt(i, j) === "water") return -1;
+  if (sim.getTerrainAt(i, j) === "water") return sim.waterLevelAt(i, j) - 1;
   return Math.min(...sim.tileCorners(i, j));
 }
 
@@ -656,8 +651,12 @@ function describeTile(i, j, clock = shoreClockNow()) {
   const terrain = sim.getTerrainAt(i, j);
   const [px, py] = isoProject(i, j);
   if (terrain === "water") {
-    return { i, j, kind: "water", terrain, left: px - halfTile, top: py - tileRiserPY, z: tileZIndex(i, j, terrain),
-      ...waterCellAt(i, j, clock) };
+    const level = sim.waterLevelAt(i, j);
+    // how far the water in front of it is lower (a river stepping down): STEPS
+    const front = [[i, j + 1], [i + 1, j], [i + 1, j + 1]].map(([a, b]) => sim.getTerrainAt(a, b) === "water" ? sim.waterLevelAt(a, b) : level);
+    return { i, j, kind: "water", terrain, level, step: Math.max(0, level - Math.min(...front)),
+      left: px - halfTile, top: py - tileRiserPY - level * levelHeightPY,
+      z: tileZIndex(i, j, terrain), ...waterCellAt(i, j, clock) };
   }
   // the column's origin is its base plane's N corner, less half a tile in x
   const corners = sim.tileCorners(i, j);
@@ -680,7 +679,13 @@ function describeTile(i, j, clock = shoreClockNow()) {
   return t;
 }
 
+// STEPS: where water in front of a water tile is lower (a river falling a level), the
+// tile is drawn again as plain water at each level down to it, beneath itself, so the
+// fall shows as water, not as a gap.
 function paintWater(target, t) {
+  const plain = image(tilesImage);
+  for (let k = t.step; k >= 1; k--)
+    drawCell(target, plain, waterCell[0], waterCell[1], tileSize, tileSize, t.left, t.top + k * levelHeightPY);
   drawCell(target, image(t.image), t.sx, t.sy, tileSize, tileSize, t.left, t.top, t.flipX, t.flipY, ...shoreFlipOrigin);
 }
 
@@ -713,16 +718,23 @@ function clearChunks() {
   chunks.clear();
 }
 
-// Chunk (ci, cj): its tiles' world bounds (every pixel they can paint), and its layers.
+// Chunk (ci, cj): its tiles' world bounds (every pixel they can paint: from their highest
+// corner down to the lowest ground in front of them), and its layers.
 function chunkAt(ci, cj) {
   const key = ci * 10000 + cj;
   let c = chunks.get(key);
   if (c) return c;
   const i0 = ci * chunkTiles, j0 = cj * chunkTiles;
   const i1 = Math.min(sim.gridWidthN, i0 + chunkTiles) - 1, j1 = Math.min(sim.gridHeightN, j0 + chunkTiles) - 1;
+  let hi = -Infinity, lo = Infinity;
+  for (let i = i0; i <= i1 + 1; i++) for (let j = j0; j <= j1 + 1; j++) {
+    const cs = sim.tileCorners(i, j);
+    lo = Math.min(lo, cs[0], cs[1], cs[2], cs[3]);
+    if (i <= i1 && j <= j1) hi = Math.max(hi, cs[0], cs[1], cs[2], cs[3]);
+  }
   const x0 = (i0 - j1) * halfTile - halfTile, x1 = (i1 - j0) * halfTile + halfTile;
-  const y0 = (i0 + j0) * qtrTile - sim.maxLevel * levelHeightPY - groundBaseY - tileRiserPY;
-  const y1 = (i1 + j1) * qtrTile + groundCellH + tileRiserPY;
+  const y0 = (i0 + j0) * qtrTile - hi * levelHeightPY - groundBaseY - tileRiserPY;
+  const y1 = (i1 + j1) * qtrTile - (lo - 1) * levelHeightPY + groundCellH + tileRiserPY;
   c = { ci, cj, i0, j0, i1, j1, x0, y0, w: x1 - x0, h: y1 - y0, water: null, land: null,
     hasWater: false, hasLand: false, shores: false, waterClock: -1, landDirty: true, boulders: [], used: 0, scanned: false,
     waterMask: null, landMask: null, maskDirty: true, maskScale: 0 };
@@ -773,15 +785,35 @@ function paintChunk(c, clock) {
   }
 }
 
-// The chunks in view, back to front.
+// The grid point drawn at world pixel (px, py) on the ground: found by trying heights,
+// from `level` (the ground's height near it, if known).
+function groundUnder(px, py, level = 0) {
+  let g = rectiProject(px, py + level * levelHeightPY);
+  for (let k = 0; k < 4; k++) {
+    const h = sim.heightAt(boundVal(g[0], 0, sim.gridWidthN - 1), boundVal(g[1], 0, sim.gridHeightN - 1));
+    g = rectiProject(px, py + h * levelHeightPY);
+  }
+  return g;
+}
+
+// The chunks in view, back to front: the grid rectangle drawn in view, at the height of
+// the ground at the view's center (viewLevel), and as much further down-screen as ground
+// near it rises above that (it reaches up into view), and up-screen as it sinks below it.
+let viewLevel = 0;
 function chunksInView() {
-  // the grid rectangle around the view, and further down-screen, where raised ground can
-  // reach up into view
-  const g = [[view.x0, view.y0], [view.x1, view.y0], [view.x0, view.y1], [view.x1, view.y1]].map(p => rectiProject(...p));
-  const raised = Math.ceil(sim.maxLevel * levelHeightPY / qtrTile) + 2;
+  const cx = (view.x0 + view.x1) / 2, cy = (view.y0 + view.y1) / 2;
+  const gc = groundUnder(cx, cy, viewLevel);
+  viewLevel = sim.heightAt(boundVal(gc[0], 0, sim.gridWidthN - 1), boundVal(gc[1], 0, sim.gridHeightN - 1));
+  const lift = viewLevel * levelHeightPY;
+  const g = [[view.x0, view.y0], [view.x1, view.y0], [view.x0, view.y1], [view.x1, view.y1]].map(([x, y]) => rectiProject(x, y + lift));
+  const reliefTiles = 64;
+  const [lo, hi] = sim.levelRangeIn(Math.floor(g[0][0]) - reliefTiles, Math.floor(g[1][1]) - reliefTiles,
+    Math.ceil(g[3][0]) + reliefTiles, Math.ceil(g[2][1]) + reliefTiles);
+  const raised = Math.ceil(Math.max(0, hi - viewLevel) * levelHeightPY / qtrTile) + 2;
+  const sunk = Math.ceil(Math.max(0, viewLevel - lo) * levelHeightPY / qtrTile) + 2;
   const n = chunkTiles;
-  const ciMin = Math.max(0, Math.floor((g[0][0] - 2) / n)), ciMax = Math.min(Math.ceil(sim.gridWidthN / n) - 1, Math.floor((g[3][0] + raised) / n));
-  const cjMin = Math.max(0, Math.floor((g[1][1] - 2) / n)), cjMax = Math.min(Math.ceil(sim.gridHeightN / n) - 1, Math.floor((g[2][1] + raised) / n));
+  const ciMin = Math.max(0, Math.floor((g[0][0] - sunk) / n)), ciMax = Math.min(Math.ceil(sim.gridWidthN / n) - 1, Math.floor((g[3][0] + raised) / n));
+  const cjMin = Math.max(0, Math.floor((g[1][1] - sunk) / n)), cjMax = Math.min(Math.ceil(sim.gridHeightN / n) - 1, Math.floor((g[2][1] + raised) / n));
   const out = [];
   for (let s = ciMin + cjMin; s <= ciMax + cjMax; s++)
     for (let ci = Math.max(ciMin, s - cjMax); ci <= Math.min(ciMax, s - cjMin); ci++) {
@@ -860,8 +892,8 @@ const sightGrey = "#8c8c8c"; // greying out: no colour, then darkened by this
 const SEEN = 0, PART = 1, GREYED = 2, BLACK = 3;
 const sight = {
   wolf: null,       // whose sight
-  seen: null,       // by tile: 1 once the wolf has seen it
-  shown: null,      // by tile: its state (SEEN ... BLACK) as last worked out
+  seen: null,       // by tile (TILE BYTES): 1 once the wolf has seen it
+  shown: null,      // by tile (TILE BYTES): its state (SEEN ... BLACK) as last worked out
   field: null,      // { eye (a copy of the wolf as it was), ox, oy, n, vis, crossings, boulders }
   tick: -Infinity, gx: NaN, gy: NaN, share: NaN, stage: -1,
   maskScale: 0,
@@ -869,6 +901,21 @@ const sight = {
 
 function sightViewOn() {
   return !!senses && pinned === sim.pcWolf && sim.isLiveCritter(sim.pcWolf);
+}
+
+// TILE BYTES: a byte for each tile of the map, kept in blocks of tileBytesTiles square
+// only where one has been set (the rest read as `fill`).
+const tileBytesTiles = 64;
+function tileBytes(fill) { return { fill, blocks: new Map() }; }
+function tileByte(t, i, j) {
+  const B = tileBytesTiles, b = t.blocks.get(Math.floor(i / B) * 100000 + Math.floor(j / B));
+  return b ? b[(i - Math.floor(i / B) * B) * B + j - Math.floor(j / B) * B] : t.fill;
+}
+function setTileByte(t, i, j, v) {
+  const B = tileBytesTiles, bi = Math.floor(i / B), bj = Math.floor(j / B), key = bi * 100000 + bj;
+  let b = t.blocks.get(key);
+  if (!b) { if (v === t.fill) return; t.blocks.set(key, b = new Uint8Array(B * B).fill(t.fill)); }
+  b[(i - bi * B) * B + j - bj * B] = v;
 }
 
 // Every chunk's masks to be painted afresh at once.
@@ -880,7 +927,7 @@ function resetSightMasks() {
 function updateSight() {
   const w = sim.pcWolf, W = sim.gridWidthN, H = sim.gridHeightN;
   if (w !== sight.wolf) {
-    sight.wolf = w; sight.seen = new Uint8Array(W * H); sight.shown = new Uint8Array(W * H).fill(BLACK);
+    sight.wolf = w; sight.seen = tileBytes(0); sight.shown = tileBytes(BLACK);
     sight.field = null; sight.tick = -Infinity; resetSightMasks();
   }
   if (!sim.isLiveCritter(w)) return;
@@ -899,32 +946,31 @@ function updateSight() {
   const old = sight.field;
   sight.field = { eye, ox, oy, n, per, tiles, vis, crossings: new Map(), boulders: new Map() };
   // what it has seen, and each tile's state, over the old field's tiles and the new
-  const at = (i, j) => i * H + j;
   const boxes = [[ox, oy, tiles]];
   if (old) boxes.push([old.ox, old.oy, old.tiles]);
   const dirty = new Set();
   for (const [bx, by, bt] of boxes) for (let i = Math.max(0, bx); i < Math.min(W, bx + bt); i++)
     for (let j = Math.max(0, by); j < Math.min(H, by + bt); j++) {
       const st = fieldTileState(i, j);
-      const was = sight.shown[at(i, j)];
+      const was = tileByte(sight.shown, i, j);
       if (st !== was || st === PART) dirty.add(Math.floor(i / chunkTiles) * 10000 + Math.floor(j / chunkTiles));
-      sight.shown[at(i, j)] = st;
+      setTileByte(sight.shown, i, j, st);
     }
   for (const key of dirty) { const c = chunks.get(key); if (c) c.maskDirty = true; }
 }
 
 // Tile (i, j)'s state by the field (marking it seen if it is), or by what was seen.
 function fieldTileState(i, j) {
-  const f = sight.field, k = i * sim.gridHeightN + j;
+  const f = sight.field;
   const u0 = (i - f.ox) * f.per, v0 = (j - f.oy) * f.per;
-  if (u0 < 0 || v0 < 0 || u0 + f.per >= f.n || v0 + f.per >= f.n) return sight.seen[k] ? GREYED : BLACK;
+  if (u0 < 0 || v0 < 0 || u0 + f.per >= f.n || v0 + f.per >= f.n) return tileByte(sight.seen, i, j) ? GREYED : BLACK;
   let any = 0, all = 1;
   for (let u = u0; u <= u0 + f.per; u++) for (let v = v0; v <= v0 + f.per; v++) {
     const s = f.vis[u * f.n + v]; any |= s; all &= s;
   }
   const h = f.per / 2, mid = (u, v) => f.vis[(u0 + u) * f.n + v0 + v];
-  if (mid(h, h) || mid(h, 0) || mid(0, h) || mid(f.per, h) || mid(h, f.per)) sight.seen[k] = 1;
-  if (!sight.seen[k]) return BLACK;
+  if (mid(h, h) || mid(h, 0) || mid(0, h) || mid(f.per, h) || mid(h, f.per)) setTileByte(sight.seen, i, j, 1);
+  if (!tileByte(sight.seen, i, j)) return BLACK;
   if (all || looksSeen(i, j, u0, v0)) return SEEN;
   return any ? PART : GREYED;
 }
@@ -941,7 +987,8 @@ function looksSeen(i, j, u0, v0) {
 }
 
 function tileSightState(i, j) {
-  return sight.shown ? sight.shown[i * sim.gridHeightN + j] : SEEN;
+  if (i < 0 || j < 0 || i >= sim.gridWidthN || j >= sim.gridHeightN) return BLACK;
+  return sight.shown ? tileByte(sight.shown, i, j) : SEEN;
 }
 
 // Where the wolf's sight changes between samples (u0, v0) and (u1, v1) (neighbours, one
@@ -1033,7 +1080,8 @@ function sightSheet(path, kind) {
 function paintTileShape(t, d, kind) {
   if (d.kind === "water") {
     const img = sightSheet(tilesImage, kind);
-    if (img) drawCell(t, img, waterCell[0], waterCell[1], tileSize, tileSize, d.left, d.top);
+    if (img) for (let k = d.step; k >= 0; k--) // (and its STEPS)
+      drawCell(t, img, waterCell[0], waterCell[1], tileSize, tileSize, d.left, d.top + k * levelHeightPY);
     return;
   }
   const img = sightSheet(groundImage, kind);
@@ -1051,7 +1099,7 @@ function clipToUnseen(t, d) {
     const [px, py] = water ? isoProject(gx, gy) : groundProject(gx, gy);
     return [px * t.A + t.Bx, (py + (water ? waterSurfaceDropPY : 0)) * t.A + t.By];
   };
-  const drop = ((water ? 1 : d.pieces.length + 1) * levelHeightPY + groundBaseY) * t.A;
+  const drop = ((water ? 1 + d.step : d.pieces.length + 1) * levelHeightPY + groundBaseY) * t.A;
   const rise = sightTuftsPY * t.A;
   const ctx = t.ctx;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -1291,7 +1339,8 @@ function paintSwimmer(r, sightOn) {
   c.rect(Math.round(r.left * screen.A + screen.Bx), Math.round(r.top * screen.A + screen.By), r.w * screen.A, r.h * screen.A);
   c.clip();
   const a = r.critter, d0 = Math.floor(a.gx + a.gy);
-  const rows = Math.ceil((sim.maxLevel * levelHeightPY + groundBaseY + r.h) / qtrTile) + 2;
+  const [, hi] = sim.levelRangeIn(Math.floor(a.gx) - 2, Math.floor(a.gy) - 2, Math.floor(a.gx) + 64, Math.floor(a.gy) + 64);
+  const rows = Math.ceil((Math.max(0, hi - sim.heightAt(a.gx, a.gy)) * levelHeightPY + groundBaseY + r.h) / qtrTile) + 2;
   // m = i - j: the screen columns the sprite spans (a tile spans (m -+ 1) * halfTile)
   const mMin = Math.floor(r.left / halfTile) - 1, mMax = Math.ceil((r.left + r.w) / halfTile) + 1;
   for (let d = d0 - 1; d <= d0 + rows; d++) {
@@ -1493,7 +1542,7 @@ function screenToGrid(clientX, clientY) {
   // the world is scaled by zoom about the viewport's center
   const px = camera.shiftPX + viewportWidth / 2 + (sx - viewportWidth / 2) / camera.zoom;
   const py = camera.shiftPY + viewportHeight / 2 + (sy - viewportHeight / 2) / camera.zoom;
-  return rectiProject(px, py);
+  return groundUnder(px, py, viewLevel);
 }
 
 // DEBUG: the grid coordinates under the pointer (g null: not over the field).

@@ -91,10 +91,10 @@ async function main(browser, r) {
     for (const z of [1, 2, 4, 8]) {
       animat.setZoom(z);
       const off = [];
-      animat.panCamera(-1e6, 0); animat.render(); off.push(at(-R, 0)[0] - wrap.left);
-      animat.panCamera(2e6, 0); animat.render(); off.push(at(R, 0)[0] - wrap.right);
-      animat.panCamera(0, -1e6); animat.render(); off.push(at(0, 0)[1] - wrap.top);
-      animat.panCamera(0, 2e6); animat.render(); off.push(at(0, animat.camera.worldBottomPY)[1] - wrap.bottom);
+      animat.panCamera(-1e7, 0); animat.render(); off.push(at(-R, 0)[0] - wrap.left);
+      animat.panCamera(2e7, 0); animat.render(); off.push(at(R, 0)[0] - wrap.right);
+      animat.panCamera(0, -1e7); animat.render(); off.push(at(0, 0)[1] - wrap.top);
+      animat.panCamera(0, 2e7); animat.render(); off.push(at(0, animat.camera.worldBottomPY)[1] - wrap.bottom);
       out[z] = off.map(v => +v.toFixed(2));
     }
     return out;

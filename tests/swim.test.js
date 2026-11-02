@@ -21,7 +21,7 @@ async function main(browser, r) {
       c.gx = c.gy = c.nextGX = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c);
     });
     const T = (i, j) => sim.getTerrainAt(i, j);
-    for (let i = 4; i < sim.gridWidthN - 12; i++) for (let j = 4; j < sim.gridHeightN - 4; j++) {
+    for (let i = sim.startNear.i0; i < sim.startNear.i1; i++) for (let j = sim.startNear.j0; j < sim.startNear.j1; j++) {
       let ok = true;
       for (let k = 0; k < 3 && ok; k++) for (let dj = -1; dj <= 1 && ok; dj++)
         if (sim.isBlockedTile(i - k, j + dj) || T(i - k, j + dj) === "water") ok = false;
@@ -169,10 +169,14 @@ async function main(browser, r) {
     sim.pause();
     const T = sim.getTerrainAt, land = (i, j) => T(i, j) !== "water";
     let at = null;
-    for (let i = 5; i < sim.gridWidthN - 5 && !at; i++) for (let j = 5; j < sim.gridHeightN - 5 && !at; j++)
-      if (T(i, j) === "water" && land(i + 1, j) && land(i, j + 1) && land(i + 1, j + 1)
-        && Math.min(...sim.tileCorners(i + 1, j + 1)) >= 1) at = [i, j];
+    for (let i = sim.startNear.i0; i < sim.startNear.i1 && !at; i++) for (let j = sim.startNear.j0; j < sim.startNear.j1 && !at; j++)
+      if (T(i, j) === "water" && land(i, j + 1) && land(i + 1, j + 1)) at = [i, j];
     if (!at) return null;
+    // the land in front raised 2 levels above the water (the shores here are flat beaches)
+    const w = sim.waterLevelAt(...at);
+    for (let i = at[0] - 1; i <= at[0] + 2; i++) for (let j = at[1] + 1; j <= at[1] + 3; j++)
+      if (land(i, j)) sim.internals.setTileCorners(i, j, [w + 2, w + 2, w + 2, w + 2]);
+    animat.redrawTerrain();
     const a = window.__d;
     a.gx = a.nextGX = at[0] + 0.5; a.gy = a.nextGY = at[1] + 0.5;
     a.pose = "swim"; a.speed = 0; // (as drawn: the view only reads it)

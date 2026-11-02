@@ -28,15 +28,15 @@ async function main(browser, r) {
     const T = sim.getTerrainAt;
     // somewhere with both shore and open water on screen
     let at = null;
-    for (let i = 10; i < sim.gridWidthN - 10 && !at; i += 3)
-      for (let j = 10; j < sim.gridHeightN - 10 && !at; j += 3)
-        if (T(i, j) === "water" && T(i + 4, j) !== "water") at = [i, j];
+    for (let i = sim.startNear.i0; i < sim.startNear.i1 && !at; i += 3)
+      for (let j = sim.startNear.j0; j < sim.startNear.j1 && !at; j += 3)
+        if (T(i, j) === "water" && [[4, 0], [-4, 0], [0, 4], [0, -4]].some(([a, b]) => T(i + a, j + b) !== "water")) at = [i, j];
     animat.setZoom(2); animat.centerCameraOn(at[0], at[1]); animat.render();
 
     // the water tiles drawn, by where they are drawn (left = (i - j) * 16 - 16,
-    // top = (i + j) * 8 - 8); each as drawn now (animat.tileOf)
+    // top = (i + j) * 8 - 8, raised 8 a level of its water); each as drawn now (animat.tileOf)
     const gridOf = t => {
-      const a = (t.left + 16) / 16, b = (t.top + 8) / 8;
+      const a = (t.left + 16) / 16, b = (t.top + 8) / 8 + t.level;
       return [Math.round((a + b) / 2), Math.round((b - a) / 2)];
     };
     const waters = animat.tilesInView().filter(t => t.kind === "water").map(gridOf);

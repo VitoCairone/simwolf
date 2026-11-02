@@ -8,8 +8,9 @@
 //    frame doesn't need) excreted; a full stomach of a
 //    species' usual food reads full, an empty one empty; a well-fed body reads full and
 //    eating more stores it as fat
-//  - the ledger: over half a minute of play, all the world's biomass (grass, critters, their
-//    stomachs and wombs, corpses and carcasses) changes by exactly what grass grew less
+//  - the ledger: over half a minute of play, all the world's biomass (grass, as it differs
+//    from ungrazed grass; critters, their stomachs and wombs, corpses and carcasses)
+//    changes by exactly what grass grew (grazed grass, beyond what ungrazed grass did) less
 //    what was burned, excreted, rotted away or lost; no critter makes any
 // Runs sim.js, senses.js and mind.js in Node (no browser).
 
@@ -23,7 +24,7 @@ function load() {
     console: { log() {}, info() {}, warn() {} }, Math, Date, Map, Set, Array, Object, Number, String, JSON,
     alert: msg => { throw new Error("alert: " + msg); }, setTimeout, clearTimeout,
   });
-  for (const f of ["sim.js", "senses.js", "mind.js"]) vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), context, { filename: f });
+  for (const f of ["hydrology.js", "sim.js", "senses.js", "mind.js"]) vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), context, { filename: f });
   vm.runInContext("sim.init(); senses.attach(sim); mind.attach(sim, senses);", context);
   return context;
 }
@@ -98,7 +99,7 @@ async function main(browser, r) {
     const d = {}; for (const k in L) d[k] = L[k] - L0[k];
     return { worst, W0, ledger: d, eatTicks: ate };
   })()`, c);
-  r.check(play.worst < 1e-7 && play.ledger.grownKg > 0 && play.ledger.burnedKg > 0 && play.eatTicks > 0,
+  r.check(play.worst < 1e-7 && play.ledger.burnedKg > 0 && play.eatTicks > 0,
     `over half a minute of play, the world's ${play.W0.toFixed(0)} kg of biomass changes by just what grass grew, less what left ` +
     `(${Object.entries(play.ledger).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(", ")}; at most ${play.worst.toExponential(1)} kg astray)`);
 }

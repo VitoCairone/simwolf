@@ -30,10 +30,10 @@ async function main(browser, r) {
 
   // 1. the grass
   const grass = await p.evaluate(() => {
-    const W = sim.gridWidthN, H = sim.gridHeightN, max = sim.grassMaxKg;
+    const A = sim.startNear, max = sim.grassMaxKg; // (the ground about the start)
     let tiles = 0, other = 0, overMax = 0, otherFood = 0, total = 0;
     const heights = [0, 0, 0, 0];
-    for (let i = 0; i < W; i++) for (let j = 0; j < H; j++) {
+    for (let i = A.i0; i < A.i1; i++) for (let j = A.j0; j < A.j1; j++) {
       const kg = sim.grassFoodAt(i, j);
       if (sim.getTerrainAt(i, j) === "grass") {
         tiles++; total += kg; if (kg > max + 1e-6) overMax++; // (kept as 32-bit floats)
@@ -134,13 +134,17 @@ async function main(browser, r) {
   const far = await p.evaluate(() => {
     const S = sim.internals, max = sim.grassMaxKg, H = sim.gridHeightN;
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
+    sim.allCritters.filter(c => c !== d).forEach(c => { // (nothing to flee from)
+      c.gx = c.gy = c.nextGX = c.nextGY = -500 - c.uid * 3; c.speed = 0; mind.ignore(c);
+    });
     const t = S.allLandTiles.find(([i, j]) => {
       for (let di = -14; di <= 14; di++) for (let dj = -3; dj <= 3; dj++)
         if (sim.getTerrainAt(i + di, j + dj) !== "grass" || sim.isBlockedTile(i + di, j + dj)) return false;
       return true;
     });
     const [i, j] = t;
-    for (let di = -20; di <= 20; di++) for (let dj = -20; dj <= 20; dj++)
+    // (bare as far as it can see: |dx|, |dy| at most (20.2 + 25.3) / 2 in its sight rectangle)
+    for (let di = -24; di <= 24; di++) for (let dj = -24; dj <= 24; dj++)
       if (sim.getTerrainAt(i + di, j + dj) === "grass") S.setGrassKg((i + di) * H + j + dj, 0);
     S.setGrassKg((i + 12) * H + j, 0.1 * max); // one short tile, 12 tiles east
     d.gx = d.nextGX = i + 0.5; d.gy = d.nextGY = j + 0.5; d.stunnedUntil = 0; d.speed = 0;

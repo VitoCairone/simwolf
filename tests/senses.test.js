@@ -41,7 +41,7 @@ async function main(browser, r) {
     const level = (i, j) => { const c = sim.tileCorners(i, j); return Math.max(...c) === Math.min(...c) ? c[0] : null; };
     const free = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.isBlockedTile(i, j);
     let b = null;
-    for (let i = 4; i < sim.gridWidthN - 4 && !b; i++) for (let j = 0; j < sim.gridHeightN && !b; j++) {
+    for (let i = sim.startNear.i0; i < sim.startNear.i1 && !b; i++) for (let j = sim.startNear.j0; j < sim.startNear.j1 && !b; j++) {
       if (sim.obstacleAt(i, j) !== "boulder") continue;
       const l = level(i - 3, j);
       if (l === null) continue;
@@ -70,22 +70,26 @@ async function main(browser, r) {
     const terrain = sim.getTerrainAt(hx, hy), R = senses.hearingRangeTiles[terrain];
     // the wolf behind the deer's back is out of its sight only if far: test by hearing alone
     senses.use.lineOfSight = true;
+    // (on the side, -i or +i, with open ground where the wolf runs on the spot)
+    const open = x => [-1, 0, 1].every(di => [-1, 0, 1].every(dj =>
+      sim.getTerrainAt(x + di, hy + dj) !== "water" && !sim.isBlockedTile(x + di, hy + dj)));
+    const side = open(hx - 21) ? -1 : 1;
     const tryAt = (gait, dist) => {
-      put(deerA, hx, hy); put(wolfA, hx - dist, hy);
+      put(deerA, hx, hy); put(wolfA, hx + side * dist, hy);
       wolfA.wind = wolfA.stamina = 1;
       mind.ignore(wolfA); sim.setIntent(wolfA, { dx: 0, dy: 1, gait });
-      for (let k = 0; k < 60; k++) { wolfA.wind = wolfA.stamina = 1; wolfA.gx = wolfA.nextGX = hx - dist; wolfA.gy = wolfA.nextGY = hy; S.tick(); }
-      // keep it out of sight: just past the rectangle's edge, straight along -i is |dx - dy| = dist
+      for (let k = 0; k < 60; k++) { wolfA.wind = wolfA.stamina = 1; wolfA.gx = wolfA.nextGX = hx + side * dist; wolfA.gy = wolfA.nextGY = hy; S.tick(); }
+      // keep it out of sight: just past the rectangle's edge, straight along i is |dx - dy| = dist
       return by(deerA, wolfA);
     };
     out.terrain = terrain; out.R = R;
-    // just beyond sight's half-width (20.2) along -i: only hearing can tell
+    // just beyond sight's half-width (20.2) along i: only hearing can tell
     out.walkFar = tryAt("walk", 21);
     out.trotNear = R.trot > 21 ? tryAt("trot", 21) : "n/a";
     out.gallop = R.gallop > 21 ? tryAt("gallop", 21) : "n/a";
     sim.setIntent(wolfA, { gait: "idle" });
     for (let k = 0; k < 200; k++) S.tick();
-    put(wolfA, hx - 21, hy);
+    put(wolfA, hx + side * 21, hy);
     S.tick();
     out.still = by(deerA, wolfA);
     senses.use.smell = true;
