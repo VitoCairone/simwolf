@@ -36,6 +36,7 @@ async function main(browser, r) {
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     const place = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; S.setCritterIdle(c); c.speed = 0; };
     place(w, i - 2.5, j - 3.5); place(d, i + 4.5, j + 3.5);
+    w.hx = w.hy = Math.SQRT1_2; // (facing the deer)
     sim.internals.setFood(w, 0.3); w.wind = w.stamina = 1; d.wind = d.stamina = 1;
     mind.forget(w); mind.ignore(w, false);
     S.setCritterMoving(d, sim.DIR_W, "walk"); // swimming for the shore (grid -x)

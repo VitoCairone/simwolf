@@ -43,12 +43,13 @@ for a critter. Decisions belong to the mind, which sees only through the senses.
 
 Everything living is biomass: fat, carbohydrate, protein, water and minerals, in kg (see
 BIOMASS in `sim.js`). Only grass makes it, growing (from air, soil and sunlight, which
-aren't counted). Everything else only moves it (eating, digesting, a womb filling,
-suckling) or spends it, and it leaves the world (burned by metabolism, excreted, rotted
-away with a corpse). A body may turn carbs and fat into each other, and protein into
-either, keeping their energy; nothing makes protein. The ledger (`biomassLedger`) counts
-all that grows and all that leaves, so the world's biomass always adds up
-(`tests/biomass.test.js`).
+aren't counted). The one other way in is water: a critter drinks it (lakes and rivers
+aren't counted), and its burning makes some (with the air's oxygen). Everything else only
+moves it (eating, digesting, a womb filling, suckling) or spends it, and it leaves the
+world (burned by metabolism, excreted, breathed out or evaporated, rotted away with a
+corpse). A body may turn carbs and fat into each other, and protein into either, keeping
+their energy; nothing makes protein. The ledger (`biomassLedger`) counts all that comes
+in and all that leaves, so the world's biomass always adds up (`tests/biomass.test.js`).
 
 ## Placeholder art (not canonical)
 

@@ -149,7 +149,7 @@ const frameDataBySpeciesAndPose = {
       holdTks: 6, topToShadow: 33},
     gallop: {sheet: "deer", nFrames: 9, colZero: 35, frameW: 48, frameH: 41,
       holdTks: 6, topToShadow: 33},
-    // standing and eating (sim's a.eating): lowers its head, then keeps it down
+    // standing and eating or drinking (sim's a.eating): lowers its head, then keeps it down
     graze: {sheet: "deer", cols: [32, 33], holds: [6, 30], loopFrom: 1,
       frameW: 48, frameH: 41, topToShadow: 33},
     mate: {sheet: "deer", nFrames: 1, colZero: 11, frameW: 48, frameH: 41,
@@ -261,8 +261,9 @@ const windFillEl = el("wind-meter-fill");
 const staminaFillEl = el("stamina-meter-fill");
 const foodFillEl = el("food-meter-fill");
 const gutFillEl = el("gut-meter-fill");
+const waterFillEl = el("water-meter-fill");
 const inspectPanelEl = el("inspect-panel");
-const inspectFillEls = ["wind", "stamina", "food", "gut"].map(m => el(`inspect-${m}-fill`));
+const inspectFillEls = ["wind", "stamina", "food", "gut", "water"].map(m => el(`inspect-${m}-fill`));
 const zoomInBtn = el("zoom-in");
 const zoomOutBtn = el("zoom-out");
 const arrowsIconEl = el("arrow-mode-icon");
@@ -860,12 +861,13 @@ function tilesInView() {
 // corpses it sees are drawn (and itself). What it has seen is the wolf's own: a new
 // player's wolf starts having seen nothing.
 // FIELD: whether the wolf sees the ground is sampled every sightSampleTiles over its sight
-// rectangle, worked out again at most every sightEveryS of game time while it moves (or
-// the light changes its sight). A tile is seen if its center or the middle of an edge is.
+// rectangle, worked out again at most every sightEveryS of game time while it moves or
+// turns (or the light changes its sight). A tile is seen if its center or the middle of an edge is.
 // A tile seen before but not all of it now is shown as seen all the same if a grown deer
 // standing on its center would be seen (eye to eye), and no obstacle stands in the way of
-// any part of it the wolf doesn't see (looksSeen): so the terrain's own shadows don't
-// flicker over every fold of the ground, while an obstacle's stay sharp. (Critters hide
+// any part of it the wolf doesn't see, nor is any outside its field of view (looksSeen):
+// so the terrain's own shadows don't flicker over every fold of the ground, while an
+// obstacle's, and the edges of its field of view, stay sharp and straight. (Critters hide
 // nothing from one another: see SIGHT in senses.js.) Otherwise a tile it partly sees is
 // split along the line between seen and unseen ground: on each side of a sample cell
 // whose ends differ, where it changes is found by halving (sightBisectSteps), so a
@@ -895,7 +897,7 @@ const sight = {
   seen: null,       // by tile (TILE BYTES): 1 once the wolf has seen it
   shown: null,      // by tile (TILE BYTES): its state (SEEN ... BLACK) as last worked out
   field: null,      // { eye (a copy of the wolf as it was), ox, oy, n, vis, crossings, boulders }
-  tick: -Infinity, gx: NaN, gy: NaN, share: NaN, stage: -1,
+  tick: -Infinity, gx: NaN, gy: NaN, hx: NaN, hy: NaN, share: NaN, stage: -1,
   maskScale: 0,
 };
 
@@ -932,9 +934,10 @@ function updateSight() {
   }
   if (!sim.isLiveCritter(w)) return;
   const share = sim.can(w, "see") ? senses.sightShare(w) : 0, stage = sim.youngStage(w);
-  const changed = w.gx !== sight.gx || w.gy !== sight.gy || Math.abs(share - sight.share) > 0.005 || stage !== sight.stage;
+  const changed = w.gx !== sight.gx || w.gy !== sight.gy || w.hx !== sight.hx || w.hy !== sight.hy
+    || Math.abs(share - sight.share) > 0.005 || stage !== sight.stage;
   if (sight.field && (!changed || sim.tickCount - sight.tick < Math.round(sightEveryS / sim.tempo))) return;
-  Object.assign(sight, { tick: sim.tickCount, gx: w.gx, gy: w.gy, share, stage });
+  Object.assign(sight, { tick: sim.tickCount, gx: w.gx, gy: w.gy, hx: w.hx, hy: w.hy, share, stage });
   // the rectangle's bounds: |dx - dy| <= a, |dx + dy| <= b, so |dx|, |dy| <= (a + b) / 2
   const reach = Math.ceil(share * (senses.sightHalfWidthTiles + senses.sightHalfHeightTiles) / 2) + 1;
   const ox = Math.floor(w.gx) - reach, oy = Math.floor(w.gy) - reach, tiles = 2 * reach + 1;
@@ -976,13 +979,17 @@ function fieldTileState(i, j) {
 }
 
 // Whether tile (i, j), seen before but not all of it now, is shown as seen all the same
-// (see FIELD): a deer standing on it would be seen, and no obstacle hides any of it.
+// (see FIELD): a deer standing on it would be seen, and no obstacle hides any of it, nor
+// the edge of the wolf's field of view.
 function looksSeen(i, j, u0, v0) {
   const f = sight.field, cx = i + 0.5, cy = j + 0.5;
   if (sim.obstacleAt(i, j)) return false;
   if (!senses.canSeePoint(f.eye, cx, cy, sim.heightAt(cx, cy) + senses.eyeLevelsBySpecies.deer)) return false;
-  for (let u = u0; u <= u0 + f.per; u++) for (let v = v0; v <= v0 + f.per; v++)
-    if (!f.vis[u * f.n + v] && senses.obstacleInWay(f.eye, f.ox + u / f.per, f.oy + v / f.per)) return false;
+  for (let u = u0; u <= u0 + f.per; u++) for (let v = v0; v <= v0 + f.per; v++) {
+    if (f.vis[u * f.n + v]) continue;
+    const x = f.ox + u / f.per, y = f.oy + v / f.per;
+    if (!senses.inView(f.eye, x - f.eye.gx, y - f.eye.gy) || senses.obstacleInWay(f.eye, x, y)) return false;
+  }
   return true;
 }
 
@@ -1224,7 +1231,7 @@ let showOnlySet = null;    // for tests: draw only these critters (null: all)
 
 function describeCritter(a, s) {
   if (a.kind === "corpse" && a.carcass) return describeCarcass(a);
-  // a deer standing and eating is drawn grazing, timed from when it started
+  // a deer standing and eating (or drinking) is drawn grazing, timed from when it started
   const grazing = a.species === "deer" && a.pose === "idle" && a.eating;
   if (grazing && s.grazeSince === undefined) s.grazeSince = sim.tickCount - 1;
   if (!grazing) s.grazeSince = undefined;
@@ -1360,23 +1367,26 @@ function paintSwimmer(r, sightOn) {
 }
 
 // METERS: the player's wolf's wind, stamina and food: its body's (a.food) on the left,
-// its stomach's (a.gut) on the right (see BODY in sim.js), a full bar when full. No labels:
+// its stomach's (a.gut) on the right (see BODY in sim.js); and water (a.water, below
+// them); a full bar when full. No labels:
 // the game shows no words or numbers. INSPECTING: while the camera follows another
 // critter (or its corpse), that critter's meters show below, under an eye.
 const windCss = {};
 const staminaCss = {};
 const foodCss = {};
 const gutCss = {};
-const inspectCss = [{}, {}, {}, {}];
+const waterCss = {};
+const inspectCss = [{}, {}, {}, {}, {}];
 let inspectShown = false;
 function drawExertion() {
   setStyle(windFillEl, windCss, "width", `${100 * sim.pcWolf.wind}%`);
   setStyle(staminaFillEl, staminaCss, "width", `${100 * sim.pcWolf.stamina}%`);
   setStyle(foodFillEl, foodCss, "width", `${100 * sim.pcWolf.food}%`);
   setStyle(gutFillEl, gutCss, "width", `${100 * sim.pcWolf.gut}%`);
+  setStyle(waterFillEl, waterCss, "width", `${100 * sim.pcWolf.water}%`);
   const other = pinned && pinned !== sim.pcWolf ? pinned : null;
   if (!!other !== inspectShown) { inspectShown = !!other; inspectPanelEl.hidden = !other; }
-  if (other) [other.wind, other.stamina, other.food, other.gut].forEach((v, k) =>
+  if (other) [other.wind, other.stamina, other.food, other.gut, other.water].forEach((v, k) =>
     setStyle(inspectFillEls[k], inspectCss[k], "width", `${100 * v}%`));
 }
 

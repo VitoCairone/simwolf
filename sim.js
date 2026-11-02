@@ -58,6 +58,7 @@ const terrainSeed = 1;
 //                          takes to suckle it full (see BREEDING)
 //   feedingMinS            the least time a meal at a carcass or a suckle takes (see
 //                          FEEDING TIME); none in REALISTIC
+//   drinkKgPerKgS          how fast it drinks, kg a second a kg of its frame (see WATER)
 //   dayLengthS             a day and night; a year is 365 of them (see DAY AND NIGHT)
 //   scentHalfLifeS, windChangeEveryS   scent trails fading, and the wind shifting (see
 //                          SCENT AND WIND); the same in both: they go with travel, which
@@ -198,6 +199,24 @@ const realFoodFullS = {
 };
 const realEatKgPerS = { wolf: 0.5 / 60, deer: 0.2 / grassDryShare / hourS }; // fresh
 const realGrassRegrowKgPerS = 0.4 / grassDryShare / yearS;
+// Water (see WATER in BODY):
+//   A body loses water all the time: urine (carrying off the urea of burned protein, and
+//   salts), faeces, breath and evaporation (panting). Dogs need to take in about 1 ml a
+//   kcal they spend, 50-60 ml a kg a day (Purina Institute); wolves as dogs (estimate:
+//   in a northern winter they drink little, eating snow: International Wolf Center).
+//   Red deer took in 2.6-3.9 litres a kg of dry matter eaten (Lincoln University, stags
+//   on pellets and silage): 3 kg a kg of grass (dry) here, 0.3 kg a MJ it yields.
+//   Burning makes water: 1.07 kg a kg of fat, 0.6 of carbohydrate, 0.41 of protein (Purina
+//   Institute), so it loses what it needs to take in plus that (as if all fat).
+//   Losing 10-15% of its body water is life-threatening to a dog (Purina Institute); man
+//   dies having lost 15-25% of his weight (FAO): death at 15% of the frame's weight here.
+//   Drinking: a wolf laps up about 0.6 litres a minute, a deer sucks up 2 (estimates).
+const metabolicWaterPerKg = { fatKg: 1.07, carbsKg: 0.6, proteinKg: 0.41 };
+const waterNeedKgPerMJ = { wolf: 1 / 4.184, deer: 3 / grassDryYieldMJPerKg };
+const waterLossKgPerMJ = Object.fromEntries(Object.entries(waterNeedKgPerMJ).map(([sp, k]) =>
+  [sp, k + metabolicWaterPerKg.fatKg / fatMJPerKg]));
+const lethalWaterShare = 0.15;
+const realDrinkKgPerKgS = { wolf: 0.6 / 60 / bodyKgBySpecies.wolf.female, deer: 2 / 60 / bodyKgBySpecies.deer.female };
 // THE STOMACH'S DRIP (see BODY): each second it passes 1 / T of what it holds, but never
 // less than stomachDripLeastShare of a full stomach's drip, until empty; so a full one
 // empties in T (1 + ln(1 / stomachDripLeastShare)). T is a share of the time a full meter
@@ -284,6 +303,7 @@ const REALISTIC = {
   infantFoodFullS: { wolf: 3 * dayS, deer: 3 * dayS },
   nurseFullS: { wolf: 40 * 60, deer: 40 * 60 },
   feedingMinS: 0,
+  drinkKgPerKgS: realDrinkKgPerKgS,
   grassMaxKg: 0.3 / grassDryShare,
   grassRegrowKgPerS: realGrassRegrowKgPerS,
 };
@@ -351,6 +371,9 @@ const GAMIFIED = {
   // Scaled, a wolf would gorge its fill, or an infant suckle its, in under a second: too
   // quick to see (chosen for play).
   feedingMinS: 2,
+  // Scaled, it would drink its fill in a blink: here it drinks it from the brink of death
+  // (lethalWaterShare) in 6 s (chosen for play).
+  drinkKgPerKgS: { wolf: lethalWaterShare / 6, deer: lethalWaterShare / 6 },
   grassMaxKg: 0.3 / grassDryShare,
   grassRegrowKgPerS: realGrassRegrowKgPerS / gameMetabolismScale,
 };
@@ -783,12 +806,16 @@ function initCritter(a, species, tissues = null) {
 // THE START: every critter starts on a random land tile's center (allLandTiles) in one
 // square, startTiles a side (startArea: { i0, j0, i1, j1 }, i1 and j1 just past it): the
 // first, spiralling out from the map's center by startSearchStepTiles, that is mostly land
-// (startLandShare of startSamples^2 points in it) with standing water near (a lake or the
-// sea at startWaterMin of startSamples^2 points in the square startNearTiles a side about
-// it), for drinking, swimming and shores. Sampled from terrainMap, not the cache.
+// (startLandShare of startSamples^2 points in it) with a lake near (at startWaterMin of
+// startSamples^2 points in the square startNearTiles a side about it), for swimming and
+// shores, and fresh water (a lake or river) to drink near the center of each quarter of it
+// (within startFreshTiles, along either axis: at one of the points startFreshStepTiles
+// apart), so that every critter can find some soon. Sampled from terrainMap, not the cache.
 const startTiles = 256;
 const startNearTiles = 1024;
-const startSearchStepTiles = 512;
+const startSearchStepTiles = 256;
+const startFreshTiles = 48;
+const startFreshStepTiles = 16;
 const startSamples = 16;
 const startLandShare = 0.85;
 const startWaterMin = 3;
@@ -796,17 +823,48 @@ let startArea = null;
 
 function chooseStartArea() {
   const k = startSamples, c0 = Math.floor(gridWidthN / 2), c1 = Math.floor(gridHeightN / 2);
+  // whether the hydrology graph has a lake or river node within startFreshTiles and half its
+  // spacing of (x, y) (a quick test before sampling: fresh water could be that near)
+  const G = terrainMap.graph, riverMin = terrainMap.P.riverMinNodes, near2 = (startFreshTiles + G.S / 2) ** 2;
+  const graphFreshNear = (x, y) => {
+    const gi = Math.round(x / G.S), gj = Math.round(y / G.S);
+    for (let a = Math.max(0, gi - 1); a <= Math.min(G.nx - 1, gi + 1); a++)
+      for (let b = Math.max(0, gj - 1); b <= Math.min(G.ny - 1, gj + 1); b++) {
+        const n = a * G.ny + b;
+        if ((G.lake[n] >= 0 || !G.ocean[n] && G.flow[n] >= riverMin) && (G.px[n] - x) ** 2 + (G.py[n] - y) ** 2 <= near2) return true;
+      }
+    return false;
+  };
+  // ...and a lake node in the square startNearTiles a side about (x, y)
+  const graphLakeNear = (x, y) => {
+    const r = startNearTiles / 2;
+    for (let a = Math.max(0, Math.floor((x - r) / G.S)); a <= Math.min(G.nx - 1, Math.ceil((x + r) / G.S)); a++)
+      for (let b = Math.max(0, Math.floor((y - r) / G.S)); b <= Math.min(G.ny - 1, Math.ceil((y + r) / G.S)); b++)
+        if (G.lake[a * G.ny + b] >= 0) return true;
+    return false;
+  };
   const fits = (ci, cj) => {
-    let land = 0, water = 0;
-    for (let a = 0; a < k; a++) for (let b = 0; b < k; b++) {
-      const near = terrainMap.terrainAt(ci + Math.floor((a + 0.5) / k * startNearTiles - startNearTiles / 2),
-        cj + Math.floor((b + 0.5) / k * startNearTiles - startNearTiles / 2));
-      if (near.kind === "lake" || near.kind === "sea") water++;
-      const t = terrainMap.terrainAt(ci + Math.floor((a + 0.5) / k * startTiles - startTiles / 2),
-        cj + Math.floor((b + 0.5) / k * startTiles - startTiles / 2));
-      if (t.kind === "land") land++;
+    // fresh water near the center of each quarter of the square (the rarest, so first)
+    const s = startFreshStepTiles, f = startFreshTiles, q = startTiles / 4;
+    const quarters = [[ci - q, cj - q], [ci + q, cj - q], [ci - q, cj + q], [ci + q, cj + q]];
+    if (!quarters.every(([x, y]) => graphFreshNear(x, y))) return false;
+    for (const [x, y] of quarters) {
+      let fresh = false;
+      for (let a = -f; a <= f && !fresh; a += s) for (let b = -f; b <= f && !fresh; b += s) {
+        const kind = terrainMap.terrainAt(x + a, y + b).kind;
+        fresh = kind === "lake" || kind === "river";
+      }
+      if (!fresh) return false;
     }
-    return land >= startLandShare * k * k && water >= startWaterMin;
+    const at = (side, a, b) => terrainMap.terrainAt(ci + Math.floor((a + 0.5) / k * side - side / 2),
+      cj + Math.floor((b + 0.5) / k * side - side / 2)).kind;
+    if (!graphLakeNear(ci, cj)) return false;
+    let notLand = 0, lakes = 0;
+    for (let a = 0; a < k; a++) for (let b = 0; b < k; b++)
+      if (at(startTiles, a, b) !== "land" && ++notLand > (1 - startLandShare) * k * k) return false;
+    for (let a = 0; a < k; a++) for (let b = 0; b < k; b++)
+      if (at(startNearTiles, a, b) === "lake" && ++lakes >= startWaterMin) return true;
+    return false;
   };
   const most = Math.floor(Math.min(gridWidthN, gridHeightN) / 2 / startSearchStepTiles) - 1;
   let at = [c0, c1];
@@ -926,19 +984,29 @@ function startCritterDeath(a) {
 // protein, water and minerals (everything else: the skeleton's matrix most of all). A
 // biomass is { fatKg, carbsKg, proteinKg, waterKg, mineralKg } (NUTRIENTS); its mass is
 // their sum (biomassKg), its energy that of its fat, carbs and protein (energyMJ).
-// Only grass makes biomass, from air and soil by sunlight (none of which is counted).
-// Everything else MOVES it: from grass or a carcass into an eater's stomach, from a
-// stomach into the body, from a mother into her womb or her young's stomachs; or spends
-// it, and it leaves the world: burned by metabolism, excreted, or rotted away with a
+// Only grass makes biomass, from air and soil by sunlight (none of which is counted);
+// besides, a critter drinks water (lakes and rivers aren't counted) and its burning makes
+// water (with the air's oxygen: see WATER in BODY). Everything else MOVES it: from grass
+// or a carcass into an eater's stomach, from a stomach into the body, from a mother into
+// her womb or her young's stomachs; or spends it, and it leaves the world: burned by
+// metabolism, excreted (water breathed out and evaporated too), or rotted away with a
 // corpse. A body can turn carbs into fat and back, and protein into either, keeping their
 // energy, and their mass (the balance is water: fatPerCarbsKg); nothing makes protein.
-// THE LEDGER (biomassLedger) adds up, in kg, all grass has grown and all that has left the
-// world, by how: so the world's biomass (worldBiomassKg) is always what it was, plus what
-// grew, less what left (tests/biomass.test.js). Grass counts only as it differs from
-// ungrazed grass, and its growth likewise (see KEPT ONLY WHERE GRAZED in FOOD).
+// THE LEDGER (biomassLedger) adds up, in kg, all grass has grown, all water drunk or made,
+// and all that has left the world, by how: so the world's biomass (worldBiomassKg) is
+// always what it was, plus what came in, less what left (ledgerNetKg;
+// tests/biomass.test.js). Grass counts only as it differs from ungrazed grass, and its
+// growth likewise (see KEPT ONLY WHERE GRAZED in FOOD).
 const NUTRIENTS = ["fatKg", "carbsKg", "proteinKg", "waterKg", "mineralKg"];
 const fatPerCarbsKg = carbsMJPerKg / fatMJPerKg;
-const biomassLedger = { grownKg: 0, burnedKg: 0, excretedKg: 0, rottedKg: 0, lostKg: 0 };
+const biomassLedger = { grownKg: 0, drunkKg: 0, madeWaterKg: 0, burnedKg: 0, excretedKg: 0, rottedKg: 0, lostKg: 0 };
+const ledgerInKeys = ["grownKg", "drunkKg", "madeWaterKg"];
+// What has come into the world, less what has left it, kg.
+function ledgerNetKg() {
+  let kg = 0;
+  for (const [k, v] of Object.entries(biomassLedger)) kg += ledgerInKeys.includes(k) ? v : -v;
+  return kg;
+}
 
 // A biomass: kg of these shares (none: empty).
 function biomass(shares = null, kg = 0) {
@@ -1267,6 +1335,16 @@ function mealBiteKg(a, kind, fastestKgPerS) {
     a.meal = { kind, kgPerS: Math.min(fastestKgPerS, stomachRoomKg(a) / SPEEDS.feedingMinS) };
   return Math.min(fastestKgPerS * tempo, a.meal.kgPerS * tempo + (a.dripKg || 0));
 }
+// Burns mj of tissues t (burn), which makes water (metabolicWaterPerKg).
+function metabolize(t, mj) {
+  const f = t.fatKg, c = t.carbsKg, p = t.proteinKg;
+  biomassLedger.burnedKg += burn(t, mj);
+  const made = (f - t.fatKg) * metabolicWaterPerKg.fatKg + (c - t.carbsKg) * metabolicWaterPerKg.carbsKg
+    + (p - t.proteinKg) * metabolicWaterPerKg.proteinKg;
+  t.waterKg += made;
+  biomassLedger.madeWaterKg += made;
+}
+
 // After a's bite: a full stomach ends its meal.
 function mealEaten(a) {
   if (!(stomachRoomKg(a) > 1e-12)) a.meal = null;
@@ -1285,6 +1363,9 @@ function mealEaten(a) {
 //   of its usual food: usualFoodShares). The stomach holds stomachShareBySpecies of its
 //   frame's weight; a.stomachFull, whether it is (as good as) full, whatever is in it (a
 //   stomach full of poorer food reads less than full on the meter).
+//   WATER METER (a.water): the water its tissues hold, from 0 (short of the water that goes
+//   with their protein by lethalWaterShare of its frame's weight) to 1 (none short). At 0
+//   it dies of thirst.
 // METABOLISM: it burns its tissues (carbs, then fat, then protein: burn) so that a full
 // meter lasts SPEEDS.foodFullS (an infant's, SPEEDS.infantFoodFullS), at the same pace
 // whatever its meter.
@@ -1294,6 +1375,12 @@ function mealEaten(a) {
 // them, as fibre, excreted; protein and carbs up to a well-fed body's, and the rest of
 // them made into fat; all the fat; and water. Its tissues keep the water that goes with
 // their protein (a well-fed body's water to protein) and no more: the rest is excreted.
+// WATER: its burning makes water (metabolicWaterPerKg), and it loses water as fast as it
+// burns energy (waterLossKgPerMJ), to be made up from its food and by drinking. Eating
+// (the EAT intent: standing still, or swimming on) with fresh water (a lake or river, not
+// the sea) in reach (waterInReach), it drinks it too, SPEEDS.drinkKgPerKgS of its frame a
+// second, while its tissues are short of water. Grass holds all the water a deer grazing
+// its fill needs; meat about half a wolf's (see Water above).
 // GROWTH: its frame grows only from what it digests: by the minerals in it (once its
 // tissues have their frame's), when the protein it digests with them can fill its frame's
 // protein as it grows (so the young grow only when well fed), up to its adult weight
@@ -1304,6 +1391,8 @@ function mealEaten(a) {
 const growFastestRatio = 2; // the fastest it grows, over a well-fed critter's pace (estimate)
 const mineralKeepShare = 0.8; // estimate
 const stomachFullRoomShare = 0.01; // a stomach with no more room than this share of it is full (a.stomachFull)
+const drinkReachTiles = 0.3;       // reaches water this far from its box (estimate)...
+const drinkReachLevels = 1;        // ...this far below the ground under it (estimate)
 const fullBodyMJPerKg = Object.fromEntries(Object.keys(bodySharesBySpecies).map(sp => [sp, fullMJPerKg(sp)]));
 const lethalBodyMJPerKg = Object.fromEntries(Object.keys(bodySharesBySpecies).map(sp => [sp, lethalMJPerKg(sp)]));
 const leanWaterPerKg = Object.fromEntries(Object.entries(bodySharesBySpecies).map(([sp, s]) => [sp, s.waterKg / s.proteinKg]));
@@ -1373,6 +1462,45 @@ function balanceWater(a) {
   if (t.waterKg > most) { biomassLedger.excretedKg += t.waterKg - most; t.waterKg = most; }
 }
 
+// Its water meter's share, uncapped: 0 or less, dead of thirst (see WATER).
+function waterShare(a) {
+  const t = a.tissues;
+  return 1 - Math.max(0, t.proteinKg * leanWaterPerKg[a.species] - t.waterKg) / (lethalWaterShare * a.frameKg);
+}
+
+// The water critter a can drink (see WATER), the sea's too unless freshOnly: swimming,
+// the water it is in; on land, the nearest within its reach: { i, j, kind }, or null.
+function waterInReach(a, freshOnly = false) {
+  const ci = Math.floor(a.gx), cj = Math.floor(a.gy), reach = a.boxRad + drinkReachTiles;
+  if (isInWater(a)) {
+    const kind = waterKindAt(ci, cj);
+    return kind && !(freshOnly && kind === "sea") ? { i: ci, j: cj, kind } : null;
+  }
+  const low = heightAt(a.gx, a.gy) - drinkReachLevels;
+  let best = null, bestGap = Infinity;
+  for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) {
+    const kind = waterKindAt(i, j);
+    if (!kind || freshOnly && kind === "sea" || waterLevelAt(i, j) < low) continue;
+    const gap = Math.max(Math.abs(i + 0.5 - a.gx), Math.abs(j + 0.5 - a.gy)) - 0.5;
+    if (gap <= reach && gap < bestGap) { best = { i, j, kind }; bestGap = gap; }
+  }
+  return best;
+}
+
+// For tests of other things: while held, every critter's tissues are kept full of water
+// (as if drinking all the while).
+let waterHeld = false;
+function holdWater(on) { waterHeld = on; }
+
+// One tick of a's drinking (see WATER).
+function drink(a) {
+  const t = a.tissues, short = t.proteinKg * leanWaterPerKg[a.species] - t.waterKg;
+  if (!(short > 0) || !waterInReach(a, true)) return;
+  const kg = Math.min(short, SPEEDS.drinkKgPerKgS[a.species] * a.frameKg * tempo);
+  t.waterKg += kg;
+  biomassLedger.drunkKg += kg;
+}
+
 // Its body takes in d, a biomass from its stomach (see BODY: DIGESTION and GROWTH).
 function absorb(a, d) {
   const t = a.tissues, s = bodySharesBySpecies[a.species];
@@ -1397,24 +1525,32 @@ function absorb(a, d) {
   t.waterKg += d.waterKg;
 }
 
-// One tick of a's body: it burns, eats, digests, and its womb grows. True if it starved.
+// One tick of a's body: it burns, loses water, eats and drinks, digests, and its womb
+// grows. What it died of ("hunger", "thirst"), or null.
 function updateFood(a) {
-  if (!isLiveCritter(a)) return false;
-  const lasts = foodLastsS(a);
-  biomassLedger.burnedKg += burn(a.tissues, rangeMJ(a) * tempo / lasts);
+  if (!isLiveCritter(a)) return null;
+  const t = a.tissues, mj = rangeMJ(a) * tempo / foodLastsS(a);
+  metabolize(t, mj);
+  const lose = Math.min(t.waterKg, waterLossKgPerMJ[a.species] * mj);
+  t.waterKg -= lose;
+  biomassLedger.excretedKg += lose;
   if (!a.eating) a.meal = null;
   a.nursingOn = a.eating && isInfant(a) ? nurse(a) : null;
-  if (a.eating && a.nursingOn === null && _can(a, "eat")) eat(a);
+  if (a.eating && a.nursingOn === null && _can(a, "eat")) { eat(a); drink(a); }
   const kg = biomassKg(a.stomach);
   if (kg > 0) {
     const drip = biomass();
     a.dripKg = moveShare(a.stomach, drip, Math.min(1, Math.max(kg, stomachDripLeastShare * stomachKg(a)) * tempo / stomachTS(a) / kg));
     absorb(a, drip);
   } else a.dripKg = 0;
+  if (waterHeld) {
+    const short = t.proteinKg * leanWaterPerKg[a.species] - t.waterKg;
+    if (short > 0) { t.waterKg += short; biomassLedger.drunkKg += short; }
+  }
   balanceWater(a);
   updateWomb(a);
   updateBody(a);
-  return foodShare(a) <= 0;
+  return foodShare(a) <= 0 ? "hunger" : waterShare(a) <= 0 ? "thirst" : null;
 }
 
 // How fast a well-fed critter's frame grows at a's size, kg a second.
@@ -1621,6 +1757,7 @@ function growthShare(species, age) {
 // Its weight, meters and collision box, after its body changed.
 function updateBody(a) {
   a.food = Math.min(1, Math.max(0, foodShare(a)));
+  a.water = Math.min(1, Math.max(0, waterShare(a)));
   a.gut = Math.min(1, energyMJ(a.stomach) / fullStomachMJ(a));
   a.stomachFull = stomachRoomKg(a) <= stomachFullRoomShare * stomachKg(a);
   a.weightKg = biomassKg(a.tissues) + biomassKg(a.stomach) + biomassKg(a.womb);
@@ -1663,7 +1800,7 @@ function nurse(a) {
   const kg = Math.min(mealBiteKg(a, "milk", fastest), stomachRoomKg(a), spareMJ / mjPerKg);
   if (!(kg > 0)) return null;
   const got = withdraw(mother.tissues, biomass(milk, kg), a.stomach, mineralKeptKg(mother));
-  biomassLedger.burnedKg += burn(mother.tissues, energyMJ(got) * (1 / milkEfficiency - 1));
+  metabolize(mother.tissues, energyMJ(got) * (1 / milkEfficiency - 1));
   updateBody(mother);
   mealEaten(a);
   return mother.uid;
@@ -2169,8 +2306,8 @@ function canStepTo(a, gx, gy) {
 // growth of grass and of critters.
 function updateAllCritters() {
   const pastLifespan = allCritters.filter(isPastLifespan);
-  const starved = [];
-  allCritters.forEach(a => { if (updateFood(a)) starved.push(a); });
+  const dying = []; // of hunger or thirst
+  allCritters.forEach(a => { const cause = updateFood(a); if (cause) { a.diedOf = cause; dying.push(a); } });
 
   allCritters.forEach(a => {
     // done scrambling up a bank: back to the gait it was asked for
@@ -2207,7 +2344,7 @@ function updateAllCritters() {
 
   moveAllTogether(allCritters.filter(isLiveCritter));
   pastLifespan.forEach(a => startCritterDeath(a));
-  starved.forEach(a => { if (isLiveCritter(a) && allCritters.includes(a)) startCritterDeath(a); });
+  dying.forEach(a => { if (isLiveCritter(a) && allCritters.includes(a)) startCritterDeath(a); });
   allCritters.filter(a => a.pregnancy && g_now >= a.pregnancy.dueAt && isLiveCritter(a)
     && !isMating(a) && !isInWater(a)).forEach(giveBirth);
   for (let k = allCorpses.length - 1; k >= 0; k--) {
@@ -2560,10 +2697,11 @@ function start({ consoleOnly = false } = {}) {
 // THE INTERFACE
 // Views and controllers read critters' fields directly (gx, gy, pose, poseTick,
 // currentDirection (the facing), hx, hy (the heading), speed, targetSpeed, species, wind,
-// stamina, food, gut, stomachFull, tissues, stomach, womb, eating, carcass, carcassFullKg, uid,
-// blockedTick, stunnedUntil, isMale, birthTime, deathTime, weightKg, adultKg, frameKg,
-// boxRad, mateUid, matingWith, parentUids, youngUids, pregnancy, nursingOn, bumpedTick,
-// bumpedBy, bumpedDx, bumpedDy, bumpedX, bumpedY)
+// stamina, food, gut, water, diedOf (hunger, thirst), stomachFull, tissues, stomach, womb,
+// eating, carcass, carcassFullKg, uid, blockedTick, stunnedUntil, isMale, birthTime,
+// deathTime, weightKg, adultKg, frameKg, boxRad, mateUid, matingWith, parentUids,
+// youngUids, pregnancy, nursingOn, bumpedTick, bumpedBy, bumpedDx, bumpedDy, bumpedX,
+// bumpedY)
 // but change the world only through these functions.
 return {
   // lifecycle and time
@@ -2594,7 +2732,7 @@ return {
   // food
   grassFoodAt, grassHeightAt, grassMostAt, inGrassReach, grassChangesSince, carcassPieces, carcassPieceKg, carcassMeatKg, eatReachTiles,
   get grassMaxKg() { return SPEEDS.grassMaxKg; },
-  bodySharesBySpecies, biomassKg, energyMJ,
+  bodySharesBySpecies, biomassKg, energyMJ, waterInReach,
   // ages and breeding
   can: _can, isGrown, isInfant, isFertile, inHeat, mateReachTiles, youngStage, youngScales,
   adultBoxRad: critterBoxRad, nurseContactTiles, nurseMotherMinFood,
@@ -2614,8 +2752,9 @@ return {
     REALISTIC, GAMIFIED, SPEEDS, drawLifespanS, startCritterDeath, growGrass, setGrassKg, stun,
     windRefillHalfLifeSByPose, staminaFullRefillSByPose, maxStepLevels,
     critterByUid, bodyKgBySpecies, growthShare, litterSize, birthSpots, giveBirth,
-    holdClock, conceive, pair, milkEfficiency, canPair, setWind, growthProgress, growthKgPerS, updateBody,
+    holdClock, holdWater, conceive, pair, milkEfficiency, canPair, setWind, growthProgress, growthKgPerS, updateBody,
     setBodyByAge, setBody, setFood, bodyOf, biomass, rangeMJ, stomachKg, foodShare, worldBiomassKg, biomassLedger,
+    ledgerNetKg, waterShare, lethalWaterShare, waterLossKgPerMJ, metabolicWaterPerKg, drink,
     milkSharesBySpecies, grassShares, newCarcass, newbornKg, miscarryBelow, updateFood,
     toFat, makeCarbs, withdraw, burn, absorb, fullStomachMJ, carbsDigestedBySpecies, stomachTS, stomachEmptiesInT,
     get loopHandle() { return loopHandle; },

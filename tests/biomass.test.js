@@ -10,8 +10,9 @@
 //    eating more stores it as fat
 //  - the ledger: over half a minute of play, all the world's biomass (grass, as it differs
 //    from ungrazed grass; critters, their stomachs and wombs, corpses and carcasses)
-//    changes by exactly what grass grew (grazed grass, beyond what ungrazed grass did) less
-//    what was burned, excreted, rotted away or lost; no critter makes any
+//    changes by exactly what grass grew (grazed grass, beyond what ungrazed grass did) and
+//    water drunk or made by burning, less what was burned, excreted, rotted away or lost;
+//    no critter makes any
 // Runs sim.js, senses.js and mind.js in Node (no browser).
 
 const path = require("path");
@@ -86,12 +87,12 @@ async function main(browser, r) {
 
   // half a minute of play: the ledger
   const play = vm.runInContext(`(() => {
-    const S = sim.internals, L = S.biomassLedger, L0 = { ...L }, W0 = S.worldBiomassKg();
+    const S = sim.internals, L = S.biomassLedger, L0 = { ...L }, net0 = S.ledgerNetKg(), W0 = S.worldBiomassKg();
     let worst = 0, ate = 0;
     for (let n = 0; n < 30 / sim.tempo; n++) {
       S.tick();
       if (n % 60 === 59) {
-        const net = (L.grownKg - L0.grownKg) - ["burnedKg", "excretedKg", "rottedKg", "lostKg"].reduce((p, k) => p + L[k] - L0[k], 0);
+        const net = S.ledgerNetKg() - net0;
         worst = Math.max(worst, Math.abs(S.worldBiomassKg() - W0 - net));
       }
       ate += sim.allCritters.filter(a => a.eating).length;

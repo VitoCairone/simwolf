@@ -5,9 +5,10 @@
 // (sim.setIntent). NO MAGICAL KNOWLEDGE (see admin/design_notes.md): of the world outside
 // itself it knows only what its senses tell it, now or in memory: where other critters
 // are (prey, threats, carcasses, mates, parents, young alike), what they are, and the
-// terrain and grass in sight. Its own state (meters, age, whether in heat, whom it is
-// paired with or born of, whether it is suckling) is always its to read, as is the
-// ground under its next steps (sim.canStepTo: it feels its footing).
+// terrain, grass and shores in sight. Its own state (meters, age, whether in heat, whom
+// it is paired with or born of, whether it is suckling) is always its to read, as is the
+// ground under its next steps (sim.canStepTo: it feels its footing), and whether water
+// in its reach is fresh or the sea (sim.waterInReach: it tastes it).
 //
 // Everything it offers is on the one global it defines, `mind`. Connect it with
 // mind.attach(sim, senses).
@@ -20,6 +21,9 @@
 // DECISIONS, in order of priority:
 //   a tired swimmer heads for land (toShore)
 //   a deer flees wolves it remembers (decideDeer)
+//   a thirsty critter drinks, or goes to water (thirst); but an infant suckles first, a
+//     deer stands still for her young suckling first (nursing), and a hungry deer not
+//     badly thirsty grazes first (graze)
 //   a wolf eats a carcass it knows of while not full (decideWolf), but an infant suckles
 //     first
 //   a mother stands still while young suckle from her; an infant suckles while hungry
@@ -38,6 +42,8 @@
 // full its stomach is. It eats while its body is hungry, until its stomach is full
 // (a.stomachFull: it can take no more; or a.gut at gutFullAt) or its body is; and starts
 // again only with room in its stomach.
+// THIRST: its water meter, a.water (sim.js, BODY: WATER). It drinks while thirsty (see
+// thirst).
 // Every move goes through steer, which finds a way round obstacles.
 
 const mind = (() => {
@@ -48,8 +54,7 @@ const Math = globalThis.Math;
 let sim = null;    // set by attach()
 let senses = null;
 
-const deerAlarmS = 15;           // a deer keeps fleeing a wolf it saw this long ago
-const deerSafeTiles = 30;        // ...unless it is this far from where it last saw it
+const deerAlarmS = 15;           // a deer keeps fleeing a wolf it perceived this long ago
 const deerGallopWithinTiles = 8; // gallop while within this of where a wolf was last seen
 const deerCommitS = 0.75;        // keep to a chosen way to flee at least this long
 const deerCaughtBetween = 0.3;   // the pulls of wolves cancel to below this share: break sideways
@@ -112,6 +117,21 @@ const avoidBlockedS = 0.5;       // after a blocked move, avoid that direction t
 const keepHeadingCos2 = 0.97;    // keep the current heading within 10 degrees (cos^2)
 const detourS = 3;               // keep going round an obstacle the same way this long
 const reverseAgainS = 1;         // don't turn right round again sooner than this
+const drinkBelow = 0.8;           // goes to drink with its water meter below this (some 3%
+                                  // of its weight lost: estimate)...
+const drinkFullAt = 0.99;         // ...and drinks until it is this full;
+const seekBelow = 0.99;           // ...but knowing of no fresh water, it looks for some below this;
+const deerDrinkFirstBelow = 0.5;  // a hungry deer grazes first, unless its meter is below this
+const waterLookS = 2;             // notes the shores in sight this often...
+const waterCellTiles = 16;        // ...the nearest in each square of this many tiles a side
+const shoreLosChecks = 4;         // ...in line of sight (checking this many, nearest first)
+const watersKept = 48;            // ...remembering this many shores, the nearest
+const saltNearTiles = 48;         // water tasted salt: shores remembered this near are the sea's
+const drinkGiveUpS = 6;           // gives up on a shore it has got no nearer to in this long...
+const drinkAvoidS = 120;          // ...and leaves it be this long
+const searchLegS = 15;            // searching for water, it keeps to a way this long...
+const searchNearTiles = 10;       // ...any way this near where it began, else away from there...
+const searchFarTiles = 150;       // ...and beyond this, back toward it
 const decideEveryS = 0.1;
 
 // Whether a's stomach can take no more: full to the brim, or its meter full (see HUNGER).
@@ -154,7 +174,7 @@ function memoryOf(a) {
       familiar: new Set(),    // uids of its species met while it or they were infants
       court: null,            // the critter it is courting: { uid, since }
       refused: new Map(),     // uid -> courting it again only after this tick
-      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | ashore | court | mate | family | nurse | yield
+      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | drink | ashore | court | mate | family | nurse | yield
       yield: null,            // giving way: { until, intent } (see giveWay)
       target: null,           // a wolf's prey (uid)
       targetUntil: -Infinity, // ...kept until this tick at least
@@ -172,6 +192,16 @@ function memoryOf(a) {
                               // milk touching her, or null), retry (not again before this tick) }
       grazeTo: null,          // ...the tile it is walking to, [i, j]
       cropping: null,         // ...the tile it is eating, [i, j]
+      waters: new Map(),      // cell key -> a shore it has seen there: { i, j, salt } (see thirst)
+      saltCells: new Set(),   // ...cells whose water it knows is the sea's
+      waterLook: -Infinity,   // ...the tick it last noted the shores in sight
+      drinking: false,        // thirsty (from drinkBelow until drinkFullAt)
+      waterTo: null,          // ...the cell key of the shore it is going to
+      waterSince: 0,          // ...the tick it set off for it, and its best distance so far
+      waterBestD2: Infinity,
+      waterAvoid: new Map(),  // cell key -> tick: a shore it couldn't drink at, left be until then
+      search: null,           // searching for water: { dx, dy, until }
+      lookFrom: null,         // ...where it began to look, [gx, gy]
       plan: null,             // a calm critter's plan: { kind, until, intent, ... }
       avoid: new Array(8).fill(-Infinity), // by direction: avoid until this tick
       detour: null,           // going round an obstacle: { side, until, reversed }
@@ -326,11 +356,10 @@ function move(a, m, dx, dy, gait, now, dry = false, goal = false) {
   return { dx: vx, dy: vy, gait };
 }
 
-// DEER flee every wolf seen within deerAlarmS, away from where each was, the nearest
-// counting most. Between wolves (the pulls nearly cancel) a deer breaks away sideways, to
-// the side it faces. It keeps to its way for deerCommitS unless a wolf newly comes into
-// sight. It gallops near where a wolf was seen, trots otherwise, and stops fleeing a wolf
-// once deerSafeTiles from its last sighting (until it sees that wolf again).
+// DEER flee every wolf perceived (seen, heard or smelled) within deerAlarmS, however far
+// off, away from where each was, the nearest counting most. Between wolves (the pulls
+// nearly cancel) a deer breaks away sideways, to the side it faces. It keeps to its way for deerCommitS unless a wolf newly comes into
+// sight. It gallops near where a wolf was seen, trots otherwise.
 function decideDeer(a, m, now) {
   let fx = 0, fy = 0, pull = 0, nearest2 = Infinity, nx = 0, ny = 0;
   let inSight = false, threats = 0, newSighting = false;
@@ -340,8 +369,6 @@ function decideDeer(a, m, now) {
     if (age > ticks(deerAlarmS)) continue;
     const dx = a.gx - k.gx, dy = a.gy - k.gy;
     const d2 = dx * dx + dy * dy;
-    if (k.escaped) continue;
-    if (age > 0 && d2 > deerSafeTiles * deerSafeTiles) { k.escaped = true; continue; }
     const w = 1 / Math.max(d2, 1); // each pull is 1 / distance long
     fx += dx * w; fy += dy * w;
     pull += d2 * w * w;            // the sum of the pulls' lengths, squared
@@ -354,10 +381,15 @@ function decideDeer(a, m, now) {
     m.flee = null;
     const nursing = nurseOrSuckle(a, m, now);
     if (nursing) return nursing;
+    // (grass is mostly water: a deer short of it, but not badly, grazes first)
+    const drinking = a.water < deerDrinkFirstBelow && thirst(a, m, now);
+    if (drinking) return drinking;
     const romance = a.food > romanceAbove && social(a, m, now, true);
     if (romance) return romance;
     const grazing = graze(a, m, now);
     if (grazing) { m.mode = "graze"; return grazing; }
+    const thirsty = thirst(a, m, now);
+    if (thirsty) return thirsty;
     return settle(a, m, now);
   }
 
@@ -455,6 +487,110 @@ function graze(a, m, now) {
   return move(a, m, via[0] + 0.5 - a.gx, via[1] + 0.5 - a.gy, "walk", now);
 }
 
+// THIRST: from when its water meter falls below drinkBelow (seekBelow, knowing of no fresh
+// water) until drinkFullAt, a critter old enough to eat drinks: with fresh water in its
+// reach, it stands and drinks (EAT); water it tastes salt (the sea) marks every shore it
+// remembers within saltNearTiles as the sea's. Otherwise it trots to the nearest shore it remembers that isn't the sea's;
+// one it gets no nearer to in drinkGiveUpS, or reaches with no water in reach (a high
+// bank), it leaves be for drinkAvoidS. Knowing of none, it searches (search). Swimming,
+// it drinks the water it swims in if fresh (it tastes it), and else leaves its thirst
+// for later.
+// SHORES IT HAS SEEN (m.waters, noteShores): every waterLookS, of the shores in sight
+// (senses.shoresAround), the nearest in each waterCellTiles square in line of sight (as
+// the sight view rounds terrain: where a deer standing on it would be seen, since a bank's
+// brink hides the water's edge from afar); the watersKept nearest kept. Sight doesn't tell
+// the sea from a lake: taste does.
+// An intent, or null if not thirsty or with nothing to do about it.
+const cellKey = (i, j) => Math.floor(i / waterCellTiles) * 100000 + Math.floor(j / waterCellTiles);
+
+function noteShores(a, m, now) {
+  if (now - m.waterLook < ticks(waterLookS) || !sim.can(a, "see")) return;
+  m.waterLook = now;
+  const byCell = new Map();
+  for (const s of senses.shoresAround(a)) {
+    const key = cellKey(s.i, s.j);
+    s.d2 = (s.i + 0.5 - a.gx) ** 2 + (s.j + 0.5 - a.gy) ** 2;
+    if (!byCell.has(key)) byCell.set(key, []);
+    byCell.get(key).push(s);
+  }
+  const deerEye = senses.eyeLevelsBySpecies.deer;
+  for (const [key, shores] of byCell) {
+    const s = shores.sort((p, q) => p.d2 - q.d2).slice(0, shoreLosChecks)
+      .find(s => senses.canSeePoint(a, s.i + 0.5, s.j + 0.5, sim.heightAt(s.i + 0.5, s.j + 0.5) + deerEye));
+    if (s) m.waters.set(key, { i: s.i, j: s.j, salt: m.saltCells.has(key) });
+  }
+  if (m.waters.size > watersKept) {
+    const far = [...m.waters].map(([key, s]) => [key, (s.i - a.gx) ** 2 + (s.j - a.gy) ** 2]).sort((p, q) => q[1] - p[1]);
+    for (let k = 0; k < m.waters.size - watersKept; k++) m.waters.delete(far[k][0]);
+  }
+}
+
+function markSalt(m, i, j) {
+  const r = Math.ceil(saltNearTiles / waterCellTiles);
+  const ci = Math.floor(i / waterCellTiles), cj = Math.floor(j / waterCellTiles);
+  for (let a = ci - r; a <= ci + r; a++) for (let b = cj - r; b <= cj + r; b++) {
+    const key = a * 100000 + b;
+    m.saltCells.add(key);
+    const s = m.waters.get(key);
+    if (s) s.salt = true;
+  }
+}
+
+function thirst(a, m, now) {
+  if (!sim.can(a, "eat")) return null;
+  if (m.drinking && a.water >= drinkFullAt) { m.drinking = false; m.waterTo = null; m.search = m.lookFrom = null; }
+  if (!m.drinking && (a.water < drinkBelow || a.water < seekBelow && ![...m.waters.values()].some(s => !s.salt)))
+    m.drinking = true;
+  if (!m.drinking) return null;
+  const w = sim.waterInReach(a);
+  if (w && w.kind !== "sea") { m.mode = "drink"; m.plan = null; m.waterTo = null; return EAT; }
+  if (w) markSalt(m, w.i, w.j);
+  if (a.pose === "swim") return null;
+  let to = m.waterTo !== null ? m.waters.get(m.waterTo) : null;
+  if (to && !to.salt) {
+    const d2 = (to.i + 0.5 - a.gx) ** 2 + (to.j + 0.5 - a.gy) ** 2;
+    if (d2 < m.waterBestD2 - 0.25) { m.waterBestD2 = d2; m.waterSince = now; }
+    // (there, with no water in reach: a high bank)
+    if (now - m.waterSince > ticks(drinkGiveUpS) || d2 < 0.1) {
+      m.waterAvoid.set(m.waterTo, now + ticks(drinkAvoidS));
+      to = null;
+    }
+  } else to = null;
+  if (!to) {
+    for (const [key, until] of m.waterAvoid) if (until <= now) m.waterAvoid.delete(key);
+    let bestD2 = Infinity;
+    m.waterTo = null;
+    for (const [key, s] of m.waters) {
+      if (s.salt || m.waterAvoid.has(key)) continue;
+      const d2 = (s.i + 0.5 - a.gx) ** 2 + (s.j + 0.5 - a.gy) ** 2;
+      if (d2 < bestD2) { bestD2 = d2; m.waterTo = key; to = s; }
+    }
+    m.waterSince = now; m.waterBestD2 = Infinity;
+  }
+  m.mode = "drink"; m.plan = null;
+  if (to) { m.search = m.lookFrom = null; return move(a, m, to.i + 0.5 - a.gx, to.j + 0.5 - a.gy, "trot", now, true, true); }
+  return search(a, m, now);
+}
+
+// Knowing of no water, it searches: for searchLegS at a time it trots one of the 8 ways:
+// near where it began to look (m.lookFrom; within searchNearTiles), any; farther, one of
+// the 3 nearest the way away from there; beyond searchFarTiles, back toward it. So it
+// ranges out and back around where it began, a different way each time. A way it is
+// blocked in it changes at once.
+function search(a, m, now) {
+  if (!m.lookFrom) m.lookFrom = [a.gx, a.gy];
+  if (m.search && a.blockedTick > m.lastTurn) m.search.until = now;
+  if (!m.search || m.search.until <= now) {
+    const ox = a.gx - m.lookFrom[0], oy = a.gy - m.lookFrom[1], d2 = ox * ox + oy * oy;
+    const out = sim.getDir(ox, oy, 0), turn = Math.floor(Math.random() * 3) - 1;
+    const dir = d2 < searchNearTiles * searchNearTiles ? Math.floor(Math.random() * 8)
+      : (out + (d2 > searchFarTiles * searchFarTiles ? 4 : 0) + 8 + turn) % 8;
+    const [dx, dy] = sim.moveVecByDir[dir];
+    m.search = { dx, dy, until: now + ticks(searchLegS) };
+  }
+  return move(a, m, m.search.dx, m.search.dy, "trot", now, true);
+}
+
 // WOLVES eat first: from below wolfFeedBelow (with its stomach below wolfFeedGutBelow)
 // until full (or its stomach is), and once old enough to eat, the nearest carcass with
 // meat (blocked near it, it waits its turn: feedWaitS) it perceived within
@@ -470,6 +606,8 @@ function decideWolf(a, m, now) {
   // an infant suckles rather than goes to a carcass
   const suckling = sim.isInfant(a) && nurseOrSuckle(a, m, now);
   if (suckling) return suckling;
+  const drinking = thirst(a, m, now);
+  if (drinking) { m.target = null; m.searching = false; m.watch = null; return drinking; }
   const feeding = m.mode === "feed"
     ? a.food < wolfFullAt && !stomachFull(a) : a.food < wolfFeedBelow && a.gut < wolfFeedGutBelow;
   if (feeding && sim.can(a, "eat")) {
@@ -897,6 +1035,7 @@ function think() {
     }
     if (now % turnTicks !== m.slot) continue;
     remember(a, m, now);
+    noteShores(a, m, now);
     let intent;
     if (a.pose !== "swim") m.shore = null;
     if (now - m.playerTick < ticks(playerHandoverS)) intent = IDLE;
@@ -999,7 +1138,8 @@ function stateOf(a) {
   const m = memories.get(a);
   if (!m) return null;
   return { mode: m.mode, target: m.target, searching: m.searching, flee: m.flee, detour: m.detour, watch: m.watch,
-    grazeTo: m.grazeTo, closing: m.closing,
+    grazeTo: m.grazeTo, closing: m.closing, drinking: m.drinking, waterTo: m.waterTo !== null ? m.waters.get(m.waterTo) : null,
+    waters: [...m.waters.values()].map(s => ({ ...s })),
     slot: m.slot, lastTurn: m.lastTurn, court: m.court, familiar: [...m.familiar],
     avoid: m.avoid.map(t => t > sim.tickCount ? 1 : 0).join(""),
     known: [...m.known].map(([uid, k]) => ({ uid, ...k })) };
@@ -1018,7 +1158,7 @@ function attach(theSim, theSenses) {
   sim.onTick(think);
 }
 
-return { attach, takeOver, ignore, forget, rest, stateOf, get turnTicks() { return turnTicks; }, wolfHuntBelow,
+return { attach, takeOver, ignore, forget, rest, stateOf, get turnTicks() { return turnTicks; }, wolfHuntBelow, drinkBelow,
   pacing };
 
 })();

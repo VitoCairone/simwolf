@@ -11,15 +11,21 @@
 // SIGHT, once old enough to "see": every creature within a rectangle on screen around the
 // critter (the shape and size of the game view at the default 2x zoom on a full-screen
 // MacBook, about 1,290 x 810 CSS pixels; in grid terms, screen-horizontal is dx - dy and
-// screen-vertical dx + dy, so the rectangle needs no square root) and in its LINE OF
-// SIGHT: the straight line from its eye to the other's (eyeLevelsBySpecies, by its size)
+// screen-vertical dx + dy, so the rectangle needs no square root), in its FIELD OF VIEW
+// (inView: within fovDegBySpecies, centered on its heading, all of it seen alike) and in
+// its LINE OF SIGHT: the straight line from its eye to the other's (eyeLevelsBySpecies, by its size)
 // passes above the ground and boulders (sim.sightHeightAt) of every tile in between.
 // Only creatures inside the rectangle are traced: O(n^2) in critters, for now. Sight
 // alone tells a creature's sex, age (an infant, grown), its partner, and whether a female
-// is in heat (as smell would, up close). Grass and land a critter can see are likewise
-// in the rectangle and in line of sight (canSeeTile).
+// is in heat (as smell would, up close). Grass, land and water a critter can see are
+// likewise in the rectangle and in line of sight (canSeeTile); sight doesn't tell fresh
+// water from the sea (taste does: sim.waterInReach, for the mind).
+// KEEPING SIGHT: a creature it has seen it can see again however far off, in its field of
+// view and line of sight, until keepSightS after it last saw it (seesNow): one it has
+// spotted it doesn't lose for being out of the rectangle (by day, beyond the view at 2x
+// zoom; at night, beyond its shrunken sight), only behind something or behind it.
 // AT NIGHT the rectangle shrinks (sightShare), from the whole of it in daylight
-// (sim.clock.light 1) to nightSightShare of it in the dark, through the twilight.
+// (sim.clock.light 1) to nightSightShare of its area in the dark, through the twilight.
 // HEARING, once old enough to "hear": a creature moving on land, heard within a range set
 // by its gait and the ground under it (hearingRangeTiles: loudest galloping on stone), or
 // swimming. Standing still is silent. It tells its species, and where and how it moves.
@@ -57,16 +63,44 @@ const sightHalfHeightTiles = 25.3; // |dx + dy| at most this
 // its head), the deer's about 20. A young critter's is lower by its size (sim.youngScales).
 const eyeLevelsBySpecies = { wolf: 2.25, deer: 2.5 };
 
-// How much of its daylight sight a critter keeps in the dark (estimates). Both have eyes
-// built for dim light (many rods, a reflecting tapetum lucidum): deer gather some 18 times
-// the light a human eye does at night (K. Miller, University of Georgia), wolves some 5
-// times or more; both see less detail than by day. Moonlight is left out (TODO).
+// How much of its daylight sight's area a critter keeps in the dark (estimates). Both have
+// eyes built for dim light (many rods, a reflecting tapetum lucidum): deer gather some 18
+// times the light a human eye does at night (K. Miller, University of Georgia), wolves
+// some 5 times or more; both see less detail than by day. Moonlight is left out (TODO).
 const nightSightShare = { wolf: 0.4, deer: 0.5 };
 
-// The share of its sight rectangle critter a sees now, by the light.
+// FIELD OF VIEW, degrees: wolves about 250 (Mexican Wolf Conservation), deer about 310
+// (white-tailed deer: Grand View Outdoors). As the cosine of half of it, for inView.
+const fovDegBySpecies = { wolf: 250, deer: 310 };
+const fovHalfCos = Object.fromEntries(Object.entries(fovDegBySpecies).map(([sp, d]) => [sp, Math.cos(d / 2 * Math.PI / 180)]));
+
+// KEEPING SIGHT: how long after it last saw a creature a critter still sees it beyond its
+// sight rectangle; and when each critter last saw each creature (game time).
+const keepSightS = 6;
+const lastSeen = new WeakMap(); // critter -> Map(uid -> sim.now)
+
+// The share of its sight rectangle's width and height critter a sees now, by the light:
+// the square root of the share of its area (worked out again only as the light changes).
+let shareLight = NaN;
+const shareBySpecies = {};
 function sightShare(a) {
-  const n = nightSightShare[a.species], light = sim.clock.light;
-  return n + (1 - n) * light;
+  const light = sim.clock.light;
+  if (light !== shareLight) {
+    shareLight = light;
+    for (const [sp, n] of Object.entries(nightSightShare)) shareBySpecies[sp] = Math.sqrt(n + (1 - n) * light);
+  }
+  return shareBySpecies[a.species];
+}
+
+// Whether grid offset (dx, dy) from critter a is in its field of view (along its heading;
+// a critter with none sees all round), or within nearViewTiles (the ground about its feet,
+// under its nose). No square root: the angle's cosine is compared squared, by its sign.
+const nearViewTiles = 1;
+function inView(a, dx, dy) {
+  const hx = a.hx || 0, hy = a.hy || 0, d2 = dx * dx + dy * dy;
+  if (hx === 0 && hy === 0 || d2 <= nearViewTiles * nearViewTiles) return true;
+  const along = dx * hx + dy * hy, c = fovHalfCos[a.species], d2c2 = c * c * d2;
+  return c < 0 ? along >= 0 || along * along <= d2c2 : along > 0 && along * along >= d2c2;
 }
 
 // What a critter can tell of the sky: how light it is, whether the sun is up, and whether
@@ -130,7 +164,7 @@ function canSee(a, b) {
 // Whether critter a sees grid point (gx, gy) at height gz (by default, the ground there):
 // in its sight rectangle and line of sight.
 function canSeePoint(a, gx, gy, gz = sim.heightAt(gx, gy)) {
-  if (!sim.can(a, "see") || !inSight(gx - a.gx, gy - a.gy, sightShare(a))) return false;
+  if (!sim.can(a, "see") || !inSight(gx - a.gx, gy - a.gy, sightShare(a)) || !inView(a, gx - a.gx, gy - a.gy)) return false;
   if (!use.lineOfSight) return true;
   return clearLine(a.gx, a.gy, sim.heightAt(a.gx, a.gy) + eyeLevels(a), gx, gy, gz);
 }
@@ -150,10 +184,24 @@ function obstacleInWay(a, gx, gy, gz = sim.heightAt(gx, gy)) {
     obstacleBlocks);
 }
 
-// Whether critter a sees creature b (alive or a corpse), as perceive tells by sight.
-function seesCreature(a, b) {
-  return sim.can(a, "see") && inSight(b.gx - a.gx, b.gy - a.gy, sightShare(a)) && canSee(a, b);
+// Whether critter a sees creature b (alive or a corpse) now: in its field of view, in its
+// sight rectangle or seen within keepSightS (see KEEPING SIGHT), and in line of sight.
+function seesNow(a, b) {
+  if (!sim.can(a, "see")) return false;
+  const dx = b.gx - a.gx, dy = b.gy - a.gy;
+  let mine = lastSeen.get(a);
+  const last = mine && mine.get(b.uid);
+  const kept = last !== undefined && sim.now - last <= keepSightS;
+  if (last !== undefined && !kept) mine.delete(b.uid);
+  if (!inView(a, dx, dy) || !kept && !inSight(dx, dy, sightShare(a))) return false;
+  if (!canSee(a, b)) return false;
+  if (!mine) lastSeen.set(a, mine = new Map());
+  mine.set(b.uid, sim.now);
+  return true;
 }
+
+// Whether critter a sees creature b, as perceive tells by sight (for the view).
+const seesCreature = seesNow;
 
 // HEARING: how far a creature moving on each ground, at each gait, can be heard, in tiles
 // (estimates). Swimming splashes are heard as far on any water.
@@ -234,14 +282,13 @@ function trailsAround(a, species) {
 //   mateUid: its partner's uid, or null
 function perceive(a) {
   const out = [];
-  const share = sim.can(a, "see") ? sightShare(a) : 0, sees = share > 0;
   const hears = use.hearing && sim.can(a, "hear"), smells = use.smell, wind = sim.wind;
   for (const list of [sim.allCritters, sim.allCorpses]) {
     for (const b of list) {
       if (b === a) continue;
       const dx = b.gx - a.gx, dy = b.gy - a.gy, alive = sim.isLiveCritter(b);
       let by = null;
-      if (sees && inSight(dx, dy, share) && canSee(a, b)) by = "sight";
+      if (seesNow(a, b)) by = "sight";
       else {
         // the cheap tests first: distance, then what it costs to find out more
         const d2 = dx * dx + dy * dy;
@@ -275,16 +322,38 @@ function perceive(a) {
 }
 
 // The tiles with grass on them whose centers are in the sight rectangle of critter a (as
-// much of it as it sees now: sightShare), or within share k of that: [{ i, j, kg }]. (Line of sight is left to the mind to check, with
-// canSeeTile, for the few it considers: there are thousands.)
+// much of it as it sees now: sightShare), or within share k of that, and in its field of
+// view: [{ i, j, kg }]. (Line of sight is left to the mind to check, with canSeeTile, for
+// the few it considers: there are thousands.)
 function grassAround(a, k = 1) {
   k *= sightShare(a);
   const out = [], ci = Math.floor(a.gx), cj = Math.floor(a.gy);
   const r = Math.ceil(k * (sightHalfWidthTiles + sightHalfHeightTiles) / 2) + 1;
   for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
-    if (!inSight(i + 0.5 - a.gx, j + 0.5 - a.gy, k)) continue;
+    if (!inSight(i + 0.5 - a.gx, j + 0.5 - a.gy, k) || !inView(a, i + 0.5 - a.gx, j + 0.5 - a.gy)) continue;
     const kg = sim.grassFoodAt(i, j);
     if (kg > 0) out.push({ i, j, kg });
+  }
+  return out;
+}
+
+// The shores whose centers are in the sight rectangle of critter a (as much of it as it
+// sees now) and its field of view: open land tiles beside water (on one of their four sides), [{ i, j }]. Line
+// of sight is left to the mind, as for grassAround.
+function shoresAround(a) {
+  const k = sightShare(a), ci = Math.floor(a.gx), cj = Math.floor(a.gy);
+  const r = Math.ceil(k * (sightHalfWidthTiles + sightHalfHeightTiles) / 2) + 2, n = 2 * r + 1;
+  const wet = new Uint8Array(n * n); // 1 water, 2 open land
+  for (let x = 0; x < n; x++) for (let y = 0; y < n; y++) {
+    const i = ci - r + x, j = cj - r + y;
+    wet[x * n + y] = sim.getTerrainAt(i, j) === "water" ? 1 : sim.isBlockedTile(i, j) ? 0 : 2;
+  }
+  const out = [];
+  for (let x = 1; x < n - 1; x++) for (let y = 1; y < n - 1; y++) {
+    const c = x * n + y;
+    if (wet[c] !== 2 || !(wet[c - n] === 1 || wet[c + n] === 1 || wet[c - 1] === 1 || wet[c + 1] === 1)) continue;
+    const i = ci - r + x, j = cj - r + y;
+    if (inSight(i + 0.5 - a.gx, j + 0.5 - a.gy, k) && inView(a, i + 0.5 - a.gx, j + 0.5 - a.gy)) out.push({ i, j });
   }
   return out;
 }
@@ -297,8 +366,8 @@ function attach(theSim) {
 }
 
 return {
-  attach, perceive, grassAround, trailsAround, inSight, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
-  sightHalfWidthTiles, sightHalfHeightTiles, hearingRangeTiles, airScentRangeTiles, eyeLevelsBySpecies, sniffTiles,
+  attach, perceive, grassAround, shoresAround, trailsAround, inSight, inView, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
+  sightHalfWidthTiles, sightHalfHeightTiles, fovDegBySpecies, keepSightS, hearingRangeTiles, airScentRangeTiles, eyeLevelsBySpecies, sniffTiles,
 };
 
 })();

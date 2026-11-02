@@ -116,7 +116,8 @@ async function main(browser, r) {
     for (let di = -6; di <= 6; di++) for (let dj = -6; dj <= 6; dj++) S.setGrassKg((i + di) * H + j + dj, 0.0001); // crumbs
     S.setGrassKg((i + 4) * H + j, 0.1 * max); // one short tile, 4 tiles east
     d.gx = d.nextGX = i + 0.5; d.gy = d.nextGY = j + 0.5; d.stunnedUntil = 0; d.speed = 0;
-    S.setCritterIdle(d); mind.forget(d); mind.ignore(d, false); S.setFood(d, 0.5);
+    S.setCritterIdle(d); d.hx = 1; d.hy = 0; // (facing it)
+    mind.forget(d); mind.ignore(d, false); S.setFood(d, 0.5);
     const visited = new Set();
     let n = 0;
     for (; n < 8 * 60 && sim.grassFoodAt(i + 4, j) > 0.05 * max; n++) {

@@ -1,8 +1,9 @@
 // Senses and decisions (senses.js, mind.js):
-//  - sight: every creature within the game view's rectangle at 2x zoom, nothing further
+//  - sight: every creature within the game view's rectangle at 2x zoom and the field of
+//    view, nothing further or behind
 //  - a deer flees a wolf it sees; a wolf chases a deer it sees
-//  - memory: a deer keeps fleeing a wolf it can no longer see, and a wolf keeps after a
-//    deer it can no longer see, toward where the deer was heading
+//  - memory: a deer keeps fleeing a wolf it can no longer see, however far it gets, and a
+//    wolf keeps after a deer it can no longer see, toward where the deer was heading
 //  - forgetting: both give up once the sighting is old enough
 //  - no dithering: a wolf with two deer about as near in opposite directions picks the
 //    one ahead of it and keeps to it, without flipping between them
@@ -27,7 +28,7 @@
 
 const { openGame, runStandalone } = require("./helpers");
 
-// in the page: put a wolf and a deer on open dry ground, everyone else away
+// in the page: put a wolf and a deer on open dry ground, facing each other, everyone else away
 function setup({ deerAt, deer2At = null, wolfThinks = true, deerThinks = true }) {
   sim.pause();
   // (live ones: one may have been killed in the moment of play before the test paused;
@@ -57,6 +58,10 @@ function setup({ deerAt, deer2At = null, wolfThinks = true, deerThinks = true })
     mind.ignore(c, c === w ? !wolfThinks : !deerThinks);
     mind.forget(c); // nothing remembered from before the test
   }
+  // facing each other (the wolf the first deer), so each has the other in its field of view
+  const face = (a, b) => { const dx = b.gx - a.gx, dy = b.gy - a.gy, l = Math.hypot(dx, dy);
+    a.hx = dx / l; a.hy = dy / l; a.currentDirection = sim.getDir(dx, dy); };
+  face(w, d); face(d, w); if (d2) face(d2, w);
   window.__w = w; window.__d = d; window.__d2 = d2;
   return t;
 }
@@ -65,28 +70,29 @@ async function main(browser, r) {
   const p = await openGame(browser, { viewport: { width: 900, height: 650 } });
   const fresh = async () => {
     await p.reload(); await p.waitForTimeout(300);
-    await p.evaluate(() => { sim.internals.holdClock(12); }); // (as openGame)
+    await p.evaluate(() => { sim.internals.holdClock(12); sim.internals.holdWater(true); }); // (as openGame)
     await p.evaluate(`window.setup = ${setup.toString()}`);
   };
 
-  // 1. sight: within the rectangle only
+  // 1. sight: within the rectangle and the field of view only (the wolf facing screen-right)
   const sight = await p.evaluate(() => {
     sim.pause();
-    const w = sim.internals.wolves[1], [d1, d2, d3, d4] = sim.internals.deer;
+    const w = sim.internals.wolves[1], [d1, d2, d3, d4, d5] = sim.internals.deer;
     const W = senses.sightHalfWidthTiles, H = senses.sightHalfHeightTiles;
+    w.hx = Math.SQRT1_2; w.hy = -Math.SQRT1_2;
     // offsets for a point (u across the screen, v down it): dx = (u + v) / 2, dy = (v - u) / 2
     const put = (d, u, v) => { d.gx = w.gx + (u + v) / 2; d.gy = w.gy + (v - u) / 2; };
-    put(d1, 0.99 * W, 0); put(d2, 1.01 * W, 0); put(d3, 0, 0.99 * H); put(d4, 0, -1.01 * H);
-    // the rectangle alone (line of sight is tested in senses.test.js)
+    put(d1, 0.99 * W, 0); put(d2, 1.01 * W, 0); put(d3, 0, 0.99 * H); put(d4, 0, -1.01 * H); put(d5, -0.5 * W, 0);
+    // the rectangle and field of view alone (line of sight is tested in senses.test.js)
     senses.use.lineOfSight = false;
     const seen = senses.perceive(w).filter(o => o.by === "sight").map(o => o.uid);
     senses.use.lineOfSight = true;
     return { W, H, side: seen.includes(d1.uid), pastSide: seen.includes(d2.uid),
-      top: seen.includes(d3.uid), pastTop: seen.includes(d4.uid) };
+      top: seen.includes(d3.uid), pastTop: seen.includes(d4.uid), behind: seen.includes(d5.uid) };
   });
-  r.check(sight.side && !sight.pastSide && sight.top && !sight.pastTop,
-    `sight is the game view's rectangle: |dx - dy| up to ${sight.W}, |dx + dy| up to ${sight.H} ` +
-    `(just inside: ${sight.side}, ${sight.top}; just outside: ${sight.pastSide}, ${sight.pastTop})`);
+  r.check(sight.side && !sight.pastSide && sight.top && !sight.pastTop && !sight.behind,
+    `sight is the game view's rectangle: |dx - dy| up to ${sight.W}, |dx + dy| up to ${sight.H}, within the field of view ` +
+    `(just inside: ${sight.side}, ${sight.top}; just outside: ${sight.pastSide}, ${sight.pastTop}; behind it: ${sight.behind})`);
 
   // 2. a deer flees a wolf in sight
   await fresh();
@@ -125,12 +131,16 @@ async function main(browser, r) {
     const s2 = mind.stateOf(d);
     const from2 = Math.hypot(d.gx - wolfWas[0], d.gy - wolfWas[1]);
     const seesWolf = senses.perceive(d).some(o => o.species === "wolf");
-    for (let n = 0; n < 15 * 60; n++) sim.internals.tick(); // 15 s more
-    return { from0, from2, mode2: s2.mode, seesWolf, modeLater: mind.stateOf(d).mode };
+    for (let n = 0; n < 8 * 60; n++) sim.internals.tick();  // 8 s more: far off, still fleeing
+    const mode10 = mind.stateOf(d).mode, from10 = Math.hypot(d.gx - wolfWas[0], d.gy - wolfWas[1]);
+    for (let n = 0; n < 7 * 60; n++) sim.internals.tick();  // 7 s more
+    return { from0, from2, mode2: s2.mode, seesWolf, mode10, from10, modeLater: mind.stateOf(d).mode };
   })()`);
   r.check(deerMem && !deerMem.seesWolf && deerMem.mode2 === "flee" && deerMem.from2 > deerMem.from0 + 5,
     `out of sight, a deer keeps fleeing where it last saw the wolf (${deerMem && deerMem.from0.toFixed(1)} -> ` +
     `${deerMem && deerMem.from2.toFixed(1)} tiles from that spot after 2 s)`);
+  r.check(deerMem && deerMem.mode10 === "flee" && deerMem.from10 > 40,
+    `...however far it gets: 10 s on, ${deerMem && deerMem.from10.toFixed(0)} tiles off, still fleeing (${deerMem && deerMem.mode10})`);
   r.check(deerMem && deerMem.modeLater === "calm", `...and calms down later (17 s on: ${deerMem && deerMem.modeLater})`);
 
   // 5. a wolf remembers a deer it can no longer see, and where it was going
@@ -312,7 +322,8 @@ async function main(browser, r) {
     const [stag, hind] = [true, false].map(male => sim.allCritters.find(c => c.species === "deer" && c.isMale === male && sim.isGrown(c)
       && c.matingWith === null));
     const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.climbingUntil = -1; c.stunnedUntil = 0; c.wind = c.stamina = 1; S.setCritterIdle(c); };
-    put(hind, b[0] - 1.5, b[1] + 0.5); sim.internals.setFood(hind, 0.5); hind.mateUid = null; mind.forget(hind); mind.ignore(hind, false);
+    put(hind, b[0] - 1.5, b[1] + 0.5); hind.hx = 1; hind.hy = 0; // (facing it)
+    sim.internals.setFood(hind, 0.5); hind.mateUid = null; mind.forget(hind); mind.ignore(hind, false);
     let eatingTicks = 0, facing = true, inside = false;
     for (let k = 0; k < 15 / sim.tempo && sim.grassFoodAt(b[0], b[1]) > 0; k++) {
       S.tick();

@@ -2,6 +2,8 @@
 // wolf, the view shows what it sees.
 //  - on while the camera follows the player's wolf, off once it is panned
 //  - ground it has never seen is black, and so are the map's surroundings
+//  - the wolf sees only within its field of view (about 250 degrees about its heading):
+//    beyond it the ground is drawn without colour, along straight lines from its eye
 //  - a lone boulder casts a shadow with straight edges, where the lines of sight from the
 //    wolf's eye past the boulder's corners run: just inside them the ground is drawn
 //    without colour (greyed out, or black where never seen), just outside in colour
@@ -65,10 +67,13 @@ async function main(browser, r) {
       c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; c.climbingUntil = -1;
       S.setCritterIdle(c);
     };
-    // first north of the boulder, then west of it: the sight view works out what it sees
+    // first north of the boulder, then west of it, facing it: the sight view works out what it sees
     // afresh some ticks after the wolf moves
     // (and paints a few chunks' masks a frame)
-    window.__wolfTo = (x, y) => { __put(w, x, y); for (let k = 0; k < 12; k++) S.tick(); for (let k = 0; k < 40; k++) animat.render(); };
+    // (facing the boulder)
+    window.__wolfTo = (x, y) => { __put(w, x, y);
+      const dx = B[0] + 0.5 - x, dy = B[1] + 0.5 - y, l = Math.hypot(dx, dy); w.hx = dx / l; w.hy = dy / l;
+      for (let k = 0; k < 12; k++) S.tick(); for (let k = 0; k < 40; k++) animat.render(); };
     animat.setZoom(2); animat.followWolf();
     __wolfTo(B[0] + 0.5, B[1] + 0.5 - 4);
     __wolfTo(B[0] + 0.5 - 3, B[1] + 0.7);
@@ -111,7 +116,8 @@ async function main(browser, r) {
   await p.screenshot({ path: path.join(outDir, "boulder-shadow.png") });
 
   // a tile seen before, but not all of it now, is shown as seen when a deer standing on it
-  // would be seen and no obstacle hides any of it; split (partly greyed) only otherwise
+  // would be seen and no obstacle (nor the edge of its field of view) hides any of it;
+  // split (partly greyed) only otherwise
   const rounding = await p.evaluate(() => {
     const w = sim.pcWolf, R = 24, deerEye = senses.eyeLevelsBySpecies.deer;
     const out = { rounded: 0, wrong: [] };
@@ -124,7 +130,7 @@ async function main(browser, r) {
         if (!senses.canSeePoint(w, i + a / 2, j + b / 2)) hidden.push([i + a / 2, j + b / 2]);
       if (!hidden.length) continue;
       const deer = senses.canSeePoint(w, i + 0.5, j + 0.5, sim.heightAt(i + 0.5, j + 0.5) + deerEye);
-      const rock = hidden.some(([x, y]) => senses.obstacleInWay(w, x, y));
+      const rock = hidden.some(([x, y]) => senses.obstacleInWay(w, x, y) || !senses.inView(w, x - w.gx, y - w.gy));
       if (state === "seen") out.rounded++;
       if ((state === "seen") !== (deer && !rock)) out.wrong.push([i, j, state, deer, rock]);
     }
@@ -133,6 +139,22 @@ async function main(browser, r) {
   r.check(rounding.rounded > 0 && rounding.wrong.length === 0,
     `a tile partly out of sight is shown as seen when a deer on it would be seen and no obstacle hides any of it, ` +
     `else split (${rounding.rounded} shown as seen; wrong: ${JSON.stringify(rounding.wrong.slice(0, 5))})`);
+
+  // the edges of its field of view: just inside each, 3 tiles out, in colour; just outside,
+  // without colour (greyed, or black where never seen)
+  const fov = await p.evaluate(() => {
+    const w = sim.pcWolf, half = senses.fovDegBySpecies.wolf / 2 * Math.PI / 180, h = Math.atan2(w.hy, w.hx), out = [];
+    for (const side of [1, -1]) for (const [inside, off] of [[true, -0.15], [false, 0.15]]) {
+      const a = h + side * half, x = w.gx + 3 * Math.cos(a) - side * off * Math.sin(a), y = w.gy + 3 * Math.sin(a) + side * off * Math.cos(a);
+      const [px, py] = animat.isoProject(x, y);
+      out.push({ inside, view: senses.inView(w, x - w.gx, y - w.gy), at: animat.worldToScreen(px, py - sim.heightAt(x, y) * 8) });
+    }
+    return out;
+  });
+  const fovPx = await pixels(p, fov.map(q => q.at));
+  r.check(fov.every((q, k) => q.view === q.inside && (q.inside ? colourOf(fovPx[k]) > 20 : colourOf(fovPx[k]) <= 3)),
+    `its field of view (${await p.evaluate(() => senses.fovDegBySpecies.wolf)} degrees) ends along two straight lines: in colour just inside them, without colour just outside ` +
+    `(${fov.map((q, k) => `${q.inside ? "in" : "out"} ${colourOf(fovPx[k])}`).join(", ")})`);
 
   // ground seen from the north, now behind the boulder: greyed out
   const behind = [bi + 3, bj + 0];

@@ -41,9 +41,9 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   justify-content: center;
   padding: 10px;
 }
-/* The player's wolf's meters: wind, stamina, and food, a full bar when full. No labels:
-   the game shows no words or numbers. The food meter is two: the body's energy (three
-   quarters of the width) and the stomach's (a quarter), a small gap between. */
+/* The player's wolf's meters: wind, stamina, food and water, a full bar when full. No
+   labels: the game shows no words or numbers. The food meter is two: the body's energy
+   (three quarters of the width) and the stomach's (a quarter), a small gap between. */
 .exertion-meter {
   height: 6px;
   width: 100%;
@@ -57,6 +57,7 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
 #stamina-meter-fill, #inspect-stamina-fill { background-color: yellow; }
 #food-meter-fill, #inspect-food-fill { background-color: #e03c3c; }
 #gut-meter-fill, #inspect-gut-fill { background-color: #f0904a; }
+#water-meter-fill, #inspect-water-fill { background-color: #2f6fd6; }
 .food-meter {
   display: flex;
   gap: 3px;

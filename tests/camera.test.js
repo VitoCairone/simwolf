@@ -21,6 +21,7 @@ async function main(browser, r) {
   const at = await p.evaluate(() => {
     const w = sim.pcWolf, d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     d.gx = d.nextGX = w.gx + 2.5; d.gy = d.nextGY = w.gy - 2.5; d.speed = 0; d.stunnedUntil = 0;
+    w.hx = Math.SQRT1_2; w.hy = -Math.SQRT1_2; // (the wolf facing it: it sees it, so it is drawn)
     sim.internals.setCritterIdle(d);
     window.__d = d;
     animat.render();

@@ -23,8 +23,9 @@ async function launchBrowser() {
 // An alert() means the program hit a state that should halt it, so the
 // dialog is dismissed (to keep the test running) and counted as a failure.
 // Unless dayNight is set, the clock is held at noon (see DAY AND NIGHT in sim.js), so
-// other tests aren't upset by the time of day.
-async function openGame(browser, { viewport, initScript, initArg, dayNight = false } = {}) {
+// other tests aren't upset by the time of day; unless thirst is set, critters are kept
+// full of water (holdWater: see WATER in sim.js), so they don't go looking for it.
+async function openGame(browser, { viewport, initScript, initArg, dayNight = false, thirst = false } = {}) {
   const page = await browser.newPage(viewport ? { viewport } : {});
   page.problems = [];
   page.on("pageerror", e => page.problems.push("pageerror: " + e.message));
@@ -42,6 +43,7 @@ async function openGame(browser, { viewport, initScript, initArg, dayNight = fal
   await page.waitForTimeout(300); // let the page load create critters and its images
   await page.evaluate(n => { for (let k = 0; k < n; k++) sim.internals.tick(); sim.unpause(); }, startTicks);
   if (!dayNight) await page.evaluate(() => { sim.internals.holdClock(12); });
+  if (!thirst) await page.evaluate(() => { sim.internals.holdWater(true); });
   return page;
 }
 

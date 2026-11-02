@@ -3,7 +3,7 @@
 //    SPEEDS.dayLengthS (GAMIFIED: 10 minutes); the light is full by day, none at night, between in the twilight
 //  - grass grows only while the sun is up, faster by the year's share of daylight, so a
 //    year's growth is as before
-//  - sight shrinks at night (a wolf sees less far than a deer)
+//  - sight shrinks at night, to a share of its area (a wolf sees less far than a deer)
 //  - sleep is off: through a minute of play at dusk no critter lies down to sleep, and no
 //    wakeful meter is drawn
 
@@ -62,17 +62,20 @@ async function main(browser, r) {
     const wolf = sim.allCritters.find(c => c.species === "wolf" && c !== sim.pcWolf && sim.isGrown(c) && sim.isLiveCritter(c));
     const deer = sim.allCritters.find(c => c.species === "deer" && sim.isGrown(c) && sim.isLiveCritter(c));
     const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; S.setCritterIdle(c); c.pose = "idle"; };
-    // 6 tiles apart along the screen's vertical (dx + dy = 12 of the 25.3 half-height)
-    put(wolf, home[0] - 3, home[1] - 3); put(deer, home[0] + 3, home[1] + 3);
+    // apart along the screen's vertical by dx + dy = 17 of the 25.3 half-height, facing each
+    // other; at night the wolf keeps 40% of its sight's area (its half-height 16.0), the
+    // deer 50% (17.9). Night first: once seen, they would keep each other in sight.
+    put(wolf, home[0] - 4.25, home[1] - 4.25); put(deer, home[0] + 4.25, home[1] + 4.25);
+    wolf.hx = wolf.hy = Math.SQRT1_2; deer.hx = deer.hy = -Math.SQRT1_2;
     const sees = (a, b) => senses.perceive(a).some(o => o.uid === b.uid && o.by === "sight");
-    S.holdClock(12); const day = [sees(wolf, deer), sees(deer, wolf)];
     S.holdClock(0); const night = [sees(wolf, deer), sees(deer, wolf)];
-    S.holdClock(12);
+    const k = [senses.sightShare(wolf), senses.sightShare(deer)];
+    S.holdClock(12); const day = [sees(wolf, deer), sees(deer, wolf)];
     senses.use.hearing = senses.use.smell = true;
-    return { day, night, share: senses.nightSightShare };
+    return { day, night, area: k.map(x => +(x * x).toFixed(3)) };
   });
-  r.check(sight.day.every(Boolean) && sight.night[0] === false && sight.night[1] === true,
-    `12 tiles apart (on screen) they see each other by day; at night only the deer sees the wolf (keeping ${JSON.stringify(sight.share)} of their sight)`);
+  r.check(sight.day.every(Boolean) && sight.night[0] === false && sight.night[1] === true && sight.area.join() === "0.4,0.5",
+    `17 tiles apart (on screen) they see each other by day; at night only the deer sees the wolf (keeping ${sight.area.join(", ")} of their sight's area)`);
 
   // sleep is off: a minute of play at dusk (when wolves woke and deer bedded down)
   const awake = await p.evaluate(() => {

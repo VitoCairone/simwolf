@@ -52,7 +52,7 @@ async function main(browser, r) {
       return fetch(...specs);
     };
     const L = S.biomassLedger;
-    window.net = () => L.grownKg - L.burnedKg - L.excretedKg - L.rottedKg - L.lostKg; // (see THE LEDGER in sim.js)
+    window.net = () => S.ledgerNetKg(); // (see THE LEDGER in sim.js)
     window.runUntil = (cond, maxS) => { let n = 0; while (n < maxS / sim.tempo && !cond()) { S.tick(); n++; } return n * sim.tempo; };
   });
 
