@@ -1,6 +1,8 @@
 // Arrow keys in wolf mode move the wolf in SCREEN directions:
 // Up = straight up on screen, Right = straight right, two keys = screen diagonal,
 // opposite keys cancel. Uses real key events and the real game loop.
+// Toggled to wolf mode, the wolf stays on autopilot until the player presses an arrow key
+// or moves the pointer onto the movement pad.
 
 const { openGame, runStandalone } = require("./helpers");
 
@@ -35,6 +37,8 @@ async function main(browser, r) {
     });
   });
   r.check(await p.evaluate(() => !!window.__openTile), "found open dry ground to test on");
+  r.check(await p.evaluate(() => controls.arrowsMoveWolf && !controls.wolfTaken && !sim.playerHasControl()),
+    "toggled to wolf mode, the wolf stays on autopilot until the player takes it");
 
   for (const [keys, [ex, ey]] of CASES) {
     await p.evaluate(() => {
@@ -69,6 +73,18 @@ async function main(browser, r) {
   await p.waitForTimeout(200);
   r.check(await p.evaluate(() => sim.pcWolf.targetSpeed === 0), // stopping (it slows in its time)
     "releasing all keys stops the wolf");
+
+  r.check(await p.evaluate(() => controls.wolfTaken && sim.playerHasControl()),
+    "...and an arrow key takes it: released, the wolf stands at the player's command");
+
+  // toggled back and forth: on autopilot again until the pointer goes onto the pad
+  await p.click("#arrow-mode-toggle"); await p.click("#arrow-mode-toggle"); await p.mouse.move(300, 300);
+  const before = await p.evaluate(() => [controls.wolfTaken, sim.playerHasControl()]);
+  const pad = await p.evaluate(() => { const b = document.getElementById("move-pad").getBoundingClientRect(); return [b.x + b.width / 2, b.y + b.height / 2]; });
+  await p.mouse.move(...pad); await p.mouse.move(300, 300);
+  const after = await p.evaluate(() => [controls.wolfTaken, sim.playerHasControl()]);
+  r.check(!before[0] && !before[1] && after[0] && after[1],
+    `wolf mode again: on autopilot (${before}) until the pointer goes onto the movement pad (${after})`);
 
   // camera mode is unchanged: arrows pan the camera in screen directions
   await p.click("#arrow-mode-toggle"); await p.mouse.move(300, 300);

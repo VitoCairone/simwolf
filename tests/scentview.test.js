@@ -2,10 +2,13 @@
 // tile it can smell on the ground (a nearly round patch: 7 x 7, with rows of 5 and of 3 on
 // each side) has a round mark, brown for deer and blue for wolves,
 // its own scent hollow:
-//  - a deer that walked past leaves marks the bigger the fresher (contrast-enhanced: the
-//    freshest about the biggest, with no deer scent where the wolf stands), drawn brown on
-//    the ground
-//  - the wolf's own marks are hollow and blue, the one where it stands the reference
+//  - a deer that walked past leaves marks the bigger the fresher: the strongest smelled in
+//    the last 4 s sets the biggest (linear in strength, 1 pixel at the faintest smelled to
+//    the whole tile fresh), and the least is stretched to half that; drawn brown
+//  - other wolves' marks blue for males, pink for females; the wolf's own marks thin rings
+//    in its sex's colour, the freshest the biggest
+//  - a mark keeps the size it was given when it came into the wolf's nose until it leaves
+//    it, fresher scent laid on it included; out of its nose it is still drawn for 1 s
 //  - none while the camera follows another critter, or is panned
 // Saves a screenshot to tests/output/scentview/.
 
@@ -24,6 +27,7 @@ async function main(browser, r) {
     const S = sim.internals, w = sim.pcWolf, d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     const [hx, hy] = [w.gx, w.gy];
     sim.allCritters.filter(c => c !== d).forEach(c => { c.gx = c.nextGX = c.gy = c.nextGY = -900 - c.uid; mind.ignore(c); });
+    mind.ignore(w);
     d.gx = d.nextGX = hx - 6; d.gy = d.nextGY = hy + 2.5; d.lifespanS = 1e12; d.stunnedUntil = 0; mind.ignore(d); S.setCritterIdle(d);
     for (let n = 0; n < 4 / sim.tempo; n++) { S.setCritterMoving(d, sim.DIR_E, "walk"); S.tick(); }
     d.gx = d.nextGX = d.gy = d.nextGY = -500;
@@ -33,14 +37,18 @@ async function main(browser, r) {
     animat.setZoom(4); animat.followWolf(); for (let k = 0; k < 30; k++) animat.render();
     return { shown: animat.scentShown, wi: Math.floor(w.gx), wj: Math.floor(w.gy) };
   });
-  const deer = marks.shown.filter(m => m.species === "deer").sort((a, b) => b.strength - a.strength);
+  const deer = marks.shown.filter(m => m.species === "deer").sort((a, b) => b.s - a.s);
   const own = marks.shown.filter(m => m.species === "wolf" && m.own);
-  const ordered = deer.every((m, k) => k === 0 || m.r < deer[k - 1].r);
-  r.check(deer.length >= 2 && ordered && Math.abs(deer[0].t - 1) < 1e-9 && deer.every(m => !m.own),
-    `a deer's trail is marked, the fresher the bigger (radii ${deer.map(m => m.r.toFixed(2)).join(", ")} tiles), the freshest at full contrast`);
+  const ordered = deer.every((m, k) => k === 0 || m.d < deer[k - 1].d);
+  const least = deer[deer.length - 1];
+  // the strongest, the maximum: linear in s from 1 px at 1/8 to the whole tile at 1
+  const pxTiles = 1 / (Math.SQRT2 * 16), raw = s => pxTiles + (1 - pxTiles) * (s - 1 / 8) / (7 / 8);
+  r.check(deer.length >= 2 && ordered && Math.abs(deer[0].d - raw(deer[0].s)) < 1e-9 && Math.abs(least.d - 0.5 * deer[0].d) < 1e-9 && deer.every(m => !m.own),
+    `a deer's trail is marked, the fresher the bigger: the freshest (strength ${deer[0].s.toFixed(4)}) ${deer[0].d.toFixed(3)} tiles across, ` +
+    `the least stretched to half that (${deer.map(m => m.d.toFixed(3)).join(", ")})`);
   const here = own.find(m => m.i === marks.wi && m.j === marks.wj);
-  r.check(own.length >= 2 && here && Math.abs(here.t) < 1e-9 && own.filter(m => m !== here).every(m => m.r < here.r),
-    `the wolf's own trail is marked hollow, the reference where it stands (${own.length} marks; staler ones smaller)`);
+  r.check(own.length >= 2 && here && own.filter(m => m !== here).every(m => m.d < here.d) && own.every(m => m.colour === own[0].colour),
+    `the wolf's own trail is marked as rings, the freshest (where it stands) the biggest (${own.length} rings)`);
 
   // the deer marks' colour on screen: brown, at the biggest one's center
   const at = await p.evaluate(m => {
@@ -55,6 +63,61 @@ async function main(browser, r) {
   }, [(await p.screenshot()).toString("base64"), at[0], at[1]]);
   r.check(px[0] > px[2] + 40 && px[0] > px[1], `drawn on the ground in brown (${px})`);
   await p.screenshot({ path: path.join(outDir, "scent.png") });
+
+  // colours by sex: another wolf's marks blue for a male, pink for a female; the wolf's own
+  // rings by its own sex
+  const colours = await p.evaluate(() => {
+    const S = sim.internals, w = sim.pcWolf, H = sim.gridHeightN, wi = Math.floor(w.gx), wj = Math.floor(w.gy);
+    const he = sim.allCritters.find(c => c.species === "wolf" && c.isMale && c !== w), she = sim.allCritters.find(c => c.species === "wolf" && !c.isMale && c !== w);
+    S.scentMarks.wolf.set((wi + 2) * H + wj, [sim.now - 30, he.uid]);
+    S.scentMarks.wolf.set((wi - 2) * H + wj, [sim.now - 30, she.uid]);
+    animat.render();
+    const at = (i, j) => animat.scentShown.find(m => m.species === "wolf" && m.i === i && m.j === j)?.colour;
+    const out = { male: at(wi + 2, wj), female: at(wi - 2, wj), own: animat.scentShown.find(m => m.own)?.colour, ownMale: w.isMale };
+    S.scentMarks.wolf.delete((wi + 2) * H + wj); S.scentMarks.wolf.delete((wi - 2) * H + wj);
+    return out;
+  });
+  const blue = "rgba(40, 90, 210, 0.85)", pink = "rgba(225, 95, 170, 0.85)";
+  r.check(colours.male === blue && colours.female === pink && colours.own === (colours.ownMale ? blue : pink),
+    `wolves' marks by sex: a male's blue, a female's pink; its own rings ${colours.ownMale ? "blue (male)" : "pink (female)"}`);
+
+  // the maximum is the strongest smelled in the last 4 s; a mark keeps the size it was
+  // given when first smelled, fresher scent on it included; out of its nose it is still
+  // drawn for 1 s. (Each step's marks on a row of their own, new to its nose.)
+  const memory = await p.evaluate(() => {
+    const S = sim.internals, w = sim.pcWolf, H = sim.gridHeightN, wi = Math.floor(w.gx), wj = Math.floor(w.gy);
+    const uid = sim.allCritters.find(c => c.species === "deer").uid, tick = s => { for (let n = 0; n < s / sim.tempo; n++) S.tick(); };
+    const set = (di, dj, ageS) => S.scentMarks.deer.set((wi + di) * H + wj + dj, [sim.now - ageS, uid]);
+    const clear = () => { for (let di = -5; di <= 5; di++) for (let dj = -5; dj <= 5; dj++) S.scentMarks.deer.delete((wi + di) * H + wj + dj); };
+    const dOf = (di, dj) => animat.scentShown.find(m => m.species === "deer" && m.i === wi + di && m.j === wj + dj);
+    clear(); tick(1.1); animat.render();                                    // (nothing left from before)
+    set(0, 1, 10); set(1, 1, 20); tick(0.1); animat.render();
+    const fresh = dOf(0, 1);
+    clear(); set(0, 2, 1800); set(1, 2, 1900); tick(0.1); animat.render();  // weaker: a fresher one smelled 0.1 s ago
+    const weak = [dOf(0, 2), dOf(1, 2)];
+    tick(4.2); clear(); set(0, 3, 1804.3); set(1, 3, 1904.3); animat.render(); // 4 s on: the maximum is what it smells now
+    const later = [dOf(0, 3), dOf(1, 3)];
+    set(0, 3, 5); set(1, 3, 5); tick(0.1); animat.render();                // fresh scent laid on them: their sizes kept
+    const kept = [dOf(0, 3), dOf(1, 3)];
+    clear(); tick(0.5); animat.render();
+    const lingering = [dOf(0, 3), dOf(1, 3)];
+    tick(0.6); animat.render();
+    const gone = dOf(0, 3);
+    return { fresh, weak, later, kept: kept.map(x => x && x.d), lingering: lingering.every(x => x && x.lingering), lingerD: lingering.map(x => x && x.d), gone: !gone };
+  });
+  const m = memory;
+  // just after the fresh scent: the weak marks are their raw sizes (the least well under half
+  // the remembered maximum: no stretching); 4 s on, the stronger is the maximum, the
+  // weaker stretched to half it
+  r.check(Math.abs(m.weak[0].d - raw(m.weak[0].s)) < 1e-6 && Math.abs(m.weak[1].d - raw(m.weak[1].s)) < 1e-6
+    && Math.abs(m.later[0].d - raw(m.later[0].s)) < 1e-6 && Math.abs(m.later[1].d - 0.5 * m.later[0].d) < 1e-6,
+    `the biggest mark is set by the strongest scent smelled in the last 4 s: weak scents just after a fresh one are drawn ` +
+    `their own sizes (${m.weak.map(x => x.d.toFixed(2)).join(", ")}); 4 s on, the stronger is the biggest, the other half its size ` +
+    `(${m.later.map(x => x.d.toFixed(2)).join(", ")})`);
+  r.check(m.kept.every((d, k) => d === m.later[k].d),
+    `a mark keeps the size it was given when it came into the wolf's nose, though fresher scent is laid on it (${m.kept.map(d => d && d.toFixed(2)).join(", ")})`);
+  r.check(m.lingering && m.lingerD.every((d, k) => d === m.later[k].d) && m.gone,
+    `a mark out of its nose is still drawn 0.5 s on, at the size it had when last smelled (${m.lingerD.map(d => d && d.toFixed(2)).join(", ")}), gone after 1 s`);
 
   // the patch the wolf smells: 7 x 7, with rows of 5 and of 3 on each side (69 tiles), all
   // marked where it walks over a trail made everywhere about it

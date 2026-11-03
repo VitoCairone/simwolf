@@ -376,7 +376,7 @@ function attach(theSim) {
 
 return {
   attach, perceive, grassAround, shoresAround, trailsAround, inSight, inView, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
-  sightHalfWidthTiles, sightHalfHeightTiles, fovDegBySpecies, keepSightS, hearingRangeTiles, airScentRangeTiles, eyeLevelsBySpecies, sniffTiles,
+  sightHalfWidthTiles, sightHalfHeightTiles, fovDegBySpecies, keepSightS, trailMinStrength, hearingRangeTiles, airScentRangeTiles, eyeLevelsBySpecies, sniffTiles,
 };
 
 })();

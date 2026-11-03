@@ -18,6 +18,9 @@ const cameraSpeed = 50; // screen px per tick while panning with the arrow keys,
 
 // The sidebar toggle: the arrow keys move the wolf (true) or pan the camera.
 let arrowsMoveWolf = false;
+// In wolf mode, whether the player has taken the wolf yet (an arrow key pressed, or the
+// pointer on the movement pad, since the toggle): until then the mind steers it.
+let wolfTaken = false;
 // While the pointer is in one of the movement pad's rings: { pose, dx, dy }, the gait and
 // grid vector to move along; else null.
 let pad = null;
@@ -40,14 +43,15 @@ function pinNextOf(species) {
 }
 
 // The player's intent, from what is held: the movement pad while in use; else in wolf
-// mode the arrow keys (as screen directions, two combining into a diagonal, opposites
-// cancelling; none held: stand); else none, and the mind steers the wolf.
+// mode, once the player has taken the wolf (wolfTaken), the arrow keys (as screen
+// directions, two combining into a diagonal, opposites cancelling; none held: stand);
+// else none, and the mind steers the wolf.
 
 function updatePlayerIntent() {
   let intent = null;
   if (pad) {
     intent = pad.pose === "idle" ? STAND : { dx: pad.dx, dy: pad.dy, gait: pad.pose };
-  } else if (arrowsMoveWolf) {
+  } else if (arrowsMoveWolf && wolfTaken) {
     const screenX = (keysPressed["ArrowRight"] ? 1 : 0) - (keysPressed["ArrowLeft"] ? 1 : 0);
     const screenY = (keysPressed["ArrowDown"] ? 1 : 0) - (keysPressed["ArrowUp"] ? 1 : 0);
     intent = (screenX !== 0 || screenY !== 0)
@@ -71,7 +75,7 @@ function onKeyDown(e) {
   if (e.key === "p") return sim.togglePause();
   if (e.key === "s") return sim.stepOnce();
   keysPressed[e.key] = true;
-  if (arrowKeyNames.includes(e.key)) updatePlayerIntent();
+  if (arrowKeyNames.includes(e.key)) { if (arrowsMoveWolf) wolfTaken = true; updatePlayerIntent(); }
 }
 
 function onKeyUp(e) {
@@ -81,6 +85,7 @@ function onKeyUp(e) {
 
 function toggleArrowMode() {
   arrowsMoveWolf = !arrowsMoveWolf;
+  wolfTaken = false;
   animat.showArrowMode(arrowsMoveWolf);
   if (arrowsMoveWolf) animat.followWolf();
   else animat.unpinCamera();
@@ -106,6 +111,7 @@ function onMovePadPointer(e) {
   if (!ring) return releaseMovePad(); // in the square element's corners, outside the rings
 
   if (!pad) animat.followWolf(); // taking the wolf: the camera goes back to it
+  if (arrowsMoveWolf) wolfTaken = true;
   const [dx, dy] = animat.screenVecToGridVec(vx, vy);
   pad = { pose: ring.pose, dx, dy };
   animat.showMovePad(vx, vy, ring.pose);
@@ -168,6 +174,7 @@ return {
   attach,
   // for tests and debugging
   get arrowsMoveWolf() { return arrowsMoveWolf; },
+  get wolfTaken() { return wolfTaken; },
   get padInUse() { return pad !== null; },
 };
 

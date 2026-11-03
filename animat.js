@@ -1369,43 +1369,100 @@ function paintDebugWolf() {
 
 // SCENT VIEW (in the SIGHT VIEW only): the scent on every tile the player's wolf can smell
 // on the ground (senses.trailsAround: deer's and wolves'), as a round mark on the ground at
-// the tile's center (an ellipse, seen isometrically), brown for deer, blue for wolves; its
-// own scent hollow. A mark's strength is 2^(-age / half-life); its radius goes with both
-// its strength and, CONTRAST-ENHANCED, how much fresher or staler it is than the scent of
-// its species where the wolf stands (with none there, everything about is fresher: than
-// the stalest, then): those differences are tiny (a tile's walk apart), so each is scaled
-// by the widest about.
-//   radius = scentMarkMaxTiles * (minAbs + (1 - minAbs) * strength)
-//            * (1 - relSpan + relSpan * (1 + t) / 2),  t from -1 (stalest) to 1 (freshest)
-const scentMarkMaxTiles = 0.42;
-const scentMinAbs = 0.35;
-const scentRelSpan = 0.7;
-const scentColors = { deer: "rgba(120, 72, 30, 0.85)", wolf: "rgba(40, 90, 210, 0.85)" };
-let scentShown = []; // the marks last drawn: { i, j, species, strength, t, r, own } (for tests)
-function paintScent() {
-  scentShown = [];
-  const w = sim.pcWolf, wi = Math.floor(w.gx), wj = Math.floor(w.gy), half = sim.scentHalfLifeS;
-  for (const species of ["deer", "wolf"]) {
-    const marks = senses.trailsAround(w, species);
-    if (!marks.length) continue;
-    const here = marks.find(m => m.i === wi && m.j === wj);
-    const refAge = here ? here.ageS : Math.max(...marks.map(m => m.ageS));
-    // how much fresher than the reference, in half-lives (log2 of the strengths' ratio)
-    const d = marks.map(m => (refAge - m.ageS) / half);
-    const widest = Math.max(1e-12, ...d.map(Math.abs));
-    marks.forEach((m, k) => {
-      const strength = Math.pow(2, -m.ageS / half), t = d[k] / widest;
-      const r = scentMarkMaxTiles * (scentMinAbs + (1 - scentMinAbs) * strength) * (1 - scentRelSpan + scentRelSpan * (1 + t) / 2);
-      scentShown.push({ i: m.i, j: m.j, species, strength, t, r, own: m.uid === w.uid });
-    });
+// the tile's center (an ellipse, seen isometrically): brown for deer, blue for a male
+// wolf's, pink for a female's; the wolf's own scent a thin ring (scentRingPX), in its own
+// sex's colour. A mark's strength is s = 2^(-age / half-life). This is drawing only: what
+// the wolf's mind makes of the scent is its own (see TRACKING in mind.js).
+// SIZES, of a mark's diameter, in tiles (1: the circle fills its tile), by type (deer,
+// other wolves; the wolf's own rings apart, below):
+//   raw:  linear in s, from 1 world pixel at the faintest it can smell (sMin) to 1 at full
+//         strength (fresh)
+//   MAXIMUM: the raw diameter of the strongest scent of that type it smelled in the last
+//         scentMaxKeepS (so walking along a trail the biggest mark is ahead; against it,
+//         none is quite as big as what it smelled a moment ago)
+//   CONTRAST: if the least mark it smells now (raw) is more than scentLeastShare of the
+//         maximum, as it usually is, all are scaled (linearly, the maximum fixed) so the
+//         least is scentLeastShare of the maximum
+// The wolf's own rings: from scentLeastShare to 1 times the largest ring, by how fresh
+// each is among them.
+// FIXED SIZES: a deer's or another wolf's mark is sized (as above) when it comes into the
+// wolf's nose, and keeps that size until it leaves it (or another lays the scent there),
+// fresher scent laid on it meanwhile included; back in its nose, it is sized afresh. The
+// wolf's own rings are sized afresh at every drawing.
+// LINGERING: a mark stops being drawn only once it has been out of the wolf's nose for
+// scentLingerS, so the pattern doesn't flicker as it moves; meanwhile it keeps its size.
+const scentMaxKeepS = 4;
+const scentLeastShare = 0.5;
+const scentLingerS = 1;
+const scentRingPX = 0.5; // world pixels: 1 screen pixel at 2x zoom
+const scentOwnMaxTiles = 0.8;
+const scentColors = { deer: "rgba(120, 72, 30, 0.85)", male: "rgba(40, 90, 210, 0.85)", female: "rgba(225, 95, 170, 0.85)" };
+const scent = {
+  wolf: null,            // whose nose
+  marks: new Map(),      // "species i j" -> { i, j, species, uid, markedAt, perceivedAt, d (its last size) }
+  maxima: { deer: [], wolf: [] }, // by type: [[game time, strongest s smelled then], ...]
+  sexes: new Map(),      // uid -> isMale, for marks whose maker is gone
+  lastNow: -Infinity,    // the game time of the last drawing
+};
+let scentShown = []; // the marks last drawn: { i, j, species, uid, s, d, own, colour, lingering } (for tests)
+
+function scentMakerIsMale(uid) {
+  if (!scent.sexes.has(uid)) {
+    const c = sim.allCritters.find(c => c.uid === uid) || sim.allCorpses.find(c => c.uid === uid);
+    if (!c) return true;
+    scent.sexes.set(uid, c.isMale);
   }
+  return scent.sexes.get(uid);
+}
+
+function paintScent() {
+  const w = sim.pcWolf, now = sim.now, half = sim.scentHalfLifeS;
+  if (w !== scent.wolf) { scent.wolf = w; scent.marks.clear(); scent.maxima = { deer: [], wolf: [] }; scent.lastNow = -Infinity; }
+  // what it smells now, and what it smelled within scentLingerS
+  // (one smelled at the last drawing, by the same maker, keeps its size: see FIXED SIZES)
+  for (const species of ["deer", "wolf"]) for (const m of senses.trailsAround(w, species)) {
+    const key = species + " " + m.i + " " + m.j, before = scent.marks.get(key);
+    const kept = before && before.perceivedAt >= scent.lastNow && before.uid === m.uid;
+    scent.marks.set(key, { i: m.i, j: m.j, species, uid: m.uid, markedAt: now - m.ageS, perceivedAt: now, d: kept ? before.d : null });
+  }
+  scent.lastNow = now;
+  for (const [key, m] of scent.marks) if (now - m.perceivedAt > scentLingerS || now < m.perceivedAt) scent.marks.delete(key);
+  const sOf = m => Math.pow(2, -(now - m.markedAt) / half);
+  const typeOf = m => m.species === "deer" ? "deer" : m.uid === w.uid ? "own" : "wolf";
+  const marks = [...scent.marks.values()].map(m => ({ ...m, s: sOf(m), type: typeOf(m), lingering: m.perceivedAt < now, entry: m }));
+  // raw diameters, linear in s: 1 world pixel at sMin, the whole tile at 1
+  const sMin = senses.trailMinStrength.wolf, pxTiles = 1 / (Math.SQRT2 * halfTile);
+  const raw = s => pxTiles + (1 - pxTiles) * Math.max(0, (s - sMin) / (1 - sMin));
+  for (const type of ["deer", "wolf"]) {
+    const now_ = marks.filter(m => m.type === type && !m.lingering);
+    const hist = scent.maxima[type];
+    if (now_.length) {
+      const top = Math.max(...now_.map(m => m.s)), last = hist[hist.length - 1];
+      if (last && last[0] === now) last[1] = Math.max(last[1], top); else hist.push([now, top]);
+    }
+    while (hist.length && (now - hist[0][0] > scentMaxKeepS || hist[0][0] > now)) hist.shift();
+    const max = raw(Math.max(0, ...hist.map(h => h[1]), ...now_.map(m => m.s)));
+    const least = now_.length ? raw(Math.min(...now_.map(m => m.s))) : max;
+    // contrast: the least to scentLeastShare of the maximum, the maximum fixed
+    const stretch = least > scentLeastShare * max && max - least > 1e-12 ? (1 - scentLeastShare) * max / (max - least) : 1;
+    for (const m of marks) if (m.type === type && m.d === null) m.d = Math.max(0, max - (max - raw(m.s)) * stretch);
+  }
+  const own = marks.filter(m => m.type === "own" && !m.lingering);
+  if (own.length) {
+    const hi = Math.max(...own.map(m => m.s)), lo = Math.min(...own.map(m => m.s));
+    for (const m of own) m.d = scentOwnMaxTiles * (hi > lo ? scentLeastShare + (1 - scentLeastShare) * (m.s - lo) / (hi - lo) : 1);
+  }
+  for (const m of marks) m.entry.d = m.d;
+  scentShown = marks.map(m => ({ i: m.i, j: m.j, species: m.species, uid: m.uid, s: m.s, d: m.d, own: m.type === "own",
+    lingering: m.lingering, colour: m.species === "deer" ? scentColors.deer : scentColors[scentMakerIsMale(m.uid) ? "male" : "female"] }));
+  ctx.setTransform(screen.A, 0, 0, screen.A, screen.Bx, screen.By);
   for (const m of scentShown) {
-    const [px, py] = groundProject(m.i + 0.5, m.j + 0.5);
-    ctx.setTransform(screen.A, 0, 0, screen.A, screen.Bx, screen.By);
+    if (!(m.d > 0)) continue;
+    const [px, py] = groundProject(m.i + 0.5, m.j + 0.5), r = m.d / 2;
     ctx.beginPath();
-    ctx.ellipse(px, py, m.r * halfTile * Math.SQRT2, m.r * qtrTile * Math.SQRT2, 0, 0, 2 * Math.PI);
-    if (m.own) { ctx.lineWidth = 1.5; ctx.strokeStyle = scentColors[m.species]; ctx.stroke(); }
-    else { ctx.fillStyle = scentColors[m.species]; ctx.fill(); }
+    ctx.ellipse(px, py, r * halfTile * Math.SQRT2, r * qtrTile * Math.SQRT2, 0, 0, 2 * Math.PI);
+    if (m.own) { ctx.lineWidth = scentRingPX; ctx.strokeStyle = m.colour; ctx.stroke(); }
+    else { ctx.fillStyle = m.colour; ctx.fill(); }
   }
 }
 
@@ -1494,7 +1551,7 @@ function render() {
   if (sightOn) updateChunkMasks(inView2);
   for (const c of inView2) { paintChunkLayer(c, "water"); if (sightOn) paintChunkMask(c, "waterMask"); }
   for (const c of inView2) { paintChunkLayer(c, "land"); if (sightOn) paintChunkMask(c, "landMask"); }
-  if (sightOn) paintScent(); else scentShown = [];
+  if (sightOn) paintScent(); else { scentShown = []; scent.wolf = null; }
 
   // (in the sight view, only what the wolf sees: see SIGHT VIEW)
   for (const s of sprites.values()) s.rec.hidden = sightOn && !sightShows(s.rec.critter);
