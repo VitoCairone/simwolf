@@ -230,7 +230,8 @@ function frameColumn(a, fd, sinceTick = a.poseTick ?? 0) {
 //   3. land critters and corpses (100000 + 100 * depth) and boulders (100000 + 100 * their
 //      tile center's depth), in depth order; on a tie a boulder first; a heart over its pair
 //   4. the debug outline
-// In the SIGHT VIEW each chunk's mask of unseen ground goes right after its terrain.
+// In the SIGHT VIEW each chunk's mask of unseen ground goes right after its terrain, and
+// the scent marks (SCENT VIEW) after all the terrain, before swimmers and critters.
 // spriteZIndex and the tiles' z keep these numbers (as the DOM view's z-indexes were).
 const zSwimLandBase = 1000;
 const zLandCritterBase = 100000;
@@ -1329,13 +1330,18 @@ function paintHeart(target, h) {
 // neither.
 function debugOn() { return typeof debugMode !== "undefined" && !!debugMode; }
 
-// DEBUG PANEL: each species' live population and its greatest generation (a.generation),
-// written only when they change.
-const debugShown = { on: null, wolf: "", deer: "" };
+// DEBUG PANEL: the simulation's tick, every debugTickEvery ticks (0, 100, ...); each
+// species' live population and its greatest generation (a.generation); each written only
+// when it changes.
+const debugTickEvery = 100;
+const debugTickEl = el("debug-tick").querySelector("span");
+const debugShown = { on: null, tick: null, wolf: "", deer: "" };
 function drawDebugPanel() {
   const on = debugOn();
   if (on !== debugShown.on) { debugShown.on = on; debugPanelEl.hidden = !on; }
   if (!on) return;
+  const tick = Math.floor(sim.tickCount / debugTickEvery) * debugTickEvery;
+  if (tick !== debugShown.tick) { debugShown.tick = tick; debugTickEl.textContent = tick; }
   const n = { wolf: 0, deer: 0 }, gen = { wolf: -1, deer: -1 };
   for (const a of sim.allCritters) {
     if (!sim.isLiveCritter(a) || !(a.species in n)) continue;
@@ -1359,6 +1365,48 @@ function paintDebugWolf() {
   const [isoX, isoY] = groundProject(w.gx, w.gy);
   const surfaceDrop = w.pose === "swim" ? waterSurfaceDropPY : 0;
   drawCell(screen, image(debugTileImage), 0, 0, tileSize, halfTile, isoX - halfTile, isoY - qtrTile + surfaceDrop);
+}
+
+// SCENT VIEW (in the SIGHT VIEW only): the scent on every tile the player's wolf can smell
+// on the ground (senses.trailsAround: deer's and wolves'), as a round mark on the ground at
+// the tile's center (an ellipse, seen isometrically), brown for deer, blue for wolves; its
+// own scent hollow. A mark's strength is 2^(-age / half-life); its radius goes with both
+// its strength and, CONTRAST-ENHANCED, how much fresher or staler it is than the scent of
+// its species where the wolf stands (with none there, everything about is fresher: than
+// the stalest, then): those differences are tiny (a tile's walk apart), so each is scaled
+// by the widest about.
+//   radius = scentMarkMaxTiles * (minAbs + (1 - minAbs) * strength)
+//            * (1 - relSpan + relSpan * (1 + t) / 2),  t from -1 (stalest) to 1 (freshest)
+const scentMarkMaxTiles = 0.42;
+const scentMinAbs = 0.35;
+const scentRelSpan = 0.7;
+const scentColors = { deer: "rgba(120, 72, 30, 0.85)", wolf: "rgba(40, 90, 210, 0.85)" };
+let scentShown = []; // the marks last drawn: { i, j, species, strength, t, r, own } (for tests)
+function paintScent() {
+  scentShown = [];
+  const w = sim.pcWolf, wi = Math.floor(w.gx), wj = Math.floor(w.gy), half = sim.scentHalfLifeS;
+  for (const species of ["deer", "wolf"]) {
+    const marks = senses.trailsAround(w, species);
+    if (!marks.length) continue;
+    const here = marks.find(m => m.i === wi && m.j === wj);
+    const refAge = here ? here.ageS : Math.max(...marks.map(m => m.ageS));
+    // how much fresher than the reference, in half-lives (log2 of the strengths' ratio)
+    const d = marks.map(m => (refAge - m.ageS) / half);
+    const widest = Math.max(1e-12, ...d.map(Math.abs));
+    marks.forEach((m, k) => {
+      const strength = Math.pow(2, -m.ageS / half), t = d[k] / widest;
+      const r = scentMarkMaxTiles * (scentMinAbs + (1 - scentMinAbs) * strength) * (1 - scentRelSpan + scentRelSpan * (1 + t) / 2);
+      scentShown.push({ i: m.i, j: m.j, species, strength, t, r, own: m.uid === w.uid });
+    });
+  }
+  for (const m of scentShown) {
+    const [px, py] = groundProject(m.i + 0.5, m.j + 0.5);
+    ctx.setTransform(screen.A, 0, 0, screen.A, screen.Bx, screen.By);
+    ctx.beginPath();
+    ctx.ellipse(px, py, m.r * halfTile * Math.SQRT2, m.r * qtrTile * Math.SQRT2, 0, 0, 2 * Math.PI);
+    if (m.own) { ctx.lineWidth = 1.5; ctx.strokeStyle = scentColors[m.species]; ctx.stroke(); }
+    else { ctx.fillStyle = scentColors[m.species]; ctx.fill(); }
+  }
 }
 
 // Swimmer r, then the land in front of it that covers it (see DRAWING ORDER): the tiles
@@ -1446,6 +1494,7 @@ function render() {
   if (sightOn) updateChunkMasks(inView2);
   for (const c of inView2) { paintChunkLayer(c, "water"); if (sightOn) paintChunkMask(c, "waterMask"); }
   for (const c of inView2) { paintChunkLayer(c, "land"); if (sightOn) paintChunkMask(c, "landMask"); }
+  if (sightOn) paintScent(); else scentShown = [];
 
   // (in the sight view, only what the wolf sees: see SIGHT VIEW)
   for (const s of sprites.values()) s.rec.hidden = sightOn && !sightShows(s.rec.critter);
@@ -1642,6 +1691,7 @@ return {
   tileOf: (i, j) => describeTile(i, j), tilesInView,
   showOnly: list => { showOnlySet = list ? new Set(list) : null; render(); },
   showDebug: on => { showDebug = on; render(); },
+  get scentShown() { return scentShown.map(m => ({ ...m })); },
   // the sight view: whether it is on, and tile (i, j)'s state in it ("seen", "part",
   // "greyed", "black")
   sightViewOn: () => sightViewOn(), tileSight: (i, j) => ["seen", "part", "greyed", "black"][tileSightState(i, j)],

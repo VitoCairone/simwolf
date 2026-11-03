@@ -242,9 +242,11 @@ const airScentRangeTiles = { wolf: 2400, deer: 400 };
 const airScentHalfAngle = 20 * Math.PI / 180;
 const airScentCos2 = Math.cos(airScentHalfAngle) ** 2;
 const sniffTiles = 3;
-// Trails: how far around itself a critter smells the ground, in tiles, and the faintest
-// trail it can smell (a share of a fresh one's strength: older than that many half-lives,
-// sim.scentHalfLifeS, it can't). Wolves track; deer don't follow trails (yet).
+// Trails: how far around itself a critter smells the ground, in tiles (r: a nearly round
+// patch, the square r tiles out each way, plus on each of its sides a row of 2r - 1 tiles
+// and beyond that one of 2r - 3, centered: for a wolf 7 x 7, with rows of 5 and of 3);
+// and the faintest trail it can smell (a share of a fresh one's strength: older than that
+// many half-lives, sim.scentHalfLifeS, it can't). Wolves track; deer don't follow trails (yet).
 const trailSniffTiles = { wolf: 3, deer: 2 };
 const trailMinStrength = { wolf: 1 / 8, deer: 1 / 2 };
 
@@ -258,14 +260,21 @@ function smellsOnWind(a, dx, dy, d2, wind) {
   return along > 0 && along * along >= airScentCos2 * d2;
 }
 
-// The trails of species within trailSniffTiles of critter a that it can still smell:
-// [{ i, j, ageS, uid }].
+// Whether tile offset (di, dj) is in a sniffing patch of reach r (see Trails).
+function inSniffPatch(di, dj, r) {
+  const far = Math.max(Math.abs(di), Math.abs(dj)), side = Math.min(Math.abs(di), Math.abs(dj));
+  return far <= r || far === r + 1 && side <= r - 1 || far === r + 2 && side <= r - 2;
+}
+
+// The trails of species in the sniffing patch of critter a (trailSniffTiles) that it can
+// still smell: [{ i, j, ageS, uid }].
 function trailsAround(a, species) {
   if (!use.smell) return [];
-  const r = trailSniffTiles[a.species], ci = Math.floor(a.gx), cj = Math.floor(a.gy);
+  const r = trailSniffTiles[a.species], R = r + 2, ci = Math.floor(a.gx), cj = Math.floor(a.gy);
   const maxAgeS = Math.log2(1 / trailMinStrength[a.species]) * sim.scentHalfLifeS;
   const out = [];
-  for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
+  for (let i = ci - R; i <= ci + R; i++) for (let j = cj - R; j <= cj + R; j++) {
+    if (!inSniffPatch(i - ci, j - cj, r)) continue;
     const s = sim.scentAt(i, j, species);
     if (s && s.ageS <= maxAgeS) out.push({ i, j, ageS: s.ageS, uid: s.uid });
   }

@@ -82,7 +82,6 @@ const feedWaitS = 1;             // ...this long, then tries again
 const wolfForgetPreyS = 20;      // gives up on prey it last saw this long ago
 const trailEndKeepS = 4 * 3600;  // remembers a trail's dead end this long (longer than any trail lasts)
 const wolfLeadMaxS = 2;          // expects unseen prey to carry on this long, at most
-const wolfGallopWithinTiles = 12; // gallops at prey in sight this close; trots otherwise
 const wolfCommitS = 5;           // keeps to a chosen prey at least this long
 const wolfSimilarRatio = 2;      // deer within this of the nearest's squared distance are
                                  // about as near: choose among them by facing
@@ -599,9 +598,9 @@ function search(a, m, now) {
 // with their family and eat what it kills). Of the deer it knows, a wolf picks
 // the nearest, or among those about as near, the one most straight ahead; then keeps to
 // it for wolfCommitS (unless a deer in sight is much nearer) and after that changes only
-// for one clearly nearer. In sight it heads straight for its prey; out of sight, for
-// where it should be by now, then on the way it went, searching. A deer searched for and
-// not found is lost until seen again.
+// for one clearly nearer. In sight it gallops straight for its prey, however far off;
+// out of sight, it trots for where it should be by now, then on the way it went,
+// searching. A deer searched for and not found is lost until seen again.
 function decideWolf(a, m, now) {
   // an infant suckles rather than goes to a carcass
   const suckling = sim.isInfant(a) && nurseOrSuckle(a, m, now);
@@ -700,8 +699,8 @@ function decideWolf(a, m, now) {
     }
     dx = target.vx; dy = target.vy;
   }
-  const close = age === 0 && dx * dx + dy * dy < wolfGallopWithinTiles * wolfGallopWithinTiles;
-  return move(a, m, dx, dy, close ? "gallop" : "trot", now);
+  // at prey it sees, a gallop (as wind and stamina allow); else a trot
+  return move(a, m, dx, dy, age === 0 ? "gallop" : "trot", now);
 }
 
 // TRACKING: a hungry wolf with no prey in mind follows deer trails (senses.trailsAround):

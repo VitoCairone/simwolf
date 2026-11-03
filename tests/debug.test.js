@@ -1,6 +1,6 @@
 // Debug mode (the global debugMode in index.html; DEBUG MODE and DEBUG PANEL in animat.js,
 // DEBUG PANEL in controls.js; GENERATIONS in sim.js):
-//  - on: the debug panel shows each species' live population and greatest generation, and
+//  - on: the debug panel shows the tick (by hundreds), each species' live population and greatest generation, and
 //    the grid point under the pointer; the outline is drawn under the player's wolf
 //  - clicking the wolves' line pins the camera to the first live wolf, then the next by
 //    uid each time, back to the first after the last; the deer's line likewise, kept
@@ -8,6 +8,8 @@
 //  - the critters at the start are generation 0; a litter is conceived one generation
 //    past the younger generation of its parents (the higher number)
 //  - off: no debug panel, no outline
+//  - every death is logged to the console: the critter, its age, sex, generation, meters
+//    and cause
 // Saves a screenshot of the panel to tests/output/debug/.
 
 const path = require("path");
@@ -34,6 +36,18 @@ async function main(browser, r) {
   r.check(on.allZero, "the critters at the start are all generation 0");
   const panel = await p.evaluate(() => { const b = document.getElementById("sidebar").getBoundingClientRect(); return { x: b.x, y: b.y, width: b.width, height: b.height }; });
   await p.screenshot({ path: path.join(outDir, "panel.png"), clip: panel });
+
+  // the tick, by hundreds
+  const ticks = await p.evaluate(() => {
+    const out = [], text = () => document.getElementById("debug-tick").innerText.trim();
+    animat.render(); out.push([sim.tickCount, text()]);
+    while (sim.tickCount % 100 !== 99) sim.internals.tick();
+    animat.render(); out.push([sim.tickCount, text()]);
+    sim.internals.tick(); animat.render(); out.push([sim.tickCount, text()]);
+    return out;
+  });
+  r.check(ticks.every(([t, s]) => s === `Tick ${Math.floor(t / 100) * 100}`),
+    `the panel shows the tick by hundreds (${ticks.map(([t, s]) => `${t}: "${s}"`).join(", ")})`);
 
   // generations: a litter one past the younger-generation parent
   const gen = await p.evaluate(() => {
@@ -83,6 +97,19 @@ async function main(browser, r) {
   r.check(withOutline !== without, "the outline under the player's wolf is drawn while debug mode is on, not while off");
   r.check(off, "debug mode off: no debug panel");
   await p.evaluate(() => { window.debugMode = true; });
+
+  // every death logged to the console: who, age, sex, generation, meters, cause
+  const lines = [];
+  p.on("console", m => { if (m.text().startsWith("[death]")) lines.push(m.text()); });
+  const old = await p.evaluate(() => {
+    const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
+    d.lifespanS = 0; sim.internals.tick();
+    return { uid: d.uid, diedOf: d.diedOf };
+  });
+  await p.waitForTimeout(100);
+  const line = lines.find(l => l.startsWith(`[death] deer ${old.uid}:`)) || "";
+  r.check(old.diedOf === "old age" && /^\[death\] deer \d+: old age; age [\d.]+ (years|days) \(realtimeElapsedAge [\d.]+ s\), (male|female), generation \d+; meters: food \d+%, stomach \d+%, water \d+%, wind \d+%, stamina \d+%$/.test(line),
+    `a death is logged to the console ("${line}")`);
 
   r.noProblems(p);
   await p.close();

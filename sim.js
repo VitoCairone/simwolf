@@ -963,9 +963,15 @@ function isPastLifespan(a) {
   return isLiveCritter(a) && g_now - a.birthTime >= a.lifespanS;
 }
 
-function startCritterDeath(a) {
+// DEATHS: a critter dies of "starvation" (its food meter empty), "dehydration" (its water
+// meter empty), "predation" (killed by a wolf: see COLLISIONS) or "old age" (FORCED
+// MORTALITY): a.diedOf. Each death is logged to the console (logDeath). cause may be the
+// killer instead (for tests: predation); with none, "unknown".
+function startCritterDeath(a, cause = "unknown") {
   if (!a || a.kind !== "critter") return alert("Invalid arg to startCritterDeath");
   if (a.pose === "death") return;
+  a.diedOf = typeof cause === "string" ? cause : cause && cause.kind === "critter" ? "predation" : "unknown";
+  logDeath(a);
   endPairing(a);
   a.deathTime = g_now;
   a.speed = a.targetSpeed = 0;
@@ -979,6 +985,18 @@ function startCritterDeath(a) {
   }
   setPose(a, "death");
   enqDelayed("decontrol", deathDurationSBySpecies[a.species], { a: a });
+}
+
+// A dying critter's line in the console: who, its age (as the real animal's: scaled back
+// by the speeds' metabolism, see GAME SPEEDS; and in game seconds since its birth, which
+// pass as the clock on the wall at full speed), sex, generation, meters as a share full,
+// and cause.
+function logDeath(a) {
+  const ageS = g_now - a.birthTime, realS = ageS * REALISTIC.foodFullS.wolf / SPEEDS.foodFullS.wolf, pct = v => `${Math.round(100 * v)}%`;
+  const age = realS >= yearS ? `${(realS / yearS).toFixed(1)} years` : `${(realS / dayS).toFixed(1)} days`;
+  console.log(`[death] ${a.species} ${a.uid}: ${a.diedOf}; age ${age} (realtimeElapsedAge ${ageS.toFixed(1)} s), ` +
+    `${a.isMale ? "male" : "female"}, generation ${a.generation}; meters: food ${pct(a.food)}, stomach ${pct(a.gut)}, ` +
+    `water ${pct(a.water)}, wind ${pct(a.wind)}, stamina ${pct(a.stamina)}`);
 }
 
 // BIOMASS: everything living is made of five things, in kg: fat, carbohydrate ("carbs"),
@@ -1527,7 +1545,7 @@ function absorb(a, d) {
 }
 
 // One tick of a's body: it burns, loses water, eats and drinks, digests, and its womb
-// grows. What it died of ("hunger", "thirst"), or null.
+// grows. What it died of ("starvation", "dehydration"), or null.
 function updateFood(a) {
   if (!isLiveCritter(a)) return null;
   const t = a.tissues, mj = rangeMJ(a) * tempo / foodLastsS(a);
@@ -1551,7 +1569,7 @@ function updateFood(a) {
   balanceWater(a);
   updateWomb(a);
   updateBody(a);
-  return foodShare(a) <= 0 ? "hunger" : waterShare(a) <= 0 ? "thirst" : null;
+  return foodShare(a) <= 0 ? "starvation" : waterShare(a) <= 0 ? "dehydration" : null;
 }
 
 // How fast a well-fed critter's frame grows at a's size, kg a second.
@@ -1621,10 +1639,11 @@ function updateClock() {
 }
 
 // SCENT AND WIND
-// SCENT TRAILS: every live critter on dry land marks the tile under it with its species'
-// scent each tick: the tile keeps when it was last marked by each species, and by whom.
-// Scent fades: at age t its strength is 2^(-t / SPEEDS.scentHalfLifeS) (senses.js decides
-// how faint a scent each critter can still smell). Water holds no scent. Only marked tiles
+// SCENT TRAILS: every live critter on dry land marks the tile under its middle with its
+// species' scent each tick: the tile keeps when it was last marked by each species, and by
+// whom. Scent fades: at age t its strength is 2^(-t / SPEEDS.scentHalfLifeS) (senses.js
+// decides how faint a scent each critter can still smell). Water holds no scent, the
+// shore's included (a critter half on land marks nothing over water). Only marked tiles
 // are kept, until scentKeepHalfLives half-lives old (fainter than anything can smell).
 // WIND: one breeze over the whole map, blowing toward the unit vector (windX, windY); every
 // SPEEDS.windChangeEveryS it turns by up to windTurnMaxRad either way. It carries critters'
@@ -1646,6 +1665,7 @@ function markScent() {
     if (!isLiveCritter(a) || isInWater(a)) continue;
     const i = Math.floor(a.gx), j = Math.floor(a.gy);
     if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) continue;
+    if (getTerrainAt(i, j) === "water") continue; // (a critter on land, its middle over the shore's water)
     const k = i * gridHeightN + j, marks = scentMarks[a.species];
     marks.delete(k); // (so the map stays in order of marking, oldest first)
     marks.set(k, [g_now, a.uid]);
@@ -2313,7 +2333,7 @@ function canStepTo(a, gx, gy) {
 function updateAllCritters() {
   const pastLifespan = allCritters.filter(isPastLifespan);
   const dying = []; // of hunger or thirst
-  allCritters.forEach(a => { const cause = updateFood(a); if (cause) { a.diedOf = cause; dying.push(a); } });
+  allCritters.forEach(a => { const cause = updateFood(a); if (cause) dying.push([a, cause]); });
 
   allCritters.forEach(a => {
     // done scrambling up a bank: back to the gait it was asked for
@@ -2349,8 +2369,8 @@ function updateAllCritters() {
   });
 
   moveAllTogether(allCritters.filter(isLiveCritter));
-  pastLifespan.forEach(a => startCritterDeath(a));
-  dying.forEach(a => { if (isLiveCritter(a) && allCritters.includes(a)) startCritterDeath(a); });
+  pastLifespan.forEach(a => startCritterDeath(a, "old age"));
+  dying.forEach(([a, cause]) => { if (isLiveCritter(a) && allCritters.includes(a)) startCritterDeath(a, cause); });
   allCritters.filter(a => a.pregnancy && g_now >= a.pregnancy.dueAt && isLiveCritter(a)
     && !isMating(a) && !isInWater(a)).forEach(giveBirth);
   for (let k = allCorpses.length - 1; k >= 0; k--) {
@@ -2419,7 +2439,7 @@ function moveAllTogether(movers) {
   allColliders.forEach((thing, idx) => {
     // before the standing-still check, so a standing deer can be killed
     if (idx in wasKilledBy) {
-      startCritterDeath(thing);
+      startCritterDeath(thing, "predation");
       return;
     }
     if (thing.nextGX === thing.gx && thing.nextGY === thing.gy) return;
@@ -2703,7 +2723,7 @@ function start({ consoleOnly = false } = {}) {
 // THE INTERFACE
 // Views and controllers read critters' fields directly (gx, gy, pose, poseTick,
 // currentDirection (the facing), hx, hy (the heading), speed, targetSpeed, species, wind,
-// stamina, food, gut, water, diedOf (hunger, thirst), generation, stomachFull, tissues, stomach, womb,
+// stamina, food, gut, water, diedOf (see DEATHS), generation, stomachFull, tissues, stomach, womb,
 // eating, carcass, carcassFullKg, uid, blockedTick, stunnedUntil, isMale, birthTime,
 // deathTime, weightKg, adultKg, frameKg, boxRad, mateUid, matingWith, parentUids,
 // youngUids, pregnancy, nursingOn, bumpedTick, bumpedBy, bumpedDx, bumpedDy, bumpedX,

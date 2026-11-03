@@ -70,10 +70,11 @@
         <div class="exertion-meter"><div id="inspect-water-fill" class="exertion-meter-fill"></div></div>
       </div>
 
-      <!-- DEBUG (only while debugMode is on): the populations, each line cycling the camera
-           through its species, and the grid point under the pointer. The only words and
-           numbers on screen. -->
+      <!-- DEBUG (only while debugMode is on): the tick, the populations, each line cycling
+           the camera through its species, and the grid point under the pointer. The only
+           words and numbers on screen. -->
       <div id="debug-panel" hidden>
+        <div id="debug-tick">Tick <span>–</span></div>
         <div id="debug-wolves" class="debug-line" role="button">
           <div>Wolves: <span class="debug-count">–</span></div>
           <div>Max Gen <span class="debug-gen">–</span></div>

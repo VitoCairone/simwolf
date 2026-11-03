@@ -1,4 +1,5 @@
 // Senses and decisions (senses.js, mind.js):
+//  - a wolf gallops at prey it sees, however far off
 //  - sight: every creature within the game view's rectangle at 2x zoom and the field of
 //    view, nothing further or behind
 //  - a deer flees a wolf it sees; a wolf chases a deer it sees
@@ -117,6 +118,19 @@ async function main(browser, r) {
   })()`);
   r.check(chase && chase.mode === "chase" && chase.d1 < chase.d0 - 1,
     `a wolf chases a deer it sees (${chase && chase.d0.toFixed(1)} -> ${chase && chase.d1.toFixed(1)} tiles in 1 s, ${chase && chase.pose})`);
+
+  // ...galloping, however far off it sees it (here 17 tiles)
+  await fresh();
+  const farChase = await p.evaluate(`(() => {
+    if (!setup({ deerAt: [12, 12], deerThinks: false })) return null;
+    const [w, d] = [__w, __d];
+    const sees = senses.perceive(w).some(o => o.uid === d.uid && o.by === "sight");
+    let galloped = false;
+    for (let n = 0; n < 60; n++) { sim.internals.tick(); if (w.pose === "gallop") galloped = true; }
+    return { sees, galloped, mode: mind.stateOf(w).mode };
+  })()`);
+  r.check(farChase && (!farChase.sees || farChase.galloped && farChase.mode === "chase"),
+    `...galloping at it however far off it sees it (17 tiles: ${farChase && (farChase.sees ? (farChase.galloped ? "galloped" : "didn't gallop") : "not in sight here, untested")})`);
 
   // 4. a deer remembers a wolf it can no longer see
   await fresh();

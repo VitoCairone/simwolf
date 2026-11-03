@@ -10,6 +10,7 @@
 //  - a thirsty wolf goes to a lake shore it sees and drinks its fill; knowing of no water,
 //    it searches, at a trot; by the sea, it tastes the salt and drinks nothing, and the
 //    shores there are the sea's to it
+//  - water holds no scent: a critter on land, its middle over the shore, marks no water
 //  - the player's wolf's water meter is shown, in blue, below its food
 // Runs sim.js, senses.js and mind.js in Node (no browser), then the game for the meter.
 
@@ -68,7 +69,7 @@ async function main(browser, r) {
     }
     return out;
   })()`, c);
-  r.check(dry.wolf.of === "thirst" && dry.wolf.days > 1.5 && dry.wolf.days < 2.5 && dry.deer.of === "thirst" && dry.deer.days > 2.5 && dry.deer.days < 3.5,
+  r.check(dry.wolf.of === "dehydration" && dry.wolf.days > 1.5 && dry.wolf.days < 2.5 && dry.deer.of === "dehydration" && dry.deer.days > 2.5 && dry.deer.days < 3.5,
     `with neither food nor water, a wolf dies of thirst in ${dry.wolf.days.toFixed(2)} days, a deer in ${dry.deer.days.toFixed(2)} ` +
     `(their food meters still at ${dry.wolf.food.toFixed(2)}, ${dry.deer.food.toFixed(2)})`);
 
@@ -199,6 +200,23 @@ async function main(browser, r) {
   r.check(sea && sea.reach && sea.reach.kind === "sea" && sea.water <= sea.water0 && sea.mode === "drink" && sea.shores > 0 && sea.salt === sea.shores,
     `a thirsty wolf on the coast tastes the sea and drinks none of it (water ${sea && sea.water0.toFixed(3)} -> ${sea && sea.water.toFixed(3)}); ` +
     `the shores it has seen there are the sea's to it (${sea && sea.salt} of ${sea && sea.shores})`);
+
+  // 8. water holds no scent: a deer on land with its middle over the lake's shore marks
+  // nothing there
+  const shoreScent = vm.runInContext(`(() => {
+    const A = sim.startNear, lake = shoreOf("lake", A.i0, A.j0, A.i1, A.j1, 2);
+    if (!lake) return null;
+    const [i, j] = lake.shore, [di, dj] = lake.way, wi = i + di, wj = j + dj;
+    // its middle just over the water tile's edge, its box on the land
+    put(deer, wi + 0.5 - di * 0.4, wj + 0.5 - dj * 0.4);
+    S.tick();
+    const out = { inWater: S.isInWater(deer), overWater: sim.getTerrainAt(Math.floor(deer.gx), Math.floor(deer.gy)),
+      mark: sim.scentAt(wi, wj, "deer") };
+    put(deer, -9000, -9000);
+    return out;
+  })()`, c);
+  r.check(shoreScent && !shoreScent.inWater && shoreScent.overWater === "water" && shoreScent.mark === null,
+    `water holds no scent: a deer on land with its middle over the shore's water marks nothing there (${JSON.stringify(shoreScent)})`);
 
   // 7. the meter, in the game
   const p = await openGame(browser, { viewport: { width: 900, height: 650 }, thirst: true });

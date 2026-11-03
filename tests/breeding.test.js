@@ -44,8 +44,13 @@ async function main(browser, r) {
       S.setBodyByAge(c, 1);
       c.gx = c.nextGX = home[0] + dx; c.gy = c.nextGY = home[1] + dy;
       S.setCritterIdle(c); mind.forget(c); mind.ignore(c, false);
+      // facing the middle of the stage, so those put about it see each other
+      const l = Math.hypot(dx, dy); if (l > 0) { c.hx = -dx / l; c.hy = -dy / l; }
       return c;
     });
+    // (facing each other: each in the other's field of view)
+    window.faceEachOther = (a, b) => { const dx = b.gx - a.gx, dy = b.gy - a.gy, l = Math.hypot(dx, dy);
+      a.hx = dx / l; a.hy = dy / l; b.hx = -a.hx; b.hy = -a.hy; };
     window.stage = (...specs) => {
       sim.allCritters.forEach(c => { if (c !== w) { c.gx = c.nextGX = c.gy = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c); } });
       sim.allCorpses.forEach(c => { c.gx = c.nextGX = c.gy = c.nextGY = -50 - c.uid * 3; }); // (from earlier checks)
@@ -221,6 +226,7 @@ async function main(browser, r) {
     const [m2] = fetch(["deer", true, -2, 1]);
     mind.ignore(m);
     m.gx = m.nextGX = m.gy = m.nextGY = -400;
+    faceEachOther(f, m2);
     const t = runUntil(() => f.mateUid === m2.uid, 30);
     return { familiar, mated, strangerPaired: f.mateUid === m2.uid, t };
   });
@@ -243,6 +249,7 @@ async function main(browser, r) {
     const mUid = m.uid;
     m.lifespanS = 0; sim.internals.tick(); // dies of age
     const widowed = f.mateUid === null && m.pose === "death";
+    faceEachOther(f, m2);
     const t = runUntil(() => f.mateUid === m2.uid, 40);
     const why = { f: mind.stateOf(f)?.mode, m2: mind.stateOf(m2)?.mode, d: Math.hypot(f.gx - m2.gx, f.gy - m2.gy).toFixed(1),
       food: [f.food.toFixed(2), m2.food.toFixed(2)], court: mind.stateOf(m2)?.court, fMate: f.mateUid, m2Mate: m2.mateUid,
