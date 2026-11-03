@@ -123,7 +123,8 @@ function eyeLevels(a) {
 // Walks the straight line from point (ex, ey) at height ez to (tx, ty) at height tz, tile
 // by tile (a grid traversal), over every tile in between (not the first or the last),
 // calling stop(i, j, z) with the line's height z where it comes nearest the tile's
-// center, until stop returns true; whether it did. Distances along the line are
+// center, until stop returns true; whether it did. The last tile too if an obstacle
+// stands on it and the line ends beyond its center (behind the obstacle). Distances along the line are
 // fractions: no square roots.
 function walkLine(ex, ey, ez, tx, ty, tz, stop) {
   let ci = Math.floor(ex), cj = Math.floor(ey);
@@ -139,12 +140,15 @@ function walkLine(ex, ey, ez, tx, ty, tz, stop) {
   let tMaxJ = dy !== 0 ? (dy > 0 ? cj + 1 - ey : ey - cj) * tDeltaJ : Infinity;
   for (let n = Math.abs(ti - ci) + Math.abs(tj - cj); n > 0; n--) {
     if (tMaxI < tMaxJ) { ci += stepI; tMaxI += tDeltaI; } else { cj += stepJ; tMaxJ += tDeltaJ; }
-    if (ci === ti && cj === tj) return false;
+    if (ci === ti && cj === tj) break;
     let t = ((ci + 0.5 - ex) * dx + (cj + 0.5 - ey) * dy) / len2;
     t = t < 0 ? 0 : t > 1 ? 1 : t;
     if (stop(ci, cj, ez + dz * t)) return true;
   }
-  return false;
+  // the last tile's obstacle hides the part of it beyond its center
+  if (sim.obstacleHeightAt(ti, tj) <= 0) return false;
+  const t = ((ti + 0.5 - ex) * dx + (tj + 0.5 - ey) * dy) / len2;
+  return t > 0 && t < 1 && stop(ti, tj, ez + dz * t);
 }
 
 // Whether the line passes above every tile in between: the ground at each one's center,

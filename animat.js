@@ -872,7 +872,8 @@ function tilesInView() {
 // so the terrain's own shadows don't flicker over every fold of the ground, while an
 // obstacle's, and the edges of its field of view, stay sharp and straight. (Critters hide
 // nothing from one another: see SIGHT in senses.js.) Otherwise a tile it partly sees is
-// split along the line between seen and unseen ground: on each side of a sample cell
+// split along the line between seen and unseen ground (a boulder's own tile too, behind
+// it: see walkLine in senses.js): on each side of a sample cell
 // whose ends differ, where it changes is found by halving (sightBisectSteps), so a
 // shadow's edges run straight, where the lines of sight run.
 // MASKS: each chunk keeps a mask for its water and one for its land, painted back to front
@@ -1017,6 +1018,7 @@ function sightCrossing(u0, v0, u1, v1) {
   }
   const t = (lo + hi) / 2;
   p = [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t];
+  p.crossing = true;
   f.crossings.set(key, p);
   return p;
 }
@@ -1107,7 +1109,7 @@ function clipToUnseen(t, d) {
   const water = d.kind === "water";
   const proj = (gx, gy) => {
     const [px, py] = water ? isoProject(gx, gy) : groundProject(gx, gy);
-    return [px * t.A + t.Bx, (py + (water ? waterSurfaceDropPY : 0)) * t.A + t.By];
+    return [px * t.A + t.Bx, (py + (water ? waterSurfaceDropPY - d.level * levelHeightPY : 0)) * t.A + t.By];
   };
   const drop = ((water ? 1 + d.step : d.pieces.length + 1) * levelHeightPY + groundBaseY) * t.A;
   const rise = sightTuftsPY * t.A;
@@ -1127,10 +1129,19 @@ function clipToUnseen(t, d) {
     ctx.closePath();
   };
   const eps = 1e-9, fi = d.i + 1, fj = d.j + 1;
-  // points on the tile's edges pushed out a little, to take in the edges of its sprites
+  // points on the tile's edges pushed out a little, to take in the edges of its sprites:
+  // where sight changes, along the line between seen and unseen (from the cell's other
+  // such point), so the shadow's edge stays straight
   const out = (x, lo) => Math.abs(x - lo) < eps ? lo - sightClipPadTiles : Math.abs(x - lo - 1) < eps ? lo + 1 + sightClipPadTiles : x;
+  const onEdge = p => Math.abs(p[0] - d.i) < eps || Math.abs(p[0] - fi) < eps || Math.abs(p[1] - d.j) < eps || Math.abs(p[1] - fj) < eps;
+  const along = (poly, k) => {
+    const p = poly[k], n = poly.length, q = poly[(k + 1) % n].crossing ? poly[(k + 1) % n] : poly[(k + n - 1) % n];
+    if (!onEdge(p) || !q.crossing) return proj(p[0], p[1]);
+    const dx = p[0] - q[0], dy = p[1] - q[1], m = Math.max(Math.abs(dx), Math.abs(dy));
+    return m > eps ? proj(p[0] + dx / m * sightClipPadTiles, p[1] + dy / m * sightClipPadTiles) : proj(p[0], p[1]);
+  };
   for (const poly of unseenPolygons(d.i, d.j)) {
-    const pts = poly.map(([x, y]) => proj(out(x, d.i), out(y, d.j)));
+    const pts = poly.map((p, k) => p.crossing ? along(poly, k) : proj(out(p[0], d.i), out(p[1], d.j)));
     addPoly(pts);
     for (let k = 0; k < poly.length; k++) {
       const p = poly[k], q = poly[(k + 1) % poly.length];

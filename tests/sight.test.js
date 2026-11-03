@@ -7,6 +7,8 @@
 //  - a lone boulder casts a shadow with straight edges, where the lines of sight from the
 //    wolf's eye past the boulder's corners run: just inside them the ground is drawn
 //    without colour (greyed out, or black where never seen), just outside in colour
+//  - the boulder hides the part of its own tile beyond its center too
+//  - on water as on land, the field of view's edges run straight
 //  - a tile seen before but now partly out of sight is shown as seen when a deer standing
 //    on it would be seen and no obstacle hides any of it (the terrain's own shadows round
 //    to whole tiles), and is split into seen and greyed parts otherwise
@@ -115,6 +117,17 @@ async function main(browser, r) {
     `(${probes.map((q, k) => `${q.inside ? "in" : "out"} ${colourOf(shadowPx[k])}`).join(", ")})`);
   await p.screenshot({ path: path.join(outDir, "boulder-shadow.png") });
 
+  // the boulder's own tile: hidden beyond its center, the shadow going on from the tiles
+  // behind; seen before it
+  const own = await p.evaluate(([bi, bj]) => {
+    const w = sim.pcWolf, cx = bi + 0.5, cy = bj + 0.5, dx = cx - w.gx, dy = cy - w.gy, l = Math.hypot(dx, dy);
+    const at = k => senses.canSeePoint(w, cx + dx / l * k, cy + dy / l * k);
+    return { before: at(-0.4), beyond: at(0.4), next: at(0.9), state: animat.tileSight(bi, bj) };
+  }, at.B);
+  r.check(own.before && !own.beyond && !own.next && own.state === "part",
+    `the boulder hides the part of its own tile beyond its center, as it does the tiles behind (before ${own.before}, beyond ${own.beyond}, ` +
+    `the next tile ${own.next}): the tile is split, the shadow drawn on it too (${own.state})`);
+
   // a tile seen before, but not all of it now, is shown as seen when a deer standing on it
   // would be seen and no obstacle (nor the edge of its field of view) hides any of it;
   // split (partly greyed) only otherwise
@@ -194,6 +207,37 @@ async function main(browser, r) {
   }, at.B);
   r.check(deer.hidden && !deer.pickHidden, `a deer behind the boulder isn't drawn, nor picked by a click (${JSON.stringify(deer)})`);
   r.check(deer.shown && deer.pickShown, "a deer in sight is drawn");
+
+  // on water too, the field of view ends along straight lines: a wolf swimming in a lake,
+  // having looked about, faces along +i; just inside each edge in colour, just outside
+  // without (at several distances, through tiles split between the two)
+  const lake = await p.evaluate(() => {
+    const A = sim.startNear, w = sim.pcWolf;
+    let L = null;
+    for (let i = A.i0; i < A.i1 && !L; i++) for (let j = A.j0; j < A.j1 && !L; j++) {
+      let ok = true;
+      for (let di = -6; di <= 6 && ok; di++) for (let dj = -6; dj <= 6 && ok; dj++) ok = sim.waterKindAt(i + di, j + dj) === "lake";
+      if (ok) L = [i, j];
+    }
+    if (!L) return null;
+    for (const [hx, hy] of [[-1, 0], [0, -1], [0, 1], [1, 0]]) {
+      __put(w, L[0] + 0.5, L[1] + 0.5); w.hx = hx; w.hy = hy;
+      for (let k = 0; k < 12; k++) sim.internals.tick(); for (let k = 0; k < 40; k++) animat.render();
+    }
+    const half = senses.fovDegBySpecies.wolf / 2 * Math.PI / 180, h = Math.atan2(w.hy, w.hx), out = [];
+    for (const side of [1, -1]) for (const d of [2.3, 3.1, 3.9, 4.7]) for (const [inside, off] of [[true, -0.2], [false, 0.2]]) {
+      const a = h + side * half, x = w.gx + d * Math.cos(a) - side * off * Math.sin(a), y = w.gy + d * Math.sin(a) + side * off * Math.cos(a);
+      const [px, py] = animat.isoProject(x, y);
+      out.push({ inside, view: senses.inView(w, x - w.gx, y - w.gy), state: animat.tileSight(Math.floor(x), Math.floor(y)),
+        at: animat.worldToScreen(px, py - sim.waterLevelAt(Math.floor(x), Math.floor(y)) * 8 + 8) });
+    }
+    return out;
+  });
+  const lakePx = lake ? await pixels(p, lake.map(q => q.at)) : [];
+  if (lake) await p.screenshot({ path: path.join(outDir, "lake-view.png") });
+  r.check(lake && lake.some(q => q.state === "part") && lake.every((q, k) => q.view === q.inside && (q.inside ? colourOf(lakePx[k]) > 20 : colourOf(lakePx[k]) <= 3)),
+    `on a lake too its field of view ends along straight lines, through split tiles ` +
+    `(${lake && lake.map((q, k) => `${q.inside ? "in" : "out"} ${q.state} ${colourOf(lakePx[k])}`).join(", ")})`);
 
   // panned: as usual
   const panned = await p.evaluate(() => { animat.panCamera(1, 0); animat.render(); return animat.sightViewOn(); });
