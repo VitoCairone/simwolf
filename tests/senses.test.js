@@ -196,9 +196,10 @@ async function main(browser, r) {
     out.moved = [0, 0];
     for (let k = 0; k < 6 / sim.tempo; k++) {
       S.tick(); modes.add(mind.stateOf(wolfA)?.mode);
-      // the farthest it got along the trail, tracking
+      // the farthest it got along the trail, tracking (to the trail's end: it may gallop on,
+      // onto other trails about)
       const along = wolfA.gy - (hy - 5);
-      if (mind.stateOf(wolfA)?.mode === "track" && along > out.moved[1]) out.moved = [wolfA.gx - (hx - 4.5), along];
+      if (mind.stateOf(wolfA)?.mode === "track" && along > out.moved[1] && along <= end[1] - (hy - 5)) out.moved = [wolfA.gx - (hx - 4.5), along];
     }
     out.modes = [...modes];
     // where the trail ends (as at a kill), it gives it up rather than pace about there

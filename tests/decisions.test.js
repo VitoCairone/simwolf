@@ -10,7 +10,7 @@
 //    one ahead of it and keeps to it, without flipping between them
 //  - a chase ends in a kill: a hungry wolf runs down a tired deer, and eats it straight
 //    away (fills its stomach)
-//  - galloping is only for chasing and fleeing: over a minute of play, no calm critter
+//  - galloping is only for chasing (on a trail too) and fleeing: over a minute of play, no calm critter
 //    gallops
 //  - any heading: a critter moves along whatever grid vector it is told, facing the
 //    nearest of its 8 directions; the vector is scaled (a square root) only when it changes
@@ -176,8 +176,8 @@ async function main(browser, r) {
     return { seen, w0, w1, mode: s.mode, seesDeer, modeLater: mind.stateOf(w).mode, chasing };
   })()`);
   const east = wolfMem && wolfMem.w1[0] - wolfMem.w0[0];
-  r.check(wolfMem && !wolfMem.seesDeer && wolfMem.mode === "chase" && east > 1,
-    `out of sight, a wolf keeps after a deer, the way it was heading (moved ${east && east.toFixed(1)} tiles east in 1 s, ${wolfMem && wolfMem.mode}; after ${JSON.stringify(wolfMem && wolfMem.chasing)})`);
+  r.check(wolfMem && !wolfMem.seesDeer && (wolfMem.mode === "chase" || wolfMem.mode === "track") && east > 1,
+    `out of sight, a wolf keeps after a deer, the way it was heading (or along its trail) (moved ${east && east.toFixed(1)} tiles east in 1 s, ${wolfMem && wolfMem.mode}; after ${JSON.stringify(wolfMem && wolfMem.chasing)})`);
   // (a hungry wolf may then follow the trails deer left on the map: see senses.test.js)
   r.check(wolfMem && (wolfMem.modeLater === "calm" || wolfMem.modeLater === "track"),
     `...and gives up the chase later (22 s on: ${wolfMem && wolfMem.modeLater})`);
@@ -303,9 +303,9 @@ async function main(browser, r) {
     }
     return byMode;
   });
-  const calmGallops = Object.entries(gallops).filter(([mode]) => mode !== "chase" && mode !== "flee");
+  const calmGallops = Object.entries(gallops).filter(([mode]) => mode !== "chase" && mode !== "track" && mode !== "flee");
   r.check(calmGallops.length === 0,
-    `galloping only to chase or flee (critter-ticks galloping in a minute: ${JSON.stringify(gallops)})`);
+    `galloping only to chase (or track) or flee (critter-ticks galloping in a minute: ${JSON.stringify(gallops)})`);
 
   // PACING: grass under a boulder, and a paired stag keeping near his hind
   await fresh();

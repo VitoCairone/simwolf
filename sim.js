@@ -59,6 +59,7 @@ const terrainSeed = 1;
 //   feedingMinS            the least time a meal at a carcass or a suckle takes (see
 //                          FEEDING TIME); none in REALISTIC
 //   drinkKgPerKgS          how fast it drinks, kg a second a kg of its frame (see WATER)
+//   waterNeedScale         the share of its real need for water a body has (see WATER)
 //   dayLengthS             a day and night; a year is 365 of them (see DAY AND NIGHT)
 //   scentHalfLifeS, windChangeEveryS   scent trails fading, and the wind shifting (see
 //                          SCENT AND WIND); the same in both: they go with travel, which
@@ -213,8 +214,11 @@ const realGrassRegrowKgPerS = 0.4 / grassDryShare / yearS;
 //   Drinking: a wolf laps up about 0.6 litres a minute, a deer sucks up 2 (estimates).
 const metabolicWaterPerKg = { fatKg: 1.07, carbsKg: 0.6, proteinKg: 0.41 };
 const waterNeedKgPerMJ = { wolf: 1 / 4.184, deer: 3 / grassDryYieldMJPerKg };
-const waterLossKgPerMJ = Object.fromEntries(Object.entries(waterNeedKgPerMJ).map(([sp, k]) =>
-  [sp, k + metabolicWaterPerKg.fatKg / fatMJPerKg]));
+// what a body loses a MJ burnt: its need, scaled for play (SPEEDS.waterNeedScale), plus
+// what burning makes
+function waterLossKgPerMJ(species) {
+  return waterNeedKgPerMJ[species] * SPEEDS.waterNeedScale[species] + metabolicWaterPerKg.fatKg / fatMJPerKg;
+}
 const lethalWaterShare = 0.15;
 const realDrinkKgPerKgS = { wolf: 0.6 / 60 / bodyKgBySpecies.wolf.female, deer: 2 / 60 / bodyKgBySpecies.deer.female };
 // THE STOMACH'S DRIP (see BODY): each second it passes 1 / T of what it holds, but never
@@ -304,6 +308,7 @@ const REALISTIC = {
   nurseFullS: { wolf: 40 * 60, deer: 40 * 60 },
   feedingMinS: 0,
   drinkKgPerKgS: realDrinkKgPerKgS,
+  waterNeedScale: { wolf: 1, deer: 1 },
   grassMaxKg: 0.3 / grassDryShare,
   grassRegrowKgPerS: realGrassRegrowKgPerS,
 };
@@ -313,8 +318,10 @@ const REALISTIC = {
 // digesting, grass growing, corpses rotting, and lives (growing up, breeding, ageing),
 // so a wolf's full meter lasts 20 minutes (and its greatest age some 7.5 days); and
 // exertion (draining and refilling) 10 times as fast, and a deer's swimming twice that.
-// The mating act lasts a few seconds, long enough to see.
+// The mating act lasts a few seconds, long enough to see. Thirst is slowed apart: a full
+// water meter lasts 30 minutes with neither food nor water (gameThirstS).
 const gameMetabolismScale = (20 * 60) / realFoodFullS.wolf;
+const gameThirstS = 30 * 60;
 const gameExertionSpeedup = 10;
 const gameDayS = 10 * 60;
 const scaledAges = (table, k) => Object.fromEntries(Object.entries(table).map(([sp, caps]) =>
@@ -374,6 +381,10 @@ const GAMIFIED = {
   // Scaled, it would drink its fill in a blink: here it drinks it from the brink of death
   // (lethalWaterShare) in 6 s (chosen for play).
   drinkKgPerKgS: { wolf: lethalWaterShare / 6, deer: lethalWaterShare / 6 },
+  // Scaled, a body with neither food nor water would die of thirst in about 3 minutes
+  // (a wolf; 4 a deer): here its need is cut so it takes 30 (chosen for play).
+  waterNeedScale: Object.fromEntries(["wolf", "deer"].map(sp => [sp, lethalWaterShare * realFoodFullS[sp] * gameMetabolismScale /
+    (waterNeedKgPerMJ[sp] * rangeMJPerKg(sp) * gameThirstS)])),
   grassMaxKg: 0.3 / grassDryShare,
   grassRegrowKgPerS: realGrassRegrowKgPerS / gameMetabolismScale,
 };
@@ -1395,7 +1406,8 @@ function mealEaten(a) {
 // them made into fat; all the fat; and water. Its tissues keep the water that goes with
 // their protein (a well-fed body's water to protein) and no more: the rest is excreted.
 // WATER: its burning makes water (metabolicWaterPerKg), and it loses water as fast as it
-// burns energy (waterLossKgPerMJ), to be made up from its food and by drinking. Eating
+// burns energy (waterLossKgPerMJ; under GAMIFIED its need is cut so a full meter lasts
+// gameThirstS with neither food nor water), to be made up from its food and by drinking. Eating
 // (the EAT intent: standing still, or swimming on) with fresh water (a lake or river, not
 // the sea) in reach (waterInReach), it drinks it too, SPEEDS.drinkKgPerKgS of its frame a
 // second, while its tissues are short of water. Grass holds all the water a deer grazing
@@ -1550,7 +1562,7 @@ function updateFood(a) {
   if (!isLiveCritter(a)) return null;
   const t = a.tissues, mj = rangeMJ(a) * tempo / foodLastsS(a);
   metabolize(t, mj);
-  const lose = Math.min(t.waterKg, waterLossKgPerMJ[a.species] * mj);
+  const lose = Math.min(t.waterKg, waterLossKgPerMJ(a.species) * mj);
   t.waterKg -= lose;
   biomassLedger.excretedKg += lose;
   if (!a.eating) a.meal = null;
@@ -1645,10 +1657,30 @@ function updateClock() {
 // decides how faint a scent each critter can still smell). Water holds no scent, the
 // shore's included (a critter half on land marks nothing over water). Only marked tiles
 // are kept, until scentKeepHalfLives half-lives old (fainter than anything can smell).
+// DEATH SCENT: a carcass spreads death scent (its own kind, scentMarks.death, by the
+// carcass's uid) over the land within deathScentTiles of it: out to a circle that grows
+// over deathScentGrowS from the death (each tile as the circle reaches it, once its death
+// pose is done), and again over the whole circle every deathScentRenewS while the corpse
+// lasts. Each tile's mark is
+// made older by deathScentAgeSPerTile for each tile from the carcass, so the scent is
+// always stronger toward it (a fresher mark is never replaced by an older one).
 // WIND: one breeze over the whole map, blowing toward the unit vector (windX, windY); every
 // SPEEDS.windChangeEveryS it turns by up to windTurnMaxRad either way. It carries critters'
 // scent downwind (see senses.js).
-const scentSpecies = ["wolf", "deer"];
+const scentSpecies = ["wolf", "deer", "death"];
+const deathScentTiles = 20;
+const deathScentGrowS = 20;
+const deathScentRenewS = 5 * 60;
+const deathScentAgeSPerTile = SPEEDS.scentHalfLifeS / 40; // (at the edge, half a half-life older)
+// The tiles within deathScentTiles of a point, nearest first: [di, dj, distance].
+const deathScentDisk = (() => {
+  const out = [], R = deathScentTiles;
+  for (let di = -R; di <= R; di++) for (let dj = -R; dj <= R; dj++) {
+    const d = Math.sqrt(di * di + dj * dj);
+    if (d <= R) out.push([di, dj, d]);
+  }
+  return out.sort((p, q) => p[2] - q[2]);
+})();
 const windTurnMaxRad = Math.PI / 6;
 const scentKeepHalfLives = 4; // (senses.js: the faintest smelled is 1/8, 3 half-lives)
 let scentMarks = null; // by species: tile index -> [game time, uid] of the last mark
@@ -1675,6 +1707,30 @@ function markScent() {
   for (const sp of scentSpecies) for (const [k, m] of scentMarks[sp]) {
     if (m[0] >= oldest) break;
     scentMarks[sp].delete(k);
+  }
+}
+
+// Death scent from every carcass (see DEATH SCENT), each tick: its growing circle, and its
+// renewal when due. c.deathScent: { since, next (the disk's index it has reached), renewedAt }.
+function spreadDeathScent() {
+  for (const c of allCorpses) {
+    if (!c.carcass) continue;
+    const ds = c.deathScent || (c.deathScent = { since: c.deathTime, next: 0, renewedAt: c.deathTime });
+    const ci = Math.floor(c.gx), cj = Math.floor(c.gy);
+    const lay = (di, dj, d) => {
+      const i = ci + di, j = cj + dj;
+      if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN || getTerrainAt(i, j) === "water") return;
+      const k = i * gridHeightN + j, at = g_now - d * deathScentAgeSPerTile, old = scentMarks.death.get(k);
+      if (old && old[0] >= at) return;
+      scentMarks.death.delete(k); // (in order of marking: see markScent)
+      scentMarks.death.set(k, [at, c.uid]);
+    };
+    const r = deathScentTiles * Math.min(1, (g_now - ds.since) / deathScentGrowS);
+    while (ds.next < deathScentDisk.length && deathScentDisk[ds.next][2] <= r) lay(...deathScentDisk[ds.next++]);
+    if (g_now - ds.renewedAt >= deathScentRenewS) {
+      ds.renewedAt = g_now;
+      for (const t of deathScentDisk) lay(...t);
+    }
   }
 }
 
@@ -2384,6 +2440,7 @@ function updateAllCritters() {
     allCorpses.splice(k, 1);
   }
   markScent();
+  spreadDeathScent();
   if (g_tick % Math.round(SPEEDS.windChangeEveryS / tempo) === 0) shiftWind();
   if (g_tick % grassGrowEveryTicks === 0 && clock.sunUp) {
     growGrass(grassGrowEveryTicks * tempo / meanDaylightShare);

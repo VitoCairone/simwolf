@@ -1,9 +1,8 @@
 // Water (see WATER in BODY in sim.js, THIRST in mind.js):
 //  - a body loses water as fast as it burns energy and makes some by burning: with neither
-//    food nor water a wolf dies of thirst in about two days, a deer in about three (real
-//    days, by its metabolism), long before it would starve
-//  - food holds water: a deer grazing without pause needs nothing more; a wolf living on
-//    meat still dries out, more slowly than with nothing
+//    food nor water a full water meter runs out in about 30 minutes (chosen for play)
+//  - food holds water: a deer grazing without pause, or a wolf living on meat, needs
+//    nothing more; one with nothing dries out
 //  - standing still by fresh water (a lake or river) it drinks, to full within seconds,
 //    and swimming in it too; by the sea it drinks nothing; the world's biomass still
 //    changes by exactly what the ledger says (drunk and made water in, the rest out)
@@ -34,8 +33,6 @@ async function main(browser, r) {
   // helpers in the simulation's context
   vm.runInContext(`
     var S = sim.internals;
-    // a real day by metabolism, in game seconds
-    var realDayS = 86400 * S.GAMIFIED.foodFullS.wolf / S.REALISTIC.foodFullS.wolf;
     var wolf = sim.allCritters.find(a => a.species === "wolf" && sim.isGrown(a) && a !== sim.pcWolf);
     var deer = sim.allCritters.find(a => a.species === "deer" && sim.isGrown(a));
     // everyone else far off and left alone
@@ -57,52 +54,53 @@ async function main(browser, r) {
     };
   `, c);
 
-  // 1. with neither food nor water (only its body runs: S.updateFood, tick by tick)
+  // 1. with neither food nor water (only its body runs: S.updateFood, tick by tick): how
+  // long its water meter would last, by what it loses in 10 minutes (a wolf's food runs
+  // out in 20)
   const dry = vm.runInContext(`(() => {
     const out = {};
     for (const a of [wolf, deer]) {
       put(a, -9000 - a.uid * 50, -9000); thirsty(a, 1);
-      let n = 0, of = null, food = null;
-      while (!of && n * sim.tempo < 6 * realDayS) { food = a.food; of = S.updateFood(a); n++; }
-      out[a.species] = { days: n * sim.tempo / realDayS, of, food };
+      let of = null;
+      for (let n = 0; n < 600 / sim.tempo && !of; n++) of = S.updateFood(a);
+      out[a.species] = { minutes: 10 / (1 - a.water), of };
       thirsty(a, 1);
     }
     return out;
   })()`, c);
-  r.check(dry.wolf.of === "dehydration" && dry.wolf.days > 1.5 && dry.wolf.days < 2.5 && dry.deer.of === "dehydration" && dry.deer.days > 2.5 && dry.deer.days < 3.5,
-    `with neither food nor water, a wolf dies of thirst in ${dry.wolf.days.toFixed(2)} days, a deer in ${dry.deer.days.toFixed(2)} ` +
-    `(their food meters still at ${dry.wolf.food.toFixed(2)}, ${dry.deer.food.toFixed(2)})`);
+  r.check(!dry.wolf.of && !dry.deer.of && [dry.wolf, dry.deer].every(d => d.minutes > 28 && d.minutes < 32),
+    `with neither food nor water, a full water meter lasts ${dry.wolf.minutes.toFixed(1)} minutes (a wolf), ${dry.deer.minutes.toFixed(1)} (a deer)`);
 
   // 2. food holds water: eating as much as it burns (its usual food, put in its stomach)
-  // for a few days (a deer's rumen takes a day or two to fill), against a wolf with nothing
+  // for 10 minutes (a deer's rumen takes some 4 to fill), against a wolf with nothing
   const food = vm.runInContext(`(() => {
     const meat = S.newCarcass({ tissues: S.bodyOf("deer", 100, 1), stomach: S.biomass(), womb: S.biomass() }).pieces.hips;
-    const day = Math.round(realDayS / sim.tempo), out = {};
-    for (const [a, src, days] of [[wolf, meat, 1], [deer, S.biomass(S.grassShares, 1), 3]]) {
+    const minute = Math.round(60 / sim.tempo), out = {};
+    for (const [a, src] of [[wolf, meat], [deer, S.biomass(S.grassShares, 1)]]) {
       thirsty(a, 1);
       // the energy it digests of a kg of its food (all of meat's; of grass's carbs, a share)
       const kg = sim.biomassKg(src);
       const mjPerKg = (sim.energyMJ(src) - src.carbsKg * (1 - S.carbsDigestedBySpecies[a.species]) * 16.7) / kg;
       const kgPerTick = S.rangeMJ(a) * sim.tempo / S.SPEEDS.foodFullS[a.species] / mjPerKg;
       const daily = [];
-      for (let n = 1; n <= days * day; n++) {
+      for (let n = 1; n <= 10 * minute; n++) {
         for (const key in src) a.stomach[key] += src[key] * kgPerTick / kg;
         S.updateFood(a);
-        if (n % day === 0) daily.push(+a.water.toFixed(3));
+        if (n % (2 * minute) === 0) daily.push(+a.water.toFixed(3));
       }
       out[a.species] = daily; out[a.species + "Food"] = a.food;
     }
     thirsty(wolf, 1);
-    for (let n = 0; n < day; n++) S.updateFood(wolf);
+    for (let n = 0; n < 10 * minute; n++) S.updateFood(wolf);
     out.none = wolf.water;
     thirsty(wolf, 1); thirsty(deer, 1);
     return out;
   })()`, c);
-  const deerW = food.deer[food.deer.length - 1], wolfW = food.wolf[0];
-  r.check(deerW > 0.99 && wolfW < 0.9 && wolfW > food.none + 0.1,
+  const deerW = food.deer[food.deer.length - 1], wolfW = food.wolf[food.wolf.length - 1];
+  r.check(deerW > 0.99 && wolfW > 0.99 && food.none < 0.7,
     `food holds water: eating as much as it burns (food meters ${food.wolfFood.toFixed(2)}, ${food.deerFood.toFixed(2)}), ` +
-    `a deer on grass needs no more (its water by day: ${food.deer.join(", ")}); a wolf on meat dries out (${wolfW.toFixed(3)} after a day), ` +
-    `less than one with nothing (${food.none.toFixed(3)})`);
+    `a deer on grass needs no more (its water every 2 minutes: ${food.deer.join(", ")}), nor a wolf on meat (${food.wolf.join(", ")}); ` +
+    `one with nothing dries out (${food.none.toFixed(3)} after 10 minutes)`);
 
   // 3. drinking, by a lake and by the sea, and swimming
   const drink = vm.runInContext(`(() => {

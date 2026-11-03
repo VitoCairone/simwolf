@@ -5,7 +5,7 @@
 //  - a deer that walked past leaves marks the bigger the fresher: the strongest smelled in
 //    the last 4 s sets the biggest (linear in strength, 1 pixel at the faintest smelled to
 //    the whole tile fresh), and the least is stretched to half that; drawn brown
-//  - other wolves' marks blue for males, pink for females; the wolf's own marks thin rings
+//  - death scent black; other wolves' marks blue for males, pink for females; the wolf's own marks thin rings
 //    in its sex's colour, the freshest the biggest
 //  - a mark keeps the size it was given when it came into the wolf's nose until it leaves
 //    it, fresher scent laid on it included; out of its nose it is still drawn for 1 s
@@ -72,14 +72,18 @@ async function main(browser, r) {
     S.scentMarks.wolf.set((wi + 2) * H + wj, [sim.now - 30, he.uid]);
     S.scentMarks.wolf.set((wi - 2) * H + wj, [sim.now - 30, she.uid]);
     animat.render();
-    const at = (i, j) => animat.scentShown.find(m => m.species === "wolf" && m.i === i && m.j === j)?.colour;
-    const out = { male: at(wi + 2, wj), female: at(wi - 2, wj), own: animat.scentShown.find(m => m.own)?.colour, ownMale: w.isMale };
-    S.scentMarks.wolf.delete((wi + 2) * H + wj); S.scentMarks.wolf.delete((wi - 2) * H + wj);
+    S.scentMarks.death.set(wi * H + wj + 2, [sim.now - 30, he.uid]);
+    animat.render();
+    const at = (i, j, sp = "wolf") => animat.scentShown.find(m => m.species === sp && m.i === i && m.j === j)?.colour;
+    const out = { male: at(wi + 2, wj), female: at(wi - 2, wj), own: animat.scentShown.find(m => m.own)?.colour, ownMale: w.isMale,
+      death: at(wi, wj + 2, "death") };
+    S.scentMarks.wolf.delete((wi + 2) * H + wj); S.scentMarks.wolf.delete((wi - 2) * H + wj); S.scentMarks.death.delete(wi * H + wj + 2);
     return out;
   });
   const blue = "rgba(40, 90, 210, 0.85)", pink = "rgba(225, 95, 170, 0.85)";
   r.check(colours.male === blue && colours.female === pink && colours.own === (colours.ownMale ? blue : pink),
     `wolves' marks by sex: a male's blue, a female's pink; its own rings ${colours.ownMale ? "blue (male)" : "pink (female)"}`);
+  r.check(colours.death === "rgba(0, 0, 0, 0.85)", `death scent is drawn black (${colours.death})`);
 
   // the maximum is the strongest smelled in the last 4 s; a mark keeps the size it was
   // given when first smelled, fresher scent on it included; out of its nose it is still

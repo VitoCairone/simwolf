@@ -39,6 +39,7 @@ async function main(browser, r) {
   r.check(await p.evaluate(() => !!window.__openTile), "found open dry ground to test on");
   r.check(await p.evaluate(() => controls.arrowsMoveWolf && !controls.wolfTaken && !sim.playerHasControl()),
     "toggled to wolf mode, the wolf stays on autopilot until the player takes it");
+  await p.evaluate(() => mind.ignore(sim.pcWolf)); // (from here, the keys alone move it)
 
   for (const [keys, [ex, ey]] of CASES) {
     await p.evaluate(() => {

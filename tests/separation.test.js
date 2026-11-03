@@ -63,14 +63,15 @@ async function main(browser, r) {
   if (minded) r.check(minded.moved > 0,
     `with a mind attached, critters move by themselves (${minded.moved} of ${minded.critters} moved in 10 s)`);
 
-  // 2. in the page, the only globals the game adds are its five objects
+  // 2. in the page, the only globals the game adds are its objects (and the debugMode setting)
   const p = await openGame(browser);
   const g = await p.evaluate(() => {
     const blank = document.createElement("iframe");
     document.body.appendChild(blank);
     const builtIn = new Set(Object.getOwnPropertyNames(blank.contentWindow));
     blank.remove();
-    const added = Object.getOwnPropertyNames(window).filter(k => !builtIn.has(k));
+    // (and the one setting, debugMode: see index.html)
+    const added = Object.getOwnPropertyNames(window).filter(k => !builtIn.has(k) && k !== "debugMode");
     // top-level const/let/class don't appear on window: probe the old shared names
     const oldNames = ["tick", "pcWolf", "allCritters", "zoom", "worldShiftPX", "consoleOnlyMode",
       "frameDataBySpeciesAndPose", "renderedTiles", "keysPressed", "isoProject", "getTerrainAt",

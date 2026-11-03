@@ -21,6 +21,7 @@
 // DECISIONS, in order of priority:
 //   a tired swimmer heads for land (toShore)
 //   a deer flees wolves it remembers (decideDeer)
+//   a famished wolf (not an infant) eats, or else hunts (decideWolf: FAMISHED)
 //   a thirsty critter drinks, or goes to water (thirst); but an infant suckles first, a
 //     deer stands still for her young suckling first (nursing), and a hungry deer not
 //     badly thirsty grazes first (graze)
@@ -31,8 +32,8 @@
 //   while its meter is above romanceAbove, a grown critter courts and mates, or mates
 //     with its partner in heat (social, romance only)
 //   a deer grazes while hungry (graze); a wolf hunts while hungry and weaned, waiting on
-//     the shore for prey in the water (waitAshore), or with no prey in mind follows deer
-//     trails (track)
+//     the shore for prey in the water (waitAshore), and following deer trails (track)
+//     whenever it can't see or hear its prey
 //   mates and family (social): courting and mating as above, at any hunger; keeping near
 //     a partner or infants; the young keep near a parent
 //   anything else wanders (calm)
@@ -72,6 +73,10 @@ const deerGrazeLookShare = 0.25; // looks this share of its sight for grass firs
 const grazeLosChecks = 40;       // ...checking line of sight to at most this many, best first
 const grazeGiveUpS = 4;          // gives up on grass it has got no nearer to in this long...
 const grazeAvoidS = 60;          // ...and leaves it be this long
+const wolfFamishedHungerAbove = 0.5; // a wolf this hungry (1 - its food meter)...
+const wolfFamishedGutBelow = 0.5; // ...its stomach below this, eats or hunts before all else
+const wolfDashWindAbove = 0.5;   // after prey, it gallops with wind above this and stamina
+                                 // above its food meter (DASHING)
 const wolfHuntBelow = 0.75;      // a wolf hunts only with its food meter below this...
 const wolfHuntGutBelow = 0.25;   // ...and its stomach below this
 const wolfFullAt = 0.99;         // eats until it is this full (or its stomach is)...
@@ -180,6 +185,7 @@ function memoryOf(a) {
       flee: null,             // a deer's way to flee: { dx, dy, until, since }
       searching: false,       // a wolf has reached where its unseen prey should be
       trailEnds: new Map(),   // deer uid -> the game time its trail was given up at (see track)
+      deathEnds: new Map(),   // ...and a carcass's death scent
       watch: null,            // a wolf waiting ashore: { i, j, way (its prey's tile and way), spot }
       shore: null,            // a tired swimmer's land: { gx, gy, blockedTurns }
       closing: null,          // the kin it is coming back to: "parent", "young", "mate" (see social)
@@ -593,38 +599,36 @@ function search(a, m, now) {
 // WOLVES eat first: from below wolfFeedBelow (with its stomach below wolfFeedGutBelow)
 // until full (or its stomach is), and once old enough to eat, the nearest carcass with
 // meat (blocked near it, it waits its turn: feedWaitS) it perceived within
-// wolfForgetPreyS (seen, or smelled on the wind). Otherwise they hunt while hungry (below
-// wolfHuntBelow, with its stomach below wolfHuntGutBelow), once weaned (pups stay
-// with their family and eat what it kills). Of the deer it knows, a wolf picks
-// the nearest, or among those about as near, the one most straight ahead; then keeps to
-// it for wolfCommitS (unless a deer in sight is much nearer) and after that changes only
-// for one clearly nearer. In sight it gallops straight for its prey, however far off;
-// out of sight, it trots for where it should be by now, then on the way it went,
-// searching. A deer searched for and not found is lost until seen again.
+// wolfForgetPreyS (seen, or smelled on the wind); knowing of none, it follows death scent
+// (TRACKING). Otherwise they hunt while hungry (below wolfHuntBelow, with its stomach
+// below wolfHuntGutBelow), once weaned (pups stay with their family and eat what it
+// kills).
+// FAMISHED: hungrier than wolfFamishedHungerAbove (hunger: 1 - its food meter) with its
+// stomach below wolfFamishedGutBelow, a weaned wolf eats or else hunts before anything
+// else (drinking, family, mating).
+// HUNTING: of the deer it knows, a wolf picks the nearest, or among those about as near,
+// the one most straight ahead; then keeps to it for wolfCommitS (unless a deer in sight
+// is much nearer) and after that changes only for one clearly nearer. Seeing or hearing
+// its prey now, it goes straight for it; otherwise it follows the freshest deer trail
+// about (TRACKING), and with none, goes for where its prey should be by now, then on
+// the way it went, searching. A deer searched for and not found is lost until seen
+// again. With no deer in mind, it follows deer trails.
+// DASHING: after prey (in sight, on a trail, or where it should be), it gallops while its
+// stamina meter is above its food meter and its wind above wolfDashWindAbove, and trots
+// otherwise.
 function decideWolf(a, m, now) {
   // an infant suckles rather than goes to a carcass
   const suckling = sim.isInfant(a) && nurseOrSuckle(a, m, now);
   if (suckling) return suckling;
+  // FAMISHED: eating, then hunting, before all else
+  if (!sim.isInfant(a) && 1 - a.food > wolfFamishedHungerAbove && a.gut < wolfFamishedGutBelow) {
+    const eating = feed(a, m, now, true) || hunt(a, m, now);
+    if (eating) return eating;
+  }
   const drinking = thirst(a, m, now);
   if (drinking) { m.target = null; m.searching = false; m.watch = null; return drinking; }
-  const feeding = m.mode === "feed"
-    ? a.food < wolfFullAt && !stomachFull(a) : a.food < wolfFeedBelow && a.gut < wolfFeedGutBelow;
-  if (feeding && sim.can(a, "eat")) {
-    let carcass = null, bestD2 = Infinity;
-    for (const k of m.known.values()) {
-      if (k.species !== "deer" || k.alive || !(k.meat > 0) || now - k.seenTick > ticks(wolfForgetPreyS)) continue;
-      const d2 = (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2;
-      if (d2 < bestD2) { carcass = k; bestD2 = d2; }
-    }
-    if (carcass) {
-      m.mode = "feed"; m.target = null; m.searching = false; m.plan = null;
-      if (bestD2 <= sim.eatReachTiles * sim.eatReachTiles) return EAT;
-      // crowded out near it (others eating): waits its turn rather than circling
-      if (bestD2 <= feedQueueTiles * feedQueueTiles && a.blockedTick > m.lastTurn) m.feedWaitUntil = now + ticks(feedWaitS);
-      if (now < (m.feedWaitUntil ?? -Infinity)) return IDLE;
-      return move(a, m, carcass.gx - a.gx, carcass.gy - a.gy, "trot", now, false, true);
-    }
-  }
+  const eating = feed(a, m, now, false);
+  if (eating) return eating;
   const nursing = nurseOrSuckle(a, m, now);
   if (nursing) { m.target = null; m.searching = false; m.watch = null; return nursing; }
   const romance = a.food > romanceAbove && social(a, m, now, true);
@@ -633,7 +637,38 @@ function decideWolf(a, m, now) {
     m.target = null; m.searching = false; m.watch = null;
     return settle(a, m, now);
   }
+  return hunt(a, m, now) || settle(a, m, now);
+}
 
+// Going to eat (see WOLVES): to the nearest carcass with meat it knows of, or, knowing of
+// none, along the freshest death scent about (track). An intent, or null.
+function feed(a, m, now, famished) {
+  const feeding = famished || (m.mode === "feed"
+    ? a.food < wolfFullAt && !stomachFull(a) : a.food < wolfFeedBelow && a.gut < wolfFeedGutBelow);
+  if (!feeding || !sim.can(a, "eat")) return null;
+  let carcass = null, bestD2 = Infinity;
+  for (const k of m.known.values()) {
+    if (k.species !== "deer" || k.alive || !(k.meat > 0) || now - k.seenTick > ticks(wolfForgetPreyS)) continue;
+    const d2 = (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2;
+    if (d2 < bestD2) { carcass = k; bestD2 = d2; }
+  }
+  if (!carcass) {
+    const scent = track(a, m, now, "death", "trot");
+    if (scent) { m.target = null; m.searching = false; m.watch = null; }
+    return scent;
+  }
+  m.mode = "feed"; m.target = null; m.searching = false; m.plan = null; m.watch = null;
+  if (bestD2 <= sim.eatReachTiles * sim.eatReachTiles) return EAT;
+  // crowded out near it (others eating): waits its turn rather than circling
+  if (bestD2 <= feedQueueTiles * feedQueueTiles && a.blockedTick > m.lastTurn) m.feedWaitUntil = now + ticks(feedWaitS);
+  if (now < (m.feedWaitUntil ?? -Infinity)) return IDLE;
+  return move(a, m, carcass.gx - a.gx, carcass.gy - a.gy, "trot", now, false, true);
+}
+
+// Hunting (see WOLVES): an intent, or null with no deer in mind and no trail about.
+function hunt(a, m, now) {
+  // its gait after prey: a gallop while it has the stamina and wind for one (DASHING)
+  const gait = a.stamina > a.food && a.wind > wolfDashWindAbove ? "gallop" : "trot";
   let target = m.target !== null ? m.known.get(m.target) : undefined;
   if (target && !target.alive) { m.target = null; target = undefined; }
   if (target && (target.lost || now - target.seenTick > ticks(wolfForgetPreyS))) target = undefined;
@@ -674,7 +709,7 @@ function decideWolf(a, m, now) {
   target = m.target !== null ? m.known.get(m.target) : undefined;
   if (!target) {
     m.searching = false;
-    return track(a, m, now) || settle(a, m, now);
+    return track(a, m, now, "deer", gait);
   }
 
   m.plan = null;
@@ -682,38 +717,48 @@ function decideWolf(a, m, now) {
     // waiting for it: once out of sight, it is lost, and the wolf looks for other prey
     if (now - target.seenTick > 0) {
       target.lost = true; m.target = null; m.watch = null;
-      return decideWolf(a, m, now);
+      return hunt(a, m, now);
     }
     return waitAshore(a, m, target, now);
   }
   m.watch = null;
-  m.mode = "chase";
   const age = now - target.seenTick;
+  // seen or heard now, straight at it; else along the freshest deer trail about, if any
+  const present = age === 0 && (target.by === "sight" || target.by === "hearing");
+  if (!present) {
+    const trail = track(a, m, now, "deer", gait);
+    if (trail) { m.searching = false; return trail; }
+  }
+  m.mode = "chase";
   if (age === 0) m.searching = false;
   const [tx, ty] = expectedAt(target, now);
   let dx = tx - a.gx, dy = ty - a.gy;
   if (age > 0 && dx * dx + dy * dy < 4) m.searching = true;
   if (m.searching) {
     if (target.vx === 0 && target.vy === 0) { // it was standing still, and isn't here
-      target.lost = true; m.target = null; m.searching = false; m.mode = "calm"; return track(a, m, now) || calm(a, m, now);
+      target.lost = true; m.target = null; m.searching = false; m.mode = "calm"; return track(a, m, now, "deer", gait) || calm(a, m, now);
     }
     dx = target.vx; dy = target.vy;
   }
-  // at prey it sees, a gallop (as wind and stamina allow); else a trot
-  return move(a, m, dx, dy, age === 0 ? "gallop" : "trot", now);
+  return move(a, m, dx, dy, gait, now);
 }
 
-// TRACKING: a hungry wolf with no prey in mind follows deer trails (senses.trailsAround):
-// it trots to the freshest deer scent within its nose's reach that is fresher than the
-// scent underfoot, so along a trail it goes the way the deer went, never back, until it
-// perceives one. Where a trail ends (nothing fresher about: the deer was killed there,
-// say, or went into the water), it gives that deer's trail up, as far as that end
-// (m.trailEnds), and looks for another. null if it smells none worth following.
-function track(a, m, now) {
-  const i = Math.floor(a.gx), j = Math.floor(a.gy), t0 = sim.now;
-  for (const [uid, at] of m.trailEnds) if (t0 - at > trailEndKeepS) m.trailEnds.delete(uid);
-  const worth = t => !(t0 - t.ageS <= (m.trailEnds.get(t.uid) ?? -Infinity));
-  const trails = senses.trailsAround(a, "deer").filter(worth);
+// TRACKING: a hunting wolf follows deer trails (senses.trailsAround) whenever it has no
+// deer in sight or hearing; a wolf going to eat, knowing of no carcass, follows death
+// scent (see DEATH SCENT in sim.js) the same way: it goes to the freshest scent about that
+// is fresher than the scent underfoot, so along a trail it goes the way the deer went (and
+// up death scent, to the carcass), never back. Where a trail ends (nothing fresher about:
+// the deer was killed there, say, or went into the water; the carcass is gone), it gives
+// up that one (by its maker: m.trailEnds, m.deathEnds) as far as that end, and looks for
+// another; death scent of a carcass it knows is bare it leaves be. Deer trails it follows
+// at the hunt's gait (DASHING), death scent at a trot. null if it smells none worth
+// following.
+function track(a, m, now, species = "deer", gait = "trot") {
+  const i = Math.floor(a.gx), j = Math.floor(a.gy), t0 = sim.now, ends = species === "deer" ? m.trailEnds : m.deathEnds;
+  for (const [uid, at] of ends) if (t0 - at > trailEndKeepS) ends.delete(uid);
+  const bare = uid => { const k = m.known.get(uid); return k && !k.alive && k.meat === 0; };
+  const worth = t => !(t0 - t.ageS <= (ends.get(t.uid) ?? -Infinity)) && !(species === "death" && bare(t.uid));
+  const trails = senses.trailsAround(a, species).filter(worth);
   const here = trails.find(t => t.i === i && t.j === j);
   let best = null;
   for (const t of trails) {
@@ -721,11 +766,11 @@ function track(a, m, now) {
     if (!best || t.ageS < best.ageS) best = t;
   }
   if (!best) {
-    if (here) m.trailEnds.set(here.uid, t0 - here.ageS); // a dead end
+    if (here) ends.set(here.uid, t0 - here.ageS); // a dead end
     return null;
   }
   m.mode = "track"; m.plan = null;
-  return move(a, m, best.i + 0.5 - a.gx, best.j + 0.5 - a.gy, "trot", now);
+  return move(a, m, best.i + 0.5 - a.gx, best.j + 0.5 - a.gy, gait, now);
 }
 
 // A wolf doesn't follow prey k into the water (nor can it kill it there): it trots,
