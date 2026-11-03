@@ -25,6 +25,20 @@ let pad = null;
 // Standing still, the player's wolf eats any carcass in reach.
 const STAND = { gait: "eat" };
 
+// DEBUG PANEL: clicking a species' line pins the camera to the next live critter of that
+// species after the last one it went to (by uid; past the last, the first again; at
+// first, the first). Nothing happens with none alive. Kept per species (debugUid).
+const debugUid = { wolf: null, deer: null };
+function pinNextOf(species) {
+  if (typeof debugMode === "undefined" || !debugMode) return;
+  const live = sim.allCritters.filter(a => a.species === species && sim.isLiveCritter(a)).sort((a, b) => a.uid - b.uid);
+  if (!live.length) return;
+  const cur = debugUid[species];
+  const next = (cur === null ? null : live.find(a => a.uid > cur)) || live[0];
+  debugUid[species] = next.uid;
+  animat.pinCamera(next);
+}
+
 // The player's intent, from what is held: the movement pad while in use; else in wolf
 // mode the arrow keys (as screen directions, two combining into a diagonal, opposites
 // cancelling; none held: stand); else none, and the mind steers the wolf.
@@ -139,6 +153,10 @@ function attach(theSim, theAnimat, theMind = null) {
     const a = animat.critterAtScreen(e.clientX, e.clientY);
     if (a) animat.pinCamera(a);
   });
+
+  // the debug panel's population lines: the camera to the next of that species
+  document.getElementById("debug-wolves").addEventListener("click", () => pinNextOf("wolf"));
+  document.getElementById("debug-deer").addEventListener("click", () => pinNextOf("deer"));
 
   // debug readout of the grid point under the pointer
   fieldWrapper.addEventListener("mousemove", e =>

@@ -268,6 +268,8 @@ const zoomInBtn = el("zoom-in");
 const zoomOutBtn = el("zoom-out");
 const arrowsIconEl = el("arrow-mode-icon");
 const cursorCoordsEl = el("cursor-coords");
+const debugPanelEl = el("debug-panel");
+const debugLineEls = { wolf: el("debug-wolves"), deer: el("debug-deer") };
 const movePadKnob = el("move-pad-knob");
 const movePadRingEls = [...document.querySelectorAll("#move-pad .ring")];
 
@@ -1322,8 +1324,35 @@ function paintHeart(target, h) {
   target.ctx.globalAlpha = 1;
 }
 
+// DEBUG MODE (the global debugMode, set in index.html): while on, the debug panel shows
+// (drawDebugPanel) and the outline under the player's wolf (paintDebugWolf); while off,
+// neither.
+function debugOn() { return typeof debugMode !== "undefined" && !!debugMode; }
+
+// DEBUG PANEL: each species' live population and its greatest generation (a.generation),
+// written only when they change.
+const debugShown = { on: null, wolf: "", deer: "" };
+function drawDebugPanel() {
+  const on = debugOn();
+  if (on !== debugShown.on) { debugShown.on = on; debugPanelEl.hidden = !on; }
+  if (!on) return;
+  const n = { wolf: 0, deer: 0 }, gen = { wolf: -1, deer: -1 };
+  for (const a of sim.allCritters) {
+    if (!sim.isLiveCritter(a) || !(a.species in n)) continue;
+    n[a.species]++;
+    gen[a.species] = Math.max(gen[a.species], a.generation);
+  }
+  for (const sp of ["wolf", "deer"]) {
+    const text = `${n[sp]} ${n[sp] ? gen[sp] : "–"}`;
+    if (text === debugShown[sp]) continue;
+    debugShown[sp] = text;
+    debugLineEls[sp].querySelector(".debug-count").textContent = n[sp];
+    debugLineEls[sp].querySelector(".debug-gen").textContent = n[sp] ? gen[sp] : "–";
+  }
+}
+
 // DEBUG: a tile-sized outline centered on the player's wolf (on the water surface when
-// it swims).
+// it swims), while debugMode is on (and showDebug, for tests).
 let showDebug = true;
 function paintDebugWolf() {
   const w = sim.pcWolf;
@@ -1379,6 +1408,7 @@ const waterCss = {};
 const inspectCss = [{}, {}, {}, {}, {}];
 let inspectShown = false;
 function drawExertion() {
+  drawDebugPanel();
   setStyle(windFillEl, windCss, "width", `${100 * sim.pcWolf.wind}%`);
   setStyle(staminaFillEl, staminaCss, "width", `${100 * sim.pcWolf.stamina}%`);
   setStyle(foodFillEl, foodCss, "width", `${100 * sim.pcWolf.food}%`);
@@ -1432,7 +1462,7 @@ function render() {
   if (!showOnlySet) for (const h of hearts.values()) if (heartShown(h)) items.push([h.z, 2, items.length, () => paintHeart(screen, h)]);
   items.sort((p, q) => p[0] - q[0] || p[1] - q[1] || p[2] - q[2]);
   for (const it of items) it[3]();
-  if (showDebug) paintDebugWolf();
+  if (showDebug && debugOn()) paintDebugWolf();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 
   // drop the chunks long out of view

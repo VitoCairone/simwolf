@@ -117,9 +117,16 @@ body, html { height: 100%; overflow: hidden; background-color: #222; }
   visibility: hidden;
 }
 #move-pad-knob.visible { visibility: visible; }
-/* Debug readout: the grid coordinates under the pointer. */
-#cursor-coords {
+/* Debug panel (debugMode only): the populations, and the grid coordinates under the
+   pointer. */
+#debug-panel {
   margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
   font-size: 12px;
   color: #aaa;
 }
+#debug-panel[hidden] { display: none; }
+.debug-line { cursor: pointer; user-select: none; }
+.debug-line:hover { color: white; }

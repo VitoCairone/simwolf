@@ -782,8 +782,9 @@ function initCritter(a, species, tissues = null) {
   a.mateUid = null;        // its partner (see BREEDING)
   a.matingWith = null;     // ...or whoever it is mating with now
   a.parentUids = [];       // the mother first, if known
+  a.generation = 0;        // those at the start 0; a newborn one past its younger-generation parent (BREEDING)
   a.youngUids = [];
-  a.pregnancy = null;      // { dueAt, fatherUid }
+  a.pregnancy = null;      // { since, dueAt, fatherUid, litter, generation (the litter's) }
   a.lastBredAt = -Infinity;
   a.speed = 0;
   a.targetSpeed = 0;
@@ -1688,6 +1689,9 @@ function setWind(angle) {
 // while in heat, her heat is spent; by a fertile male (not past his maxFertileAgeS), she
 // conceives a litter (litterBySpecies), and after gestationS, once on land, gives birth
 // beside herself: young whose parents are her, the father and her partner, while alive.
+// GENERATIONS (a.generation): the critters at the start are generation 0; a litter is one
+// past the younger generation of its mother and father, the higher number (fixed when
+// it is conceived).
 // THE WOMB (a.womb, a biomass: see BODY) fills from her tissues as the litter grows, to
 // its newborns' weight (a well-fed body's make-up) at the birth, by the square of the
 // share of her gestation gone; while her meter is below miscarryBelow she loses the
@@ -1883,7 +1887,8 @@ function pair(a, b) {
 function conceive(female, male) {
   const g = SPEEDS.breeding[female.species].gestationS;
   const dueIn = aboutNormal(g.avg, (g.max - g.min) / 4, g.min, g.max);
-  female.pregnancy = { since: g_now, dueAt: g_now + dueIn, fatherUid: male.uid, litter: litterSize(female.species) };
+  female.pregnancy = { since: g_now, dueAt: g_now + dueIn, fatherUid: male.uid, litter: litterSize(female.species),
+    generation: Math.max(female.generation, male.generation) + 1 };
 }
 
 // On a death: the partner is free to pair again, and any pregnancy ends (the womb's
@@ -1926,7 +1931,7 @@ function birthSpots(f, n) {
 }
 
 function giveBirth(f) {
-  const { fatherUid, litter } = f.pregnancy;
+  const pregnancy = f.pregnancy, { fatherUid, litter } = pregnancy;
   f.pregnancy = null;
   const parents = [f.uid];
   for (const uid of [fatherUid, f.mateUid]) {
@@ -1941,6 +1946,7 @@ function giveBirth(f) {
     c.gx = c.nextGX = x;
     c.gy = c.nextGY = y;
     c.parentUids = parents.slice();
+    c.generation = pregnancy.generation;
     for (const uid of parents) critterByUid.get(uid).youngUids.push(c.uid);
     allCritters.push(c);
     if (c.species === "wolf" && !isLiveCritter(pcWolf)) pcWolf = c; // the player's new wolf
@@ -2697,7 +2703,7 @@ function start({ consoleOnly = false } = {}) {
 // THE INTERFACE
 // Views and controllers read critters' fields directly (gx, gy, pose, poseTick,
 // currentDirection (the facing), hx, hy (the heading), speed, targetSpeed, species, wind,
-// stamina, food, gut, water, diedOf (hunger, thirst), stomachFull, tissues, stomach, womb,
+// stamina, food, gut, water, diedOf (hunger, thirst), generation, stomachFull, tissues, stomach, womb,
 // eating, carcass, carcassFullKg, uid, blockedTick, stunnedUntil, isMale, birthTime,
 // deathTime, weightKg, adultKg, frameKg, boxRad, mateUid, matingWith, parentUids,
 // youngUids, pregnancy, nursingOn, bumpedTick, bumpedBy, bumpedDx, bumpedDy, bumpedX,

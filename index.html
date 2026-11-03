@@ -70,8 +70,21 @@
         <div class="exertion-meter"><div id="inspect-water-fill" class="exertion-meter-fill"></div></div>
       </div>
 
-      <div id="cursor-coords">
-        x: –, y: –
+      <!-- DEBUG (only while debugMode is on): the populations, each line cycling the camera
+           through its species, and the grid point under the pointer. The only words and
+           numbers on screen. -->
+      <div id="debug-panel" hidden>
+        <div id="debug-wolves" class="debug-line" role="button">
+          <div>Wolves: <span class="debug-count">–</span></div>
+          <div>Max Gen <span class="debug-gen">–</span></div>
+        </div>
+        <div id="debug-deer" class="debug-line" role="button">
+          <div>Deer: <span class="debug-count">–</span></div>
+          <div>Max Gen <span class="debug-gen">–</span></div>
+        </div>
+        <div id="cursor-coords">
+          x: –, y: –
+        </div>
       </div>
     </div>
     <div id="field-wrapper">
@@ -100,6 +113,11 @@
                    the wolf to mind on request (controls.js)
        To run without drawing (in a browser console or Node), load the first three and run:
          sim.init(); senses.attach(sim); mind.attach(sim, senses); sim.start({ consoleOnly: true }); -->
+  <script>
+    // DEBUG MODE: on, the debug panel (sidebar, bottom) and the outline under the player's
+    // wolf are shown; off, neither (animat.js and controls.js read it).
+    var debugMode = true;
+  </script>
   <script src="hydrology.js"></script>
   <script src="sim.js"></script>
   <script src="senses.js"></script>
