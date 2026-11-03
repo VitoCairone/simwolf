@@ -152,27 +152,31 @@ async function main(browser, r) {
   const smell = await p.evaluate(() => {
     senses.use.hearing = false;
     const [hx, hy] = home, out = {};
-    put(deerA, hx, hy); put(wolfA, hx + 100, hy); // 100 tiles along +i: far beyond sight
+    put(deerA, hx, hy); put(wolfA, hx + 2000, hy); // 2000 tiles along +i: far beyond sight
     S.setWind(0);            // blowing toward +i: from the deer to the wolf
     out.downwind = by(wolfA, deerA);
     S.setWind(Math.PI);      // toward -i: the wolf is upwind
     out.upwind = by(wolfA, deerA);
     S.setWind(Math.PI / 2);  // across
     out.across = by(wolfA, deerA);
+    put(wolfA, hx + 2600, hy); S.setWind(0); // beyond its nose's reach
+    out.wolfTooFar = by(wolfA, deerA);
     put(wolfA, hx + 2, hy);  // up close, whatever the wind
+    S.setWind(Math.PI / 2);
     out.close = by(wolfA, deerA);
     // a deer smells a wolf downwind of it, less far
-    put(wolfA, hx - 60, hy); S.setWind(0);
+    put(wolfA, hx - 350, hy); S.setWind(0);
     out.deerSmellsWolf = by(deerA, wolfA);
-    put(wolfA, hx - 120, hy);
+    put(wolfA, hx - 450, hy);
     out.deerTooFar = by(deerA, wolfA);
     senses.use.hearing = true;
     return out;
   });
-  r.check(smell.downwind === "smell" && smell.upwind === null && smell.across === null && smell.close !== null,
-    `a wolf smells a deer 100 tiles upwind of it (${smell.downwind}), not downwind (${smell.upwind}) or across the wind (${smell.across}); up close, any (${smell.close})`);
+  r.check(smell.downwind === "smell" && smell.upwind === null && smell.across === null && smell.wolfTooFar === null && smell.close !== null,
+    `a wolf smells a deer 2000 tiles upwind of it (${smell.downwind}), not downwind (${smell.upwind}), across the wind (${smell.across}) ` +
+    `or 2600 tiles upwind (${smell.wolfTooFar}); up close, any (${smell.close})`);
   r.check(smell.deerSmellsWolf === "smell" && smell.deerTooFar === null,
-    `a deer smells a wolf 60 tiles upwind (${smell.deerSmellsWolf}), not 120 (${smell.deerTooFar})`);
+    `a deer smells a wolf 350 tiles upwind (${smell.deerSmellsWolf}), not 450 (${smell.deerTooFar})`);
 
   // TRAILS, and a wolf tracking
   const trail = await p.evaluate(() => {

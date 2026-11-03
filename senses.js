@@ -234,11 +234,11 @@ function hearingRange(b) {
 }
 
 // SMELL
-// Airborne: how far downwind a critter smells another, in tiles; within what angle of
-// straight upwind (as its cosine, squared, for comparing without a square root); and how
-// near it smells anything, wind or not. Estimates, short of the kilometres wolves are said
-// to smell prey downwind, for a map half a kilometre across.
-const airScentRangeTiles = { wolf: 150, deer: 80 };
+// Airborne: how far downwind a critter smells another, in tiles (wolves about 2.4 km,
+// deer about 400 m); within what angle of straight upwind (estimate; as its cosine,
+// squared, for comparing without a square root); and how near it smells anything, wind
+// or not (estimate).
+const airScentRangeTiles = { wolf: 2400, deer: 400 };
 const airScentHalfAngle = 20 * Math.PI / 180;
 const airScentCos2 = Math.cos(airScentHalfAngle) ** 2;
 const sniffTiles = 3;
