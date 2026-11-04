@@ -227,11 +227,15 @@ function frameColumn(a, fd, sinceTick = a.poseTick ?? 0) {
 //   2. land tiles, and swimmers among them: land in front of a swimmer covers it. Depth
 //      order (z): a land tile 1000 + 100 * depth of its center (i + j + 1), a swimmer
 //      1000 + 100 * (depth + 0.5), so only land clearly in front of it covers it
-//   3. land critters and corpses (100000 + 100 * depth) and boulders (100000 + 100 * their
-//      tile center's depth), in depth order; on a tie a boulder first; a heart over its pair
+//   3. land critters and corpses (100000 + 100 * depth), boulders (100000 + 100 * their
+//      tile center's depth) and undergrowth (100000 + 100 * its tile's back corner's depth,
+//      so a critter standing on its tile is drawn after it), in depth order; on a tie a
+//      boulder or undergrowth first; a heart over its pair. A critter or corpse on a tile
+//      with undergrowth has the undergrowth's foreground half drawn again over it.
 //   4. the debug outline
-// In the SIGHT VIEW each chunk's mask of unseen ground goes right after its terrain, and
-// the scent marks (SCENT VIEW) after all the terrain, before swimmers and critters.
+// In the SIGHT VIEW each chunk's mask of unseen ground goes right after its terrain; the
+// scent marks (SCENT VIEW) go among the land critters, at their tile's back corner's depth
+// like undergrowth (over its own tile's undergrowth, under a critter standing there).
 // spriteZIndex and the tiles' z keep these numbers (as the DOM view's z-indexes were).
 const zSwimLandBase = 1000;
 const zLandCritterBase = 100000;
@@ -243,6 +247,10 @@ function tileZIndex(i, j, terrain) {
 
 function boulderZIndex(i, j) {
   return zLandCritterBase + (i + j + 1) * 100;
+}
+
+function undergrowthZIndex(i, j) {
+  return zLandCritterBase + (i + j) * 100;
 }
 
 function spriteZIndex(a) {
@@ -323,8 +331,9 @@ const shoreOuterImage = IMG + "shore-outer.png";
 const shoreInnerImage = IMG + "shore-inner.png";
 const heartImage = IMG + "heart.png";
 const debugTileImage = IMG + "debug-tile.png";
+const undergrowthImage = IMG + "undergrowth.png";
 const waterCell = [192, 288]; // plain water in tiles.png
-const terrainImages = [tilesImage, groundImage, shoreOuterImage, shoreInnerImage];
+const terrainImages = [tilesImage, groundImage, shoreOuterImage, shoreInnerImage, undergrowthImage];
 
 // PAINTING: a target is a 2D context and how world pixels map to its pixels: x * A + Bx,
 // y * A + By. Pixel art is scaled without smoothing, and every cell lands on whole pixels.
@@ -409,9 +418,10 @@ function worldToScreen(px, py) {
   return [r.left + (px * screen.A + screen.Bx) / dpr, r.top + (py * screen.A + screen.By) / dpr];
 }
 
-// SHORES: water lapping at the land, drawn as an OUTGOING WAVE: a wave front running out
-// from the land that always joins up, ending at land or carrying on into the next tile's
-// wave, never stopping short in open water. Three sprite sets draw it, each set's
+// SHORES: the sea lapping at the land (lakes and rivers lie still, as plain water), drawn
+// as an OUTGOING WAVE: a wave front running out from the land that always joins up, ending
+// at land or carrying on into the next tile's wave, never stopping short in open water
+// (except where the sea meets a river's mouth). Three sprite sets draw it, each set's
 // columns being its animation frames:
 //   STRAIGHT  tiles.png row 9, columns 0-1: light along one edge, the front parallel to it
 //   CORNER    images/shore-outer.png: light in one corner, the front an arc around it
@@ -527,7 +537,7 @@ function acrossEdge(e, c) {
 }
 
 // Water tile (i, j)'s wave: { kind: "straight", edge }, { kind: "corner" | "inner",
-// corner }, or null for plain water. Kept, up to placementsKept tiles, then forgotten.
+// corner }, or null for plain water (and for lakes and rivers). Kept, up to placementsKept tiles, then forgotten.
 const placements = new Map();
 const placementsKept = 200000;
 function shorePlacementAt(i, j) {
@@ -535,7 +545,7 @@ function shorePlacementAt(i, j) {
   if (placements.has(key)) return placements.get(key);
   if (placements.size >= placementsKept) placements.clear();
   let p = null;
-  if (isWaterAt(i, j) && i >= 0 && j >= 0 && i < sim.gridWidthN && j < sim.gridHeightN) {
+  if (isWaterAt(i, j) && i >= 0 && j >= 0 && i < sim.gridWidthN && j < sim.gridHeightN && sim.waterKindAt(i, j) === "sea") {
     const land = landEdgesOf(i, j);
     if (land.length === 1) p = { kind: "straight", edge: land[0] };
     else if (land.length === 2 && land[0] !== oppositeEdge[land[1]]) {
@@ -636,6 +646,45 @@ function boulderSpriteAt(i, j, terrain) {
   let h = Math.imul(i, 73856093) ^ Math.imul(j, 19349663);
   h = Math.imul(h ^ (h >>> 13), 0x5bd1e995);
   return set[((h ^ (h >>> 15)) >>> 0) % set.length];
+}
+
+// UNDERGROWTH: low bushes and flowers (sim.undergrowthAt), the artist's from tiles.png,
+// in images/undergrowth.png (made by spritecraft/make_undergrowth.py): row 0 the whole
+// sprite, row 1 its foreground half (drawn again over a critter standing on its tile);
+// columns by kind (undergrowthCols). Drawn as the artist placed them in their cells, the
+// cell on the tile like a ground tile's (undergrowthFootY: the tile's center's row in the
+// cell). Which sprite of its kind: mostly one for a patch of undergrowthPatchTiles a side
+// (flowers of a kind growing together), else the tile's own; like the terrain, a pure
+// function of the tile. Flowers eaten nearly bare aren't drawn (sim.undergrowthShownAt).
+const undergrowthCols = { bush: [0, 1], flowers: [2, 3, 4, 5, 6] };
+const undergrowthFootY = 24;
+const undergrowthPatchTiles = 6;
+const undergrowthOwnShare = 0.25; // of tiles, a sprite of their own
+
+function tileHash(i, j, s = 0) {
+  let h = Math.imul(i, 73856093) ^ Math.imul(j, 19349663) ^ Math.imul(s, 83492791);
+  h = Math.imul(h ^ (h >>> 13), 0x5bd1e995);
+  return (h ^ (h >>> 15)) >>> 0;
+}
+
+// What the undergrowth on tile (i, j) is drawn as, or null: { i, j, col, left, top, z }.
+function describeUndergrowth(i, j) {
+  const kind = sim.undergrowthAt(i, j);
+  if (!kind) return null;
+  const cols = undergrowthCols[kind];
+  const own = tileHash(i, j, 1) % 1000 < undergrowthOwnShare * 1000;
+  const h = own ? tileHash(i, j, 2) : tileHash(Math.floor(i / undergrowthPatchTiles), Math.floor(j / undergrowthPatchTiles), 3);
+  const corners = sim.tileCorners(i, j), base = Math.min(...corners);
+  const [px, py] = isoProject(i, j);
+  const centerY = isoProject(0.5, 0.5)[1] - ((corners[0] + corners[1] + corners[2] + corners[3]) / 4 - base) * levelHeightPY;
+  return { i, j, col: cols[h % cols.length], left: px - halfTile, top: py - base * levelHeightPY + centerY - undergrowthFootY,
+    z: undergrowthZIndex(i, j) };
+}
+
+// Paints undergrowth u from sheet img (undergrowthImage, or a sight sheet of it): whole
+// (row 0) or its foreground half (row 1).
+function paintUndergrowth(target, img, u, row = 0) {
+  drawCell(target, img, u.col * tileSize, row * tileSize, tileSize, tileSize, u.left, u.top);
 }
 
 // The level a tile's front sides must reach down to, given the tile (i, j) in front of
@@ -740,7 +789,7 @@ function chunkAt(ci, cj) {
   const y0 = (i0 + j0) * qtrTile - hi * levelHeightPY - groundBaseY - tileRiserPY;
   const y1 = (i1 + j1) * qtrTile - (lo - 1) * levelHeightPY + groundCellH + tileRiserPY;
   c = { ci, cj, i0, j0, i1, j1, x0, y0, w: x1 - x0, h: y1 - y0, water: null, land: null,
-    hasWater: false, hasLand: false, shores: false, waterClock: -1, landDirty: true, boulders: [], used: 0, scanned: false,
+    hasWater: false, hasLand: false, shores: false, waterClock: -1, landDirty: true, boulders: [], plants: [], used: 0, scanned: false,
     waterMask: null, landMask: null, maskDirty: true, maskScale: 0 };
   chunks.set(key, c);
   return c;
@@ -778,12 +827,14 @@ function paintChunk(c, clock) {
     if (!c.land) c.land = newLayer(c);
     const t = at(c.land);
     t.ctx.setTransform(1, 0, 0, 1, 0, 0); t.ctx.clearRect(0, 0, c.w, c.h);
-    c.boulders = [];
+    c.boulders = []; c.plants = [];
     forEachChunkTile(c, (i, j) => {
       if (sim.getTerrainAt(i, j) === "water") return;
       const d = describeTile(i, j, clock);
       paintColumn(t, d);
       if (d.boulder) c.boulders.push(d.boulder);
+      const u = describeUndergrowth(i, j);
+      if (u) c.plants.push(u);
     });
     c.landDirty = false;
   }
@@ -861,8 +912,9 @@ function tilesInView() {
 // (senses.canSeePoint, seesCreature): ground it can see as usual; ground it has seen
 // before but can't see now greyed out (no colour, darker: sightGrey), with its boulders;
 // tiles it has never seen black, and the map's surroundings black. Only the critters and
-// corpses it sees are drawn (and itself). What it has seen is the wolf's own: a new
-// player's wolf starts having seen nothing.
+// corpses it sees are drawn (and itself), and, greyed, the corpses and sleepers it saw
+// (REMEMBERED). What it has seen is the wolf's own: a new player's wolf starts having
+// seen nothing.
 // FIELD: whether the wolf sees the ground is sampled every sightSampleTiles over its sight
 // rectangle, worked out again at most every sightEveryS of game time while it moves or
 // turns (or the light changes its sight). A tile is seen if its center or the middle of an edge is.
@@ -951,7 +1003,7 @@ function updateSight() {
   if (share > 0) for (let u = 0; u < n; u++) for (let v = 0; v < n; v++)
     vis[u * n + v] = senses.canSeePoint(eye, ox + u / per, oy + v / per) ? 1 : 0;
   const old = sight.field;
-  sight.field = { eye, ox, oy, n, per, tiles, vis, crossings: new Map(), boulders: new Map() };
+  sight.field = { eye, ox, oy, n, per, tiles, vis, crossings: new Map(), boulders: new Map(), plants: new Map() };
   // what it has seen, and each tile's state, over the old field's tiles and the new
   const boxes = [[ox, oy, tiles]];
   if (old) boxes.push([old.ox, old.oy, old.tiles]);
@@ -1065,7 +1117,28 @@ function seesBoulder(i, j) {
   return v;
 }
 
-// SHEETS for the masks, boulders and swimmers' land: a sheet greyed out ("greyed": its
+// Whether the wolf sees the undergrowth on tile (i, j): the tile in sight, or split and
+// the ground at its center seen (kept for the field).
+function seesUndergrowth(i, j) {
+  const st = tileSightState(i, j);
+  if (st !== PART) return st === SEEN;
+  const f = sight.field, k = i * sim.gridHeightN + j;
+  let v = f.plants.get(k);
+  if (v === undefined) { v = senses.canSeePoint(f.eye, i + 0.5, j + 0.5); f.plants.set(k, v); }
+  return v;
+}
+
+// Paints undergrowth u, whole (row 0) or its foreground half (row 1), as the sight view
+// shows it: in sight, as it is; seen before, greyed; never seen, not at all.
+function paintUndergrowthSeen(u, row = 0) {
+  const st = tileSightState(u.i, u.j);
+  if (st === BLACK) return;
+  if (seesUndergrowth(u.i, u.j)) { paintUndergrowth(screen, image(undergrowthImage), u, row); return; }
+  const img = sightSheet(undergrowthImage, "greyed");
+  if (img) paintUndergrowth(screen, img, u, row);
+}
+
+// SHEETS for the masks, boulders, undergrowth and swimmers' land: a sheet greyed out ("greyed": its
 // colour taken out (blend "saturation"), then darkened (blend "multiply")), or its shapes
 // in black ("black"); null until its image has loaded.
 const sightSheets = new Map();
@@ -1224,6 +1297,45 @@ function sightShows(a) {
   return a === sim.pcWolf || senses.seesCreature(sim.pcWolf, a);
 }
 
+// REMEMBERED (in the SIGHT VIEW): a corpse, or a sleeping critter, the wolf has seen stays
+// drawn while it doesn't see it, greyed out, as and where it last saw it (like the ground
+// and boulders it has seen), so it doesn't vanish when the wolf turns away. Forgotten once
+// the wolf sees the ground where it lay and it is no longer lying there (gone, woken, or
+// moved); seen again, it is drawn as it is. What the wolf remembers is its own: a new
+// player's wolf remembers nothing.
+const remembered = { wolf: null, byUid: new Map() }; // uid -> its sprite as last seen, with its gx, gy
+
+function staysPut(a) {
+  return a.kind === "corpse" || a.pose === "sleep";
+}
+
+// This frame's remembered sprites not seen now, to draw greyed; and what is seen now
+// remembered.
+function rememberedSprites() {
+  const w = sim.pcWolf;
+  if (w !== remembered.wolf) { remembered.wolf = w; remembered.byUid.clear(); }
+  for (const { rec } of sprites.values())
+    if (!rec.hidden && !rec.swim && rec.critter !== w && staysPut(rec.critter))
+      remembered.byUid.set(rec.uid, { ...rec, layers: rec.layers && [...rec.layers], gx: rec.critter.gx, gy: rec.critter.gy });
+  const out = [];
+  for (const [uid, r] of remembered.byUid) {
+    const now = sprites.get(uid)?.rec;
+    if (now && !now.hidden) continue; // (drawn as it is)
+    const a = now?.critter, there = a && staysPut(a) && a.gx === r.gx && a.gy === r.gy;
+    if (!there && senses.canSeePoint(w, r.gx, r.gy)) { remembered.byUid.delete(uid); continue; }
+    out.push(r);
+  }
+  return out;
+}
+
+// Paints sprite r greyed out (sightSheet).
+function paintSpriteGreyed(target, r) {
+  const img = sightSheet(r.image, "greyed");
+  if (!img) return;
+  for (const col of r.layers ? [...r.layers].reverse() : [r.col])
+    drawCell(target, img, col * r.w, r.row * r.h, r.w, r.h, r.left, r.top, r.mirror);
+}
+
 function paintBoulderSeen(b) {
   const st = tileSightState(b.i, b.j);
   if (st === BLACK) return;
@@ -1380,102 +1492,95 @@ function paintDebugWolf() {
 
 // SCENT VIEW (in the SIGHT VIEW only): the scent on every tile the player's wolf can smell
 // on the ground (senses.trailsAround: deer's, wolves' and death scent), as a round mark on
-// the ground at the tile's center (an ellipse, seen isometrically): black for death scent
-// (drawn first, under the rest), brown for deer, blue for a male wolf's, pink for a
-// female's; the wolf's own scent a thin ring (scentRingPX), in its own
-// sex's colour. A mark's strength is s = 2^(-age / half-life). This is drawing only: what
-// the wolf's mind makes of the scent is its own (see TRACKING in mind.js).
-// SIZES, of a mark's diameter, in tiles (1: the circle fills its tile), by type (death,
-// deer, other wolves; the wolf's own rings apart, below):
-//   raw:  linear in s, from 1 world pixel at the faintest it can smell (sMin) to 1 at full
-//         strength (fresh)
-//   MAXIMUM: the raw diameter of the strongest scent of that type it smelled in the last
-//         scentMaxKeepS (so walking along a trail the biggest mark is ahead; against it,
-//         none is quite as big as what it smelled a moment ago)
-//   CONTRAST: if the least mark it smells now (raw) is more than scentLeastShare of the
-//         maximum, as it usually is, all are scaled (linearly, the maximum fixed) so the
-//         least is scentLeastShare of the maximum
-// The wolf's own rings: from scentLeastShare to 1 times the largest ring, by how fresh
-// each is among them.
-// FIXED SIZES: a death, deer or other wolf's mark is sized (as above) when it comes into the
-// wolf's nose, and keeps that size until it leaves it (or another lays the scent there),
-// fresher scent laid on it meanwhile included; back in its nose, it is sized afresh. The
-// wolf's own rings are sized afresh at every drawing.
-// LINGERING: a mark stops being drawn only once it has been out of the wolf's nose for
-// scentLingerS, so the pattern doesn't flicker as it moves; meanwhile it keeps its size.
-const scentMaxKeepS = 4;
-const scentLeastShare = 0.5;
-const scentLingerS = 1;
-const scentRingPX = 0.5; // world pixels: 1 screen pixel at 2x zoom
-const scentOwnMaxTiles = 0.8;
+// the ground at the tile's center (an ellipse, seen isometrically; drawn over its own
+// tile's undergrowth: see DRAWING ORDER): black for death scent, brown for deer, blue for
+// a male wolf's, pink for a female's, the wolf's own in its own sex's colour. This is
+// drawing only: what the wolf's mind makes of the scent is its own (see TRACKING in
+// mind.js).
+// TRAILS: the marks are taken trail by trail: those laid by one critter (a wolf tells one
+// deer's scent from another's), or around one carcass. Within a trail, by how fresh
+// (newest first): the newest in its nose the trail's largest, each older one smaller, down
+// to scentTrailLeast of that for the oldest, evenly by their order, so every trail runs
+// from small to large the way it was laid, whatever its age.
+// AMONG TRAILS of a kind (death scent; deer; other wolves), the fresher the trail (its
+// newest mark) the more it shows:
+//   its largest mark: scentMaxM, times scentRankScale by its rank among them (freshest
+//     first), times its freshness: from 1 for scent scentFreshS old or less to
+//     scentStaleScale at the oldest the wolf can smell, by the logarithm of its age (so
+//     minutes apart still tell)
+//   its marks' fill (scentRankFill, by rank): the freshest solid, the next a thick ring
+//     (that share of the radius), older ones thin rings (scentThinPX wide)
+// The wolf's own trail: thin rings (scentRingPX wide), its largest scentOwnMaxM.
+const scentMaxM = 0.9;              // metres: a tile is 1 m a side
+const scentOwnMaxM = 0.8;
+const scentTrailLeast = 0.25;
+const scentRankScale = [1, 0.75, 0.6];
+const scentRankFill = [1, 0.5, 0];  // share of the radius filled (0: a thin ring)
+const scentFreshS = 10;
+const scentStaleScale = 0.6;
+const scentThinPX = 1;              // world pixels
+const scentRingPX = 0.5;            // world pixels: 1 screen pixel at 2x zoom
 const scentColors = { death: "rgba(0, 0, 0, 0.85)", deer: "rgba(120, 72, 30, 0.85)", male: "rgba(40, 90, 210, 0.85)", female: "rgba(225, 95, 170, 0.85)" };
-const scent = {
-  wolf: null,            // whose nose
-  marks: new Map(),      // "species i j" -> { i, j, species, uid, markedAt, perceivedAt, d (its last size) }
-  maxima: { death: [], deer: [], wolf: [] }, // by type: [[game time, strongest s smelled then], ...]
-  sexes: new Map(),      // uid -> isMale, for marks whose maker is gone
-  lastNow: -Infinity,    // the game time of the last drawing
-};
-let scentShown = []; // the marks last drawn: { i, j, species, uid, s, d, own, colour, lingering } (for tests)
+const scentSexes = new Map(); // uid -> isMale, for marks whose maker is gone
+// the marks last drawn (for tests): { i, j, species, uid, kind ("death", "deer", "wolf",
+// "own"), rank (its trail's among its kind), s, ageS, d (diameter, m), fill, colour }
+let scentShown = [];
 
 function scentMakerIsMale(uid) {
-  if (!scent.sexes.has(uid)) {
+  if (!scentSexes.has(uid)) {
     const c = sim.allCritters.find(c => c.uid === uid) || sim.allCorpses.find(c => c.uid === uid);
     if (!c) return true;
-    scent.sexes.set(uid, c.isMale);
+    scentSexes.set(uid, c.isMale);
   }
-  return scent.sexes.get(uid);
+  return scentSexes.get(uid);
 }
 
-function paintScent() {
-  const w = sim.pcWolf, now = sim.now, half = sim.scentHalfLifeS;
-  if (w !== scent.wolf) { scent.wolf = w; scent.marks.clear(); scent.maxima = { death: [], deer: [], wolf: [] }; scent.lastNow = -Infinity; }
-  // what it smells now, and what it smelled within scentLingerS
-  // (one smelled at the last drawing, by the same maker, keeps its size: see FIXED SIZES)
+// The marks to draw now (scentShown): see SCENT VIEW.
+function describeScent() {
+  const w = sim.pcWolf, half = sim.scentHalfLifeS, sMin = senses.trailMinStrength.wolf;
+  const pxM = 1 / (Math.SQRT2 * halfTile); // a world pixel across, in metres
+  const oldestS = Math.log2(1 / sMin) * half, logFresh = Math.log2(scentFreshS), logSpan = Math.log2(oldestS) - logFresh;
+  // the trails: by kind, then maker
+  const kinds = { death: new Map(), deer: new Map(), wolf: new Map(), own: new Map() };
   for (const species of ["death", "deer", "wolf"]) for (const m of senses.trailsAround(w, species)) {
-    const key = species + " " + m.i + " " + m.j, before = scent.marks.get(key);
-    const kept = before && before.perceivedAt >= scent.lastNow && before.uid === m.uid;
-    scent.marks.set(key, { i: m.i, j: m.j, species, uid: m.uid, markedAt: now - m.ageS, perceivedAt: now, d: kept ? before.d : null });
+    const kind = species === "wolf" && m.uid === w.uid ? "own" : species;
+    let trail = kinds[kind].get(m.uid);
+    if (!trail) kinds[kind].set(m.uid, trail = []);
+    trail.push({ i: m.i, j: m.j, species, uid: m.uid, kind, rank: 0, s: Math.pow(2, -m.ageS / half), ageS: m.ageS, d: 0, fill: 1,
+      colour: scentColors[species !== "wolf" ? species : scentMakerIsMale(m.uid) ? "male" : "female"] });
   }
-  scent.lastNow = now;
-  for (const [key, m] of scent.marks) if (now - m.perceivedAt > scentLingerS || now < m.perceivedAt) scent.marks.delete(key);
-  const sOf = m => Math.pow(2, -(now - m.markedAt) / half);
-  const typeOf = m => m.species !== "wolf" ? m.species : m.uid === w.uid ? "own" : "wolf";
-  const marks = [...scent.marks.values()].map(m => ({ ...m, s: sOf(m), type: typeOf(m), lingering: m.perceivedAt < now, entry: m }));
-  // raw diameters, linear in s: 1 world pixel at sMin, the whole tile at 1
-  const sMin = senses.trailMinStrength.wolf, pxTiles = 1 / (Math.SQRT2 * halfTile);
-  const raw = s => pxTiles + (1 - pxTiles) * Math.max(0, (s - sMin) / (1 - sMin));
-  for (const type of ["death", "deer", "wolf"]) {
-    const now_ = marks.filter(m => m.type === type && !m.lingering);
-    const hist = scent.maxima[type];
-    if (now_.length) {
-      const top = Math.max(...now_.map(m => m.s)), last = hist[hist.length - 1];
-      if (last && last[0] === now) last[1] = Math.max(last[1], top); else hist.push([now, top]);
-    }
-    while (hist.length && (now - hist[0][0] > scentMaxKeepS || hist[0][0] > now)) hist.shift();
-    const max = raw(Math.max(0, ...hist.map(h => h[1]), ...now_.map(m => m.s)));
-    const least = now_.length ? raw(Math.min(...now_.map(m => m.s))) : max;
-    // contrast: the least to scentLeastShare of the maximum, the maximum fixed
-    const stretch = least > scentLeastShare * max && max - least > 1e-12 ? (1 - scentLeastShare) * max / (max - least) : 1;
-    for (const m of marks) if (m.type === type && m.d === null) m.d = Math.max(0, max - (max - raw(m.s)) * stretch);
+  const shown = [];
+  for (const kind of ["death", "deer", "wolf", "own"]) {
+    const trails = [...kinds[kind].values()];
+    for (const t of trails) t.sort((a, b) => a.ageS - b.ageS);
+    trails.sort((a, b) => a[0].ageS - b[0].ageS);
+    trails.forEach((t, rank) => {
+      const r = Math.min(rank, scentRankScale.length - 1);
+      const fresh = 1 - (1 - scentStaleScale) * Math.max(0, Math.min(1, (Math.log2(Math.max(scentFreshS, t[0].ageS)) - logFresh) / logSpan));
+      const top = kind === "own" ? scentOwnMaxM : scentMaxM * scentRankScale[r] * fresh;
+      t.forEach((m, k) => {
+        m.rank = rank;
+        m.d = Math.max(pxM, top * (1 - (1 - scentTrailLeast) * (t.length > 1 ? k / (t.length - 1) : 0)));
+        m.fill = kind === "own" ? 0 : scentRankFill[r];
+        shown.push(m);
+      });
+    });
   }
-  const own = marks.filter(m => m.type === "own" && !m.lingering);
-  if (own.length) {
-    const hi = Math.max(...own.map(m => m.s)), lo = Math.min(...own.map(m => m.s));
-    for (const m of own) m.d = scentOwnMaxTiles * (hi > lo ? scentLeastShare + (1 - scentLeastShare) * (m.s - lo) / (hi - lo) : 1);
-  }
-  for (const m of marks) m.entry.d = m.d;
-  scentShown = marks.map(m => ({ i: m.i, j: m.j, species: m.species, uid: m.uid, s: m.s, d: m.d, own: m.type === "own",
-    lingering: m.lingering, colour: m.species !== "wolf" ? scentColors[m.species] : scentColors[scentMakerIsMale(m.uid) ? "male" : "female"] }));
+  scentShown = shown;
+  return shown;
+}
+
+// Paints scent mark m (describeScent): solid, or a ring, its width a share of the radius
+// (at least a pixel), or thin.
+function paintScentMark(m) {
+  const [px, py] = groundProject(m.i + 0.5, m.j + 0.5), rx = m.d / 2 * halfTile * Math.SQRT2;
+  const width = m.kind === "own" ? scentRingPX : m.fill > 0 ? Math.max(1, m.fill * rx) : scentThinPX;
   ctx.setTransform(screen.A, 0, 0, screen.A, screen.Bx, screen.By);
-  for (const m of scentShown) {
-    if (!(m.d > 0)) continue;
-    const [px, py] = groundProject(m.i + 0.5, m.j + 0.5), r = m.d / 2;
-    ctx.beginPath();
-    ctx.ellipse(px, py, r * halfTile * Math.SQRT2, r * qtrTile * Math.SQRT2, 0, 0, 2 * Math.PI);
-    if (m.own) { ctx.lineWidth = scentRingPX; ctx.strokeStyle = m.colour; ctx.stroke(); }
-    else { ctx.fillStyle = m.colour; ctx.fill(); }
-  }
+  ctx.beginPath();
+  ctx.ellipse(px, py, rx, rx / 2, 0, 0, 2 * Math.PI);
+  if (m.fill < 1 && width < rx) ctx.ellipse(px, py, rx - width, (rx - width) / 2, 0, 0, 2 * Math.PI, true);
+  ctx.fillStyle = m.colour;
+  ctx.fill("evenodd");
 }
 
 // Swimmer r, then the land in front of it that covers it (see DRAWING ORDER): the tiles
@@ -1563,7 +1668,7 @@ function render() {
   if (sightOn) updateChunkMasks(inView2);
   for (const c of inView2) { paintChunkLayer(c, "water"); if (sightOn) paintChunkMask(c, "waterMask"); }
   for (const c of inView2) { paintChunkLayer(c, "land"); if (sightOn) paintChunkMask(c, "landMask"); }
-  if (sightOn) paintScent(); else { scentShown = []; scent.wolf = null; }
+  const scentMarksNow = sightOn ? describeScent() : (scentShown = []);
 
   // (in the sight view, only what the wolf sees: see SIGHT VIEW)
   for (const s of sprites.values()) s.rec.hidden = sightOn && !sightShows(s.rec.critter);
@@ -1571,11 +1676,24 @@ function render() {
   const recs = [...sprites.values()].map(s => s.rec).filter(shown);
   // swimmers among the land tiles
   recs.filter(r => r.swim).sort((p, q) => p.z - q.z).forEach(r => paintSwimmer(r, sightOn));
-  // land critters, boulders and hearts, by depth (on a tie: boulders, then sprites, then hearts)
+  // land critters, boulders, undergrowth, scent marks and hearts, by depth (on a tie:
+  // boulders and undergrowth, then scent marks, then sprites, then hearts)
   const items = [];
+  for (const m of scentMarksNow) items.push([undergrowthZIndex(m.i, m.j), 0.5, items.length, () => paintScentMark(m)]);
   const boulderPaint = b => sightOn ? () => paintBoulderSeen(b) : () => paintBoulder(screen, b);
+  const plantPaint = (u, row = 0) => sightOn ? () => paintUndergrowthSeen(u, row) : () => paintUndergrowth(screen, image(undergrowthImage), u, row);
   for (const c of inView2) for (const b of c.boulders) if (inView(b.left, b.top, tileSize, tileSize)) items.push([b.z, 0, items.length, boulderPaint(b)]);
-  for (const r of recs) if (!r.swim) items.push([r.z, 1, items.length, () => paintSprite(screen, r)]);
+  for (const c of inView2) for (const u of c.plants)
+    if (inView(u.left, u.top, tileSize, tileSize) && sim.undergrowthShownAt(u.i, u.j)) items.push([u.z, 0, items.length, plantPaint(u)]);
+  const spriteItem = (r, gx, gy, paint) => {
+    // standing in undergrowth: its foreground half over the critter
+    const i = Math.floor(gx), j = Math.floor(gy);
+    const u = sim.undergrowthShownAt(i, j) ? describeUndergrowth(i, j) : null;
+    const front = u && plantPaint(u, 1);
+    items.push([r.z, 1, items.length, front ? () => { paint(screen, r); front(); } : () => paint(screen, r)]);
+  };
+  for (const r of recs) if (!r.swim) spriteItem(r, r.critter.gx, r.critter.gy, paintSprite);
+  if (sightOn && !showOnlySet) for (const r of rememberedSprites()) if (inView(r.left, r.top, r.w, r.h)) spriteItem(r, r.gx, r.gy, paintSpriteGreyed);
   const heartShown = h => !sightOn || h.pair.every(a => !sprites.get(a.uid)?.rec?.hidden);
   if (!showOnlySet) for (const h of hearts.values()) if (heartShown(h)) items.push([h.z, 2, items.length, () => paintHeart(screen, h)]);
   items.sort((p, q) => p[0] - q[0] || p[1] - q[1] || p[2] - q[2]);
@@ -1753,17 +1871,19 @@ return {
     return { ...camera, pinned, viewportWidth, viewportHeight, worldRadPX, worldBottomPY: worldDiamPY + tileRiserPY, zoomMin, zoomMax };
   },
   // for tests and debugging: what is drawn (spriteOf: see CRITTER SPRITES; heartOf: see
-  // HEARTS, by either of the pair; tileOf, tilesInView: describeTile), with sprites'
+  // HEARTS, by either of the pair; tileOf, tilesInView: describeTile; undergrowthOf:
+  // describeUndergrowth, with its sheet undergrowthImage), with sprites'
   // frames on the page (spriteRect); drawing only some critters; the debug outline
   spriteOf: a => sprites.get(a.uid)?.rec, spriteRect,
   heartOf: a => hearts.get(Math.min(a.uid, a.matingWith ?? a.uid)),
-  tileOf: (i, j) => describeTile(i, j), tilesInView,
+  tileOf: (i, j) => describeTile(i, j), tilesInView, undergrowthOf: (i, j) => describeUndergrowth(i, j), undergrowthImage,
   showOnly: list => { showOnlySet = list ? new Set(list) : null; render(); },
   showDebug: on => { showDebug = on; render(); },
   get scentShown() { return scentShown.map(m => ({ ...m })); },
   // the sight view: whether it is on, and tile (i, j)'s state in it ("seen", "part",
   // "greyed", "black")
   sightViewOn: () => sightViewOn(), tileSight: (i, j) => ["seen", "part", "greyed", "black"][tileSightState(i, j)],
+  remembered: () => [...remembered.byUid.keys()], // (REMEMBERED: the uids)
   youngStage: a => sim.youngStage(a), hasAntlers,
   spriteRow, spriteZIndex, frameDataBySpeciesAndPose,
 };

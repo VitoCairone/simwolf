@@ -39,12 +39,13 @@ The simulation (`sim.js`) may use the whole world's state to apply physics (coll
 eating what is in reach, nursing, a mating both critters intend), but it never decides
 for a critter. Decisions belong to the mind, which sees only through the senses.
 
-## Biomass is never made but by grass
+## Biomass is never made but by plants
 
 Everything living is biomass: fat, carbohydrate, protein, water and minerals, in kg (see
-BIOMASS in `sim.js`). Only grass makes it, growing (from air, soil and sunlight, which
-aren't counted). The one other way in is water: a critter drinks it (lakes and rivers
-aren't counted), and its burning makes some (with the air's oxygen). Everything else only
+BIOMASS in `sim.js`). Only plants make it, growing (from air, soil and sunlight, which
+aren't counted): grass, and the undergrowth (low bushes and flowers). The one other way
+in is water: a critter drinks it (lakes and rivers aren't counted), and its burning makes
+some (with the air's oxygen). Everything else only
 moves it (eating, digesting, a womb filling, suckling) or spends it, and it leaves the
 world (burned by metabolism, excreted, breathed out or evaporated, rotted away with a
 corpse). A body may turn carbs and fat into each other, and protein into either, keeping

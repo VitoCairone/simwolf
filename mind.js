@@ -417,9 +417,10 @@ function decideDeer(a, m, now) {
 }
 
 // DEER graze from when the food meter falls below deerGrazeBelow (with its stomach below
-// deerGrazeGutBelow) until full (or its stomach is): eat the
-// tile underfoot if worth it (and crop it bare once started), else walk to the nearest
-// tile worth it, preferring ones at least half full. Looks deerGrazeLookShare of its
+// deerGrazeGutBelow) until full (or its stomach is): eat the plants (grass and
+// undergrowth: senses.plantsAround) on the tile underfoot if worth it (and crop it bare
+// once started), else walk to the nearest tile worth it, preferring ones at least half
+// full (sim.plantMostAt). Looks deerGrazeLookShare of its
 // sight around, or as far as it sees when nothing there is worth it. Grass under a
 // boulder (less of it: sim.grassMostAt) it eats from the open tile beside the boulder
 // nearest it. Grass it gets no nearer to in grazeGiveUpS, or meets a dead end on the way
@@ -431,9 +432,9 @@ function graze(a, m, now) {
   if (!m.grazing && a.food < deerGrazeBelow && a.gut < deerGrazeGutBelow) m.grazing = true;
   if (!m.grazing) return null;
   const worth = deerBiteShare * sim.grassMaxKg * 0.999; // (grass is stored as 32-bit floats)
-  let grass = senses.grassAround(a, deerGrazeLookShare);
+  let grass = senses.plantsAround(a, deerGrazeLookShare);
   const goingFar = m.grazeTo && !grass.some(g => g.i === m.grazeTo[0] && g.j === m.grazeTo[1]);
-  if (goingFar || !grass.some(g => g.kg >= worth)) grass = senses.grassAround(a);
+  if (goingFar || !grass.some(g => g.kg >= worth)) grass = senses.plantsAround(a);
   const i = Math.floor(a.gx), j = Math.floor(a.gy);
   const seen = (ti, tj) => grass.find(g => g.i === ti && g.j === tj);
   // cropping the grass under a boulder beside it, until bare
@@ -469,7 +470,7 @@ function graze(a, m, now) {
       // (not where it couldn't get to)
       if (g.kg < worth || m.grazeAvoid.has(g.i * 100000 + g.j)) continue;
       const d2 = (g.i + 0.5 - a.gx) ** 2 + (g.j + 0.5 - a.gy) ** 2;
-      options.push({ g, score: d2 + (g.kg >= sim.grassMostAt(g.i, g.j) / 2 ? 0 : 1e6) });
+      options.push({ g, score: d2 + (g.kg >= sim.plantMostAt(g.i, g.j) / 2 ? 0 : 1e6) });
     }
     options.sort((p, q) => p.score - q.score);
     const best = options.slice(0, grazeLosChecks).find(o => senses.canSeeTile(a, o.g.i, o.g.j));

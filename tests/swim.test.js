@@ -223,5 +223,5 @@ async function main(browser, r) {
   console.log(`      screenshots saved to ${path.relative(process.cwd(), outDir) || outDir}`);
 }
 
-module.exports = { name: "swimming", main };
+module.exports = { name: "swimming", main, slow: true }; // (see SPEED in run-all.js)
 if (require.main === module) runStandalone(module.exports.name, main);

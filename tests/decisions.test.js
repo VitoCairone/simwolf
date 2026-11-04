@@ -450,5 +450,5 @@ async function main(browser, r) {
   await p.close();
 }
 
-module.exports = { name: "senses and decisions", main };
+module.exports = { name: "senses and decisions", main, slow: true }; // (see SPEED in run-all.js)
 if (require.main === module) runStandalone(module.exports.name, main);

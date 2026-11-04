@@ -51,9 +51,9 @@ const terrainSeed = 1;
 //   breeding               gestation, how often a female can conceive, the oldest a
 //                          critter is fertile, and the mating act (see BREEDING)
 //   forcedMortalityMaxS, mortalityRatio   how long critters live (see FORCED MORTALITY)
-//   foodFullS, eatKgPerS, grassMaxKg, grassRegrowKgPerS
+//   foodFullS, eatKgPerS, grassMaxKg, grassRegrowKgPerS, undergrowthRegrowKgPerS
 //                          how long a full meter lasts (and with it how fast a stomach
-//                          empties), eating and grass (see FOOD and BODY)
+//                          empties), eating, grass and undergrowth (see FOOD and BODY)
 //   infantFoodFullS, nurseFullS   how long an infant's full meter lasts, and how long it
 //                          takes to suckle it full (see BREEDING)
 //   feedingMinS            the least time a meal at a carcass or a suckle takes (see
@@ -183,6 +183,15 @@ const boneEdibleShare = 0.2;
 //   estimate); the rest she burns. Wolf pups: no figures found; as calves.
 const grassShares = withWater({ fatKg: 0.005, carbsKg: 0.17, proteinKg: 0.03, mineralKg: 0.015 });
 const grassDryShare = 1 - grassShares.waterKg;
+// UNDERGROWTH (estimates): a low bush's leaves and shoots, richer in protein and drier
+// than grass, about 0.4 kg dry within a deer's reach, regrowing in a year; flowers (forbs),
+// wetter, about 0.15 kg dry a tile, regrowing in half a year.
+const undergrowthShares = {
+  bush: withWater({ fatKg: 0.01, carbsKg: 0.24, proteinKg: 0.06, mineralKg: 0.02 }),
+  flowers: withWater({ fatKg: 0.005, carbsKg: 0.12, proteinKg: 0.035, mineralKg: 0.015 }),
+};
+const undergrowthMostKg = { bush: 0.4 / (1 - undergrowthShares.bush.waterKg), flowers: 0.15 / (1 - undergrowthShares.flowers.waterKg) };
+const realUndergrowthRegrowKgPerS = { bush: undergrowthMostKg.bush / yearS, flowers: undergrowthMostKg.flowers / (yearS / 2) };
 const grassDryYieldMJPerKg = 10;
 const grassCarbsDigested = (grassDryYieldMJPerKg * grassDryShare - grassShares.fatKg * fatMJPerKg
   - grassShares.proteinKg * proteinMJPerKg) / (grassShares.carbsKg * carbsMJPerKg);
@@ -311,6 +320,7 @@ const REALISTIC = {
   waterNeedScale: { wolf: 1, deer: 1 },
   grassMaxKg: 0.3 / grassDryShare,
   grassRegrowKgPerS: realGrassRegrowKgPerS,
+  undergrowthRegrowKgPerS: realUndergrowthRegrowKgPerS,
 };
 
 // GAMIFIED shrinks real times by one factor per area: METABOLISM (gameMetabolismScale)
@@ -387,6 +397,7 @@ const GAMIFIED = {
     (waterNeedKgPerMJ[sp] * rangeMJPerKg(sp) * gameThirstS)])),
   grassMaxKg: 0.3 / grassDryShare,
   grassRegrowKgPerS: realGrassRegrowKgPerS / gameMetabolismScale,
+  undergrowthRegrowKgPerS: Object.fromEntries(Object.entries(realUndergrowthRegrowKgPerS).map(([k, v]) => [k, v / gameMetabolismScale])),
 };
 
 const SPEEDS = GAMIFIED;
@@ -426,7 +437,8 @@ function sample(list) {
 //   LAND AND WATER  hydrology.js (terrainMap)  the land's height in metres, and the sea,
 //                   lakes and rivers on it (worked out once, at load, for the whole map:
 //                   a coarse graph of a few MB; then any tile from the graph near it)
-//   GROUND COVER    groundCoverAt              grass, dirt or stone, on land
+//   GROUND COVER    groundCoverAt              grass, dirt or stone, on land, by region
+//   UNDERGROWTH     undergrowthAt              low bushes and flowers, on land
 //   OBSTACLES       obstacleAt                 boulders, on land
 // They are worked out a block at a time and kept for a while (TERRAIN CACHE): getTerrainAt
 // and the rest read the cache.
@@ -452,33 +464,232 @@ function getTerrainAt(gx, gy) {
   return terrainKinds[b.kind[(i - b.i0) * terrainBlockTiles + j - b.j0]];
 }
 
-// GROUND COVER of land, independent of height and all passable: a patch value from four
-// smooth waves sampled at a twice-warped position (so region edges meander), plus a
-// little tile-scale fringe (so edges are ragged). The highest values are stone, inside
-// a band of dirt, among grass.
-const coverPatchTiles = 23;   // patch size: the waves' base period, in tiles
-const coverWarpTiles = 14;    // how far the broad warp moves a point, at most
-const coverFineWarpTiles = 5; // how far the finer warp moves it
-const coverFringe = 0.08;     // weight of the tile-scale raggedness
-const coverDirtAbove = 0.6;   // patch value above which ground is dirt...
-const coverStoneAbove = 0.8;  // ...and stone
+// GROUND COVER of land (grass, dirt or stone: all passable, independent of height) and its
+// UNDERGROWTH (low bushes and flowers: see UNDERGROWTH), both pure functions of the tile.
+//   REGIONS: the land is split into regions, the cells of a Voronoi diagram of points about
+//     regionTiles apart, warped so their borders meander. Each has a style of its own
+//     (coverStyle): how much of each cover, how large and how shaped its patches, how
+//     ragged their edges, how much undergrowth and how clumped. A region meets each
+//     neighbour either abruptly or interfingering over a band (regionBlendShare of pairs:
+//     a band up to regionBlendMaxTiles wide, where the two styles' patches mix).
+//   PROVINCES: regions draw their style from their province's theme (coverThemes), the
+//     cells of a coarser diagram about provinceTiles apart, so places far apart differ in
+//     kind (grassland, scrub, rocky ground...), and neighbouring regions mostly agree; one
+//     region in regionOddShare takes another theme.
+//   WITHIN A REGION two independent fields of value noise decide (each its own patch size,
+//     stretched along one of four directions, with a little tile-scale fringe): where the
+//     first is high, the region's first cover; elsewhere the second field picks between
+//     the other two. Which cover is first varies by region, so any cover may border any
+//     other. Each field's threshold is its quantile (noiseQuantile), so each cover's share
+//     is as the style says.
+const regionTiles = 600;          // spacing of the region points
+const provinceTiles = 4000;       // ...and of the province points
+const regionWarpTiles = 150;      // how far region borders bend from straight lines...
+const regionWarpScaleTiles = 300; // ...over this length
+const regionRagTiles = 25;        // and how far they wander at a finer scale...
+const regionRagScaleTiles = 45;   // ...over this length
+const regionBlendShare = 0.45;    // the share of borders that blend, not abrupt
+const regionBlendMinTiles = 15, regionBlendMaxTiles = 150;
+const regionOddShare = 0.2;
+const coverOrder = ["grass", "dirt", "stone"];
+// Themes: each cover's share [grass, dirt, stone]; the range of patch sizes, tiles; at
+// most these shares of tiles with low bushes and with flowers (see UNDERGROWTH).
+const coverThemes = [
+  { cover: [0.85, 0.12, 0.03], patch: [20, 90], bush: 0.02, flowers: 0.10 },  // meadow
+  { cover: [0.60, 0.30, 0.10], patch: [10, 50], bush: 0.12, flowers: 0.03 },  // scrub
+  { cover: [0.30, 0.25, 0.45], patch: [5, 30], bush: 0.03, flowers: 0.01 },   // rocky
+  { cover: [0.25, 0.60, 0.15], patch: [8, 60], bush: 0.05, flowers: 0.01 },   // barrens
+  { cover: [0.50, 0.25, 0.25], patch: [6, 120], bush: 0.06, flowers: 0.05 },  // mixed
+  { cover: [0.95, 0.04, 0.01], patch: [30, 150], bush: 0.01, flowers: 0.02 }, // grassland
+];
 
+// A hash of whole numbers (ix, iy) and a stream s: a 32-bit unsigned number.
+function hashU(ix, iy, s) {
+  let h = Math.imul(ix, 374761393) ^ Math.imul(iy, 668265263) ^ Math.imul(s + terrainSeed * 7919, 1013904223);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return (h ^ (h >>> 16)) >>> 0;
+}
+
+function hash01(ix, iy, s) {
+  return hashU(ix, iy, s) / 4294967296;
+}
+
+// Value noise: smooth, 0..1, varying over about 1 unit; stream s.
+function vnoise(x, y, s) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const u = fx * fx * (3 - 2 * fx), v = fy * fy * (3 - 2 * fy);
+  const a = hash01(ix, iy, s), b = hash01(ix + 1, iy, s), c = hash01(ix, iy + 1, s), d = hash01(ix + 1, iy + 1, s);
+  return a + (b - a) * u + (c - a) * v + (a - b - c + d) * u * v;
+}
+
+// A field: value noise and, weighted rough, an octave finer; 0..1.
+function noiseField(x, y, s, rough) {
+  return (vnoise(x, y, s) + rough * vnoise(x * 2.7, y * 2.7, s + 1)) / (1 + rough);
+}
+
+// QUANTILES of noiseField for each roughness in coverRoughs: q[k] the value below which
+// k/64 of it lies (sampled once, at load).
+const coverRoughs = [0, 0.3, 0.6];
+const noiseQuantiles = coverRoughs.map((rough, n) => {
+  const xs = [];
+  for (let k = 0; k < 8192; k++) xs.push(noiseField(hash01(k, n, 91) * 1000, hash01(k, n, 92) * 1000, 93, rough));
+  xs.sort((p, q) => p - q);
+  return Array.from({ length: 65 }, (_, k) => xs[Math.min(xs.length - 1, Math.floor(k / 64 * xs.length))]);
+});
+
+// The value of noiseField (roughness index r) below which share p of it lies.
+function noiseQuantile(r, p) {
+  const q = noiseQuantiles[r], x = Math.max(0, Math.min(64, p * 64)), k = Math.min(63, Math.floor(x));
+  return q[k] + (q[k + 1] - q[k]) * (x - k);
+}
+
+// Directions a field may be stretched along: [dx, dy], unit length.
+const stretchDirs = [[1, 0], [0, 1], [Math.SQRT1_2, Math.SQRT1_2], [Math.SQRT1_2, -Math.SQRT1_2]];
+
+// The point of region or province cell (cx, cy) on a grid `size` apart: [x, y].
+function cellPoint(cx, cy, size, s) {
+  return [(cx + 0.15 + 0.7 * hash01(cx, cy, s)) * size, (cy + 0.15 + 0.7 * hash01(cx, cy, s + 1)) * size];
+}
+
+// The theme of the province nearest (x, y).
+function provinceThemeAt(x, y) {
+  const cx = Math.floor(x / provinceTiles), cy = Math.floor(y / provinceTiles);
+  let best = null, bestD2 = Infinity;
+  for (let a = cx - 1; a <= cx + 1; a++) for (let b = cy - 1; b <= cy + 1; b++) {
+    const [px, py] = cellPoint(a, b, provinceTiles, 111);
+    const d2 = (px - x) ** 2 + (py - y) ** 2;
+    if (d2 < bestD2) { bestD2 = d2; best = [a, b]; }
+  }
+  return coverThemes[hashU(best[0], best[1], 113) % coverThemes.length];
+}
+
+// A region's style, made once and kept (regionStyles; a few thousand at most are kept).
+const regionStyles = new Map();
+function regionStyle(cx, cy) {
+  const key = cx * 100000 + cy;
+  let r = regionStyles.get(key);
+  if (r) return r;
+  if (regionStyles.size > 4000) regionStyles.clear();
+  const h = k => hash01(cx, cy, 120 + k);
+  const [x, y] = cellPoint(cx, cy, regionTiles, 101);
+  let theme = provinceThemeAt(x, y);
+  if (h(0) < regionOddShare) theme = coverThemes[Math.floor(h(1) * coverThemes.length)];
+  const shares = theme.cover.map((v, k) => v * (0.6 + 0.8 * h(2 + k)));
+  const total = shares[0] + shares[1] + shares[2];
+  // the first cover: any of the three, the likelier the more of it there is
+  let pick = h(5) * total, first = 0;
+  while (first < 2 && pick > shares[first]) pick -= shares[first++];
+  const rest = [0, 1, 2].filter(k => k !== first);
+  if (h(6) < 0.5) rest.reverse();
+  const field = k => {
+    const [lo, hi] = theme.patch, size = lo * (hi / lo) ** h(7 + k * 5);
+    const stretch = h(8 + k * 5) < 0.5 ? 1 : 1.5 + 2.5 * h(9 + k * 5);
+    const [dx, dy] = stretchDirs[Math.floor(h(10 + k * 5) * 4)];
+    return { along: [dx / (size * stretch), dy / (size * stretch)], across: [-dy / size, dx / size],
+      rough: Math.floor(h(11 + k * 5) * coverRoughs.length), s: 1000 + (hashU(cx, cy, 150 + k) & 0xffff) * 4 };
+  };
+  const a = field(0), b = field(1);
+  const firstShare = shares[first] / total, secondShare = shares[rest[0]] / total;
+  r = {
+    cx, cy, x, y,
+    first: coverOrder[first], second: coverOrder[rest[0]], third: coverOrder[rest[1]],
+    a, b,
+    aAbove: noiseQuantile(a.rough, 1 - firstShare),
+    bAbove: noiseQuantile(b.rough, 1 - secondShare / Math.max(1e-6, 1 - firstShare)),
+    fringe: 0.12 * h(17),                         // weight of the tile-scale raggedness
+    warp: 0.8 * h(18) * (theme.patch[0] + theme.patch[1]) / 2, // how far patches bend, tiles
+    warpScale: 1 / (theme.patch[0] + theme.patch[1]),
+    soft: h(19) < regionBlendShare ? regionBlendMinTiles + (regionBlendMaxTiles - regionBlendMinTiles) * h(20) : 0,
+    bush: theme.bush * (0.3 + 1.7 * h(21)), flowers: theme.flowers * (0.3 + 1.7 * h(22)),
+    clump: 1 / (4 + 26 * h(23)),                  // undergrowth's clumps, about 4-30 tiles
+  };
+  regionStyles.set(key, r);
+  return r;
+}
+
+// The region points that may be nearest some tile in [i0, i0 + n) x [j0, j0 + n), its
+// borders warped: [{ x, y, style }].
+function regionsNear(i0, j0, n) {
+  const m = regionWarpTiles + regionRagTiles, out = [];
+  for (let cx = Math.floor((i0 - m) / regionTiles) - 1; cx <= Math.floor((i0 + n + m) / regionTiles) + 1; cx++)
+    for (let cy = Math.floor((j0 - m) / regionTiles) - 1; cy <= Math.floor((j0 + n + m) / regionTiles) + 1; cy++) {
+      const style = regionStyle(cx, cy);
+      out.push({ x: style.x, y: style.y, style });
+    }
+  return out;
+}
+
+// The style of the region tile (x, y) belongs to, among the points near (regionsNear).
+// Near a blending border, either side's, patchily.
+function regionAt(x, y, near) {
+  const wx = x + regionWarpTiles * 2 * (vnoise(x / regionWarpScaleTiles, y / regionWarpScaleTiles, 1) - 0.5)
+    + regionRagTiles * 2 * (vnoise(x / regionRagScaleTiles, y / regionRagScaleTiles, 3) - 0.5);
+  const wy = y + regionWarpTiles * 2 * (vnoise(x / regionWarpScaleTiles, y / regionWarpScaleTiles, 2) - 0.5)
+    + regionRagTiles * 2 * (vnoise(x / regionRagScaleTiles, y / regionRagScaleTiles, 4) - 0.5);
+  let p = null, q = null, pd = Infinity, qd = Infinity;
+  for (const r of near) {
+    const d = (r.x - wx) ** 2 + (r.y - wy) ** 2;
+    if (d < pd) { q = p; qd = pd; p = r; pd = d; } else if (d < qd) { q = r; qd = d; }
+  }
+  // a blending border: the far side's below a patchy threshold falling across the band
+  // (distance to the border: (qd - pd) / (2 |pq|), compared squared)
+  const w = Math.min(p.style.soft, q.style.soft);
+  if (w > 0) {
+    const t = 1 - 2 * vnoise(x / 9, y / 9, 5);
+    if (t > 0 && (qd - pd) ** 2 < 4 * ((p.x - q.x) ** 2 + (p.y - q.y) ** 2) * w * w * t * t) return q.style;
+  }
+  return p.style;
+}
+
+// The ground cover of tile (x, y) in region style r.
+function coverIn(r, x, y) {
+  const wx = x + r.warp * 2 * (vnoise(x * r.warpScale, y * r.warpScale, 6) - 0.5);
+  const wy = y + r.warp * 2 * (vnoise(x * r.warpScale, y * r.warpScale, 7) - 0.5);
+  const fringe = r.fringe * (hash01(x, y, 8) - 0.5);
+  const a = r.a, va = noiseField(wx * a.along[0] + wy * a.along[1], wx * a.across[0] + wy * a.across[1], a.s, coverRoughs[a.rough]);
+  if (va + fringe > r.aAbove) return r.first;
+  const b = r.b, vb = noiseField(wx * b.along[0] + wy * b.along[1], wx * b.across[0] + wy * b.across[1], b.s, coverRoughs[b.rough]);
+  return vb + fringe > r.bAbove ? r.second : r.third;
+}
+
+// The ground cover of land tile (x, y) (not knowing whether it is land).
 function groundCoverAt(x, y) {
-  const ox = coverWarpTiles * (wave(y / 37 + 0.5 * wave(x / 53)) + wave((x - y) / 47) - 1);
-  const oy = coverWarpTiles * (wave(x / 41 + 0.5 * wave(y / 59)) + wave((x + y) / 61) - 1);
-  const wx = x + ox, wy = y + oy;
-  const vx = wx + coverFineWarpTiles * (wave(wy / 13) - 0.5);
-  const vy = wy + coverFineWarpTiles * (wave(wx / 11) - 0.5);
+  return coverIn(regionAt(x, y, regionsNear(x, y, 1)), x, y);
+}
 
-  const s = coverPatchTiles;
-  const patch = (wave(vx / s) + wave(vy / (s * 1.13))
-    + wave((vx + vy) / (s * 1.41)) + wave((vx - vy) / (s * 1.73))) / 4;
-  const fringe = (jag(x / 3.7) + jag(y / 4.3) + jag((x + y) / 5.9)) / 3;
-  const v = patch + coverFringe * (fringe - 0.5);
+// UNDERGROWTH: low bushes and flowers on some land tiles (never under a boulder), about
+// as many as the region's style says (its bush and flowers: shares of tiles), in clumps (a
+// field at the region's clump size: none where it is below its middle; at most
+// undergrowthClumpMost of the tiles even at a clump's heart). Flowers grow mostly on
+// grass, bushes on grass and dirt, a few on stone (undergrowthOnCover). Short enough to
+// step through and to see over, they neither block the way nor hide anything; deer eat
+// them (see UNDERGROWTH FOOD).
+const undergrowthKinds = [null, "bush", "flowers"];
+const undergrowthClumpMost = 0.5;
+const undergrowthOnCover = { bush: { grass: 1, dirt: 1, stone: 0.2 }, flowers: { grass: 1, dirt: 0.3, stone: 0 } };
+// the mean of the clump field's part above its middle (sampled once, at load)
+const clumpMean = (() => {
+  let sum = 0;
+  for (let k = 0; k < 8192; k++) sum += Math.max(0, vnoise(hash01(k, 0, 94) * 1000, hash01(k, 0, 95) * 1000, 96) - 0.5);
+  return sum / 8192;
+})();
 
-  if (v > coverStoneAbove) return "stone";
-  if (v > coverDirtAbove) return "dirt";
-  return "grass";
+// The undergrowth on land tile (x, y) of cover `cover` in region style r: an index into
+// undergrowthKinds.
+function undergrowthIn(r, x, y, cover) {
+  const u = hash01(x, y, 10);
+  const bush = Math.min(undergrowthClumpMost, r.bush * undergrowthOnCover.bush[cover] * Math.max(0, vnoise(x * r.clump, y * r.clump, 11) - 0.5) / clumpMean);
+  if (u < bush) return 1;
+  const flowers = Math.min(undergrowthClumpMost, r.flowers * undergrowthOnCover.flowers[cover] * Math.max(0, vnoise(x * r.clump, y * r.clump, 12) - 0.5) / clumpMean);
+  return u < bush + flowers ? 2 : 0;
+}
+
+// "bush" or "flowers" if that grows on the tile containing (gx, gy), else null.
+function undergrowthAt(gx, gy) {
+  const i = Math.floor(gx), j = Math.floor(gy);
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return null;
+  const b = terrainBlock(i, j);
+  return undergrowthKinds[b.plant[(i - b.i0) * terrainBlockTiles + j - b.j0]];
 }
 
 // OBSTACLES: boulders, on land only. They block movement and sight, in two forms:
@@ -555,7 +766,8 @@ const maxStepLevels = 1.5;
 // and the least recently used dropped beyond terrainBlocksKept (so memory stays bounded
 // however far critters and the camera roam). A block holds, by tile: its kind (an index
 // into terrainKinds), water's kind (into waterKinds) and level, its corners' levels and
-// whether a boulder stands on it; and its lowest and highest corner.
+// whether a boulder stands on it, its undergrowth (into undergrowthKinds); and its lowest
+// and highest corner.
 const terrainBlockTiles = 64;
 const terrainBlocksKept = 800;
 const terrainKinds = ["grass", "dirt", "stone", "water"];
@@ -609,7 +821,8 @@ function makeTerrainBlock(bi, bj) {
     vertex[a * m + c] = w !== noWater ? w : Math.max(0, Math.floor(terrainMap.sampleAt(i0 + a, j0 + c).height));
   }
   const kind = new Uint8Array(B * B), waterKind = new Uint8Array(B * B), waterLevel = new Int16Array(B * B);
-  const corners = new Int16Array(B * B * 4), boulder = new Uint8Array(B * B);
+  const corners = new Int16Array(B * B * 4), boulder = new Uint8Array(B * B), plant = new Uint8Array(B * B);
+  const near = regionsNear(i0, j0, B);
   let minLevel = Infinity, maxLevel = -Infinity;
   for (let a = 0; a < B; a++) for (let c = 0; c < B; c++) {
     const i = i0 + a, j = j0 + c, k = a * B + c, wk = (a + 1) * n + c + 1;
@@ -618,9 +831,11 @@ function makeTerrainBlock(bi, bj) {
       kind[k] = 3; waterKind[k] = wKind[wk]; waterLevel[k] = wLevel[wk];
       cs = [wLevel[wk], wLevel[wk], wLevel[wk], wLevel[wk]];
     } else {
-      kind[k] = terrainKinds.indexOf(groundCoverAt(i, j));
+      const r = regionAt(i, j, near), cover = coverIn(r, i, j);
+      kind[k] = terrainKinds.indexOf(cover);
       waterLevel[k] = noWater;
       boulder[k] = isBoulderSite(i, j) ? 1 : 0;
+      plant[k] = boulder[k] ? 0 : undergrowthIn(r, i, j, cover);
       cs = [vertex[a * m + c], vertex[(a + 1) * m + c], vertex[a * m + c + 1], vertex[(a + 1) * m + c + 1]];
       if (Math.max(...cs) - Math.min(...cs) >= 2) {
         const mid = Math.floor((cs[0] + cs[1] + cs[2] + cs[3]) / 4);
@@ -630,7 +845,7 @@ function makeTerrainBlock(bi, bj) {
     corners.set(cs, k * 4);
     minLevel = Math.min(minLevel, ...cs); maxLevel = Math.max(maxLevel, ...cs);
   }
-  return { bi, bj, i0, j0, kind, waterKind, waterLevel, corners, boulder, minLevel, maxLevel, used: 0 };
+  return { bi, bj, i0, j0, kind, waterKind, waterLevel, corners, boulder, plant, minLevel, maxLevel, used: 0 };
 }
 
 // The kind of water on tile (i, j) ("sea", "lake", "river"), or null on land. Off the
@@ -1014,19 +1229,19 @@ function logDeath(a) {
 // protein, water and minerals (everything else: the skeleton's matrix most of all). A
 // biomass is { fatKg, carbsKg, proteinKg, waterKg, mineralKg } (NUTRIENTS); its mass is
 // their sum (biomassKg), its energy that of its fat, carbs and protein (energyMJ).
-// Only grass makes biomass, from air and soil by sunlight (none of which is counted);
-// besides, a critter drinks water (lakes and rivers aren't counted) and its burning makes
-// water (with the air's oxygen: see WATER in BODY). Everything else MOVES it: from grass
-// or a carcass into an eater's stomach, from a stomach into the body, from a mother into
+// Only plants (grass and undergrowth) make biomass, from air and soil by sunlight (none
+// of which is counted); besides, a critter drinks water (lakes and rivers aren't counted)
+// and its burning makes water (with the air's oxygen: see WATER in BODY). Everything else
+// MOVES it: from plants or a carcass into an eater's stomach, from a stomach into the body, from a mother into
 // her womb or her young's stomachs; or spends it, and it leaves the world: burned by
 // metabolism, excreted (water breathed out and evaporated too), or rotted away with a
 // corpse. A body can turn carbs into fat and back, and protein into either, keeping their
 // energy, and their mass (the balance is water: fatPerCarbsKg); nothing makes protein.
-// THE LEDGER (biomassLedger) adds up, in kg, all grass has grown, all water drunk or made,
-// and all that has left the world, by how: so the world's biomass (worldBiomassKg) is
-// always what it was, plus what came in, less what left (ledgerNetKg;
-// tests/biomass.test.js). Grass counts only as it differs from ungrazed grass, and its
-// growth likewise (see KEPT ONLY WHERE GRAZED in FOOD).
+// THE LEDGER (biomassLedger) adds up, in kg, all plants have grown, all water drunk or
+// made, and all that has left the world, by how: so the world's biomass (worldBiomassKg)
+// is always what it was, plus what came in, less what left (ledgerNetKg;
+// tests/biomass.test.js). Plants count only as they differ from uneaten ones, and their
+// growth likewise (see KEPT ONLY WHERE GRAZED and UNDERGROWTH FOOD in FOOD).
 const NUTRIENTS = ["fatKg", "carbsKg", "proteinKg", "waterKg", "mineralKg"];
 const fatPerCarbsKg = carbsMJPerKg / fatMJPerKg;
 const biomassLedger = { grownKg: 0, drunkKg: 0, madeWaterKg: 0, burnedKg: 0, excretedKg: 0, rottedKg: 0, lostKg: 0 };
@@ -1113,16 +1328,24 @@ function burn(b, mj) {
 }
 
 // FOOD
-// Critters eat into their stomachs (see BODY): a deer the grass on its tile, a wolf a
-// carcass in reach, once old enough to "eat" (and an infant suckles: see BREEDING), as
-// fast as SPEEDS.eatKgPerS (but see FEEDING TIME), while the stomach has room.
+// Critters eat into their stomachs (see BODY): a deer the plants on its tile (its
+// undergrowth first, then its grass), a wolf a carcass in reach, once old enough to "eat"
+// (and an infant suckles: see BREEDING), as fast as SPEEDS.eatKgPerS (but see FEEDING
+// TIME), while the stomach has room.
 //
 // GRASS: every grass tile holds grass, fresh kg (grassShares): at most SPEEDS.grassMaxKg
 // (under a boulder, rockGrassShare of that: grassMostAt), starting at grassStartShare of
-// that, regrowing at SPEEDS.grassRegrowKgPerS (grass is the only maker of biomass). Its
-// HEIGHT (bare, short, medium, tall) is for the view; tiles whose height changes are
-// logged (grassChangesSince) so the view redraws only those. It grows on every tile at
-// once, and is kept only where grazed (KEPT ONLY WHERE GRAZED).
+// that, regrowing at SPEEDS.grassRegrowKgPerS (plants, grass and undergrowth, are the
+// only makers of biomass). Its HEIGHT (bare, short, medium, tall) is for the view; tiles
+// whose height changes are logged (grassChangesSince) so the view redraws only those. It
+// grows on every tile at once, and is kept only where grazed (KEPT ONLY WHERE GRAZED).
+// UNDERGROWTH FOOD: each low bush or flowers (see UNDERGROWTH) holds plant mass of its
+// own, fresh kg (undergrowthShares): at most undergrowthMostKg, as it starts, regrowing at
+// SPEEDS.undergrowthRegrowKgPerS (it too makes biomass). A deer eats it before the grass
+// on its tile. Kept only where eaten (undergrowthTouched, by tile index: its kg and when),
+// until grown back; flowers eaten below flowersShownFrom of their most aren't drawn.
+// PLANT FOOD: a tile's grass and undergrowth together (plantFoodAt, plantMostAt), what a
+// grazing deer looks for.
 // UNDER A BOULDER: a deer eats grass under a boulder it stands right beside
 // (inGrassReach), turning to face it: the EAT intent with `at`, the boulder's tile. It
 // eats at the same rate, so the little there is goes in a third of the time.
@@ -1209,6 +1432,8 @@ function grassNow(e) {
 
 function initGrass() {
   grassTouched.clear();
+  undergrowthTouched.clear();
+  plantClockS = 0;
   grassGrownKg = 0;
   grassChangesAll();
 }
@@ -1307,6 +1532,65 @@ function grassTotalKg() {
   return kg;
 }
 
+const undergrowthTouched = new Map();
+const flowersShownFrom = 1 / 4;
+let plantClockS = 0; // growing time so far (as for grass: while the sun is up, sped up to make up the night)
+
+// The plant mass of the undergrowth on tile (i, j), fresh kg; 0 where there is none.
+function undergrowthFoodAt(i, j) {
+  const u = undergrowthAt(i, j);
+  if (!u) return 0;
+  const e = undergrowthTouched.get(i * gridHeightN + j);
+  return e ? Math.min(undergrowthMostKg[u], e.kg + SPEEDS.undergrowthRegrowKgPerS[u] * (plantClockS - e.at)) : undergrowthMostKg[u];
+}
+
+// Sets the undergrowth on tile (i, j) to kg (it has some): how much it changed by.
+function setUndergrowthKg(i, j, kg) {
+  const u = undergrowthAt(i, j), before = undergrowthFoodAt(i, j);
+  kg = Math.max(0, Math.min(undergrowthMostKg[u], kg));
+  undergrowthTouched.set(i * gridHeightN + j, { kg, at: plantClockS, kind: u });
+  return kg - before;
+}
+
+// Undergrowth regrows for dtS seconds: the ledger counts it; what has grown back is
+// forgotten.
+function growUndergrowth(dtS) {
+  plantClockS += dtS;
+  let grown = 0;
+  for (const [k, e] of undergrowthTouched) {
+    const now = Math.min(undergrowthMostKg[e.kind], e.kg + SPEEDS.undergrowthRegrowKgPerS[e.kind] * (plantClockS - e.at));
+    grown += now - e.kg;
+    if (now >= undergrowthMostKg[e.kind]) undergrowthTouched.delete(k);
+    else { e.kg = now; e.at = plantClockS; }
+  }
+  biomassLedger.grownKg += grown;
+}
+
+// The world's undergrowth as it differs from untouched undergrowth, kg.
+function undergrowthTotalKg() {
+  let kg = 0;
+  for (const [k, e] of undergrowthTouched)
+    kg += Math.min(undergrowthMostKg[e.kind], e.kg + SPEEDS.undergrowthRegrowKgPerS[e.kind] * (plantClockS - e.at)) - undergrowthMostKg[e.kind];
+  return kg;
+}
+
+// Whether the undergrowth on tile (i, j) shows (flowers eaten nearly bare don't).
+function undergrowthShownAt(i, j) {
+  const u = undergrowthAt(i, j);
+  return u === "bush" || (u === "flowers" && undergrowthFoodAt(i, j) >= flowersShownFrom * undergrowthMostKg.flowers);
+}
+
+// PLANT FOOD on tile (i, j): its grass and undergrowth, fresh kg.
+function plantFoodAt(i, j) {
+  return grassFoodAt(i, j) + undergrowthFoodAt(i, j);
+}
+
+// The most plant food tile (i, j) can hold, fresh kg.
+function plantMostAt(i, j) {
+  const u = undergrowthAt(i, j);
+  return grassMostAt(i, j) + (u ? undergrowthMostKg[u] : 0);
+}
+
 // The nearest corpse within a's reach with meat left, or null.
 function carcassInReach(a) {
   let best = null, bestL2 = eatReachTiles * eatReachTiles;
@@ -1328,9 +1612,20 @@ function eat(a) {
       [i, j] = a.eatAt;
       a.currentDirection = getDir(i + 0.5 - a.gx, j + 0.5 - a.gy, a.currentDirection);
     }
+    if (isInWater(a)) return;
+    // the undergrowth first, then the grass
+    const u = undergrowthAt(i, j);
+    if (u) {
+      const ukg = undergrowthFoodAt(i, j), take = Math.min(bite, ukg);
+      if (take > 0) {
+        const taken = -setUndergrowthKg(i, j, ukg - take);
+        for (const k of NUTRIENTS) a.stomach[k] += undergrowthShares[u][k] * taken;
+        bite -= taken;
+      }
+    }
     const kg = grassFoodAt(i, j);
     const take = Math.min(bite, kg);
-    if (take > 0 && !isInWater(a)) {
+    if (take > 0) {
       const taken = -setGrassKg(i * gridHeightN + j, kg - take);
       for (const k of NUTRIENTS) a.stomach[k] += grassShares[k] * taken;
     }
@@ -1593,9 +1888,10 @@ function growthKgPerS(a) {
   return (shares[k] - shares[k - 1]) / (ages[k] - ages[k - 1]) * (a.adultKg - a.birthKg);
 }
 
-// All the biomass in the world: grass, critters, corpses and carcasses, kg.
+// All the biomass in the world: grass, undergrowth, critters, corpses and carcasses, kg
+// (plants as they differ from untouched).
 function worldBiomassKg() {
-  let kg = grassTotalKg();
+  let kg = grassTotalKg() + undergrowthTotalKg();
   for (const a of allCritters.concat(allCorpses)) {
     for (const b of [a.tissues, a.stomach, a.womb]) kg += biomassKg(b);
     if (a.carcass) kg += carcassMeatKg(a) + biomassKg(a.carcass.bones);
@@ -2444,6 +2740,7 @@ function updateAllCritters() {
   if (g_tick % Math.round(SPEEDS.windChangeEveryS / tempo) === 0) shiftWind();
   if (g_tick % grassGrowEveryTicks === 0 && clock.sunUp) {
     growGrass(grassGrowEveryTicks * tempo / meanDaylightShare);
+    growUndergrowth(grassGrowEveryTicks * tempo / meanDaylightShare);
   }
 }
 
@@ -2796,7 +3093,7 @@ return {
   onTick, onFrame,
 
   // the world
-  gridWidthN, gridHeightN, getTerrainAt, obstacleAt,
+  gridWidthN, gridHeightN, getTerrainAt, obstacleAt, undergrowthAt,
   tileCorners, heightAt, levelRangeIn, waterKindAt, waterLevelAt, waterLevelNear,
   get startArea() { return startArea; }, // where the critters started (THE START)
   // the square startNearTiles a side about it (for tests: where to look for features)
@@ -2813,7 +3110,8 @@ return {
   get speeds() { return SPEEDS.name; },
   get swimMinStamina() { return SPEEDS.swimMinStaminaFrac; },
   // food
-  grassFoodAt, grassHeightAt, grassMostAt, inGrassReach, grassChangesSince, carcassPieces, carcassPieceKg, carcassMeatKg, eatReachTiles,
+  grassFoodAt, grassHeightAt, grassMostAt, inGrassReach, grassChangesSince,
+  undergrowthFoodAt, undergrowthShownAt, plantFoodAt, plantMostAt, undergrowthKinds: undergrowthKinds.slice(1), carcassPieces, carcassPieceKg, carcassMeatKg, eatReachTiles,
   get grassMaxKg() { return SPEEDS.grassMaxKg; },
   bodySharesBySpecies, biomassKg, energyMJ, waterInReach,
   // ages and breeding
@@ -2841,6 +3139,8 @@ return {
     milkSharesBySpecies, grassShares, newCarcass, newbornKg, miscarryBelow, updateFood,
     toFat, makeCarbs, withdraw, burn, absorb, fullStomachMJ, carbsDigestedBySpecies, stomachTS, stomachEmptiesInT,
     get loopHandle() { return loopHandle; },
+    setUndergrowthKg, growUndergrowth, undergrowthMostKg, undergrowthShares, undergrowthTotalKg, flowersShownFrom,
+    groundCoverAt, regionAt, regionsNear, coverIn, undergrowthIn, coverThemes, regionTiles, provinceTiles, vnoise, hash01,
   },
 };
 

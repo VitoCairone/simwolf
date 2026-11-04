@@ -1,16 +1,19 @@
-// Shores (see SHORES in animat.js): an outgoing wave from the land that always joins up.
+// Shores (see SHORES in animat.js): the sea's, an outgoing wave from the land that always
+// joins up; lakes and rivers lie still.
 //  On the real map:
-//  - shore tiles show the straight sprites (tiles.png row 9, columns 0-1), the outer
+//  - on the sea's coast, shore tiles show the straight sprites (tiles.png row 9, columns 0-1), the outer
 //    corners (images/shore-outer.png) or the interior corners (images/shore-inner.png);
 //    all other water stays on the plain frame
 //  - one global clock: every interior corner shows the same frame at the same time (0, 1,
 //    2, 3, 0, ...), and every straight and outer-corner tile holds each of its two frames
 //    twice as long (0, 0, 1, 1, 0, ...), with the interior corner's frames 0-1 and 2-3, so
 //    the loops repeat in sync; nothing moves while paused
-//  On a test map (the terrain swapped for water with shapes of land):
+//  - lakes and rivers lie still: their shores are plain water, never lapping
+//  On a test map (the terrain swapped for sea with shapes of land):
 //  - a straight coast is all straight tiles, light to the land, all the same way round
 //  - a rectangle of land has exactly 4 corner pieces, at its corners, touching land only
-//    there (so has a 1-tile island); a lake has an interior corner in each of its corners
+//    there (so has a 1-tile island); water ringed by land has an interior corner in each
+//    of its corners
 //  - a staircase coast has an interior corner in each notch and a corner piece beyond each
 //  - every wave joins up: wherever one crosses a tile edge into water, the tile across has
 //    a wave crossing at the same point
@@ -26,11 +29,19 @@ async function main(browser, r) {
   const res = await p.evaluate(() => {
     sim.pause();
     const T = sim.getTerrainAt;
-    // somewhere with both shore and open water on screen
+    // the sea's coast nearest the start (walking from the start toward the nearest ocean
+    // node of the map's graph, by its own lookup: cheap), with shore and open sea on screen
+    const M = sim.internals.terrainMap, G = M.graph, A = sim.startArea;
+    const cx = (A.i0 + A.i1) / 2, cy = (A.j0 + A.j1) / 2;
+    let best = -1, bestD2 = Infinity;
+    for (let n = 0; n < G.nx * G.ny; n++)
+      if (G.ocean[n] && (G.px[n] - cx) ** 2 + (G.py[n] - cy) ** 2 < bestD2) { best = n; bestD2 = (G.px[n] - cx) ** 2 + (G.py[n] - cy) ** 2; }
+    const l = Math.sqrt(bestD2), ux = (G.px[best] - cx) / l, uy = (G.py[best] - cy) / l;
     let at = null;
-    for (let i = sim.startNear.i0; i < sim.startNear.i1 && !at; i += 3)
-      for (let j = sim.startNear.j0; j < sim.startNear.j1 && !at; j += 3)
-        if (T(i, j) === "water" && [[4, 0], [-4, 0], [0, 4], [0, -4]].some(([a, b]) => T(i + a, j + b) !== "water")) at = [i, j];
+    for (let t = 0; t <= l + 3000 && !at; t += 2) { // (on past the node: it may lie on the coast's land)
+      const i = Math.floor(cx + ux * t), j = Math.floor(cy + uy * t);
+      if (M.terrainAt(i, j).kind === "sea") at = [i + Math.round(ux * 4), j + Math.round(uy * 4)];
+    }
     animat.setZoom(2); animat.centerCameraOn(at[0], at[1]); animat.render();
 
     // the water tiles drawn, by where they are drawn (left = (i - j) * 16 - 16,
@@ -107,10 +118,11 @@ async function main(browser, r) {
       if (bySet.inner.some((c, n) => (c - 10) >> 1 !== bySet.one[n])) synced = false;
       if (changes(bySet.inner) !== 2 * changes(bySet.one)) synced = false;
     }
-    return { synced, inner, open, one, two, other, misplaced, wrongSet, misfaced, openPlain, ordered, together, still };
+    const sea = waters.every(([i, j]) => sim.waterKindAt(i, j) === "sea");
+    return { synced, inner, open, one, two, other, misplaced, wrongSet, misfaced, openPlain, ordered, together, still, sea, at };
   });
   r.check(res.one > 0 && res.two > 0 && res.open > 0 && res.wrongSet === 0,
-    `real map: ${res.one} straight shore tiles, ${res.two} corner ones, ${res.inner} interior ones, ${res.open} plain (${res.wrongSet} with mixed frames)`);
+    `real map, on the sea's coast (at ${res.at}; all sea: ${res.sea}): ${res.one} straight shore tiles, ${res.two} corner ones, ${res.inner} interior ones, ${res.open} plain (${res.wrongSet} with mixed frames)`);
   r.check(res.openPlain, "open water stays on the plain water frame");
   r.check(res.ordered, "each shore plays its set's frames in order, round and round");
   r.check(res.together, "one clock: every tile of a set shows the same frame at the same time");
@@ -118,6 +130,31 @@ async function main(browser, r) {
   r.check(res.still, "nothing laps while the game is paused");
 
   await p.screenshot({ path: path.join(outDir, "shore.png") });
+
+  // fresh water lies still: the lakes and rivers about the start, their shores too
+  const fresh = await p.evaluate(() => {
+    const A = sim.startArea, T = sim.getTerrainAt;
+    const out = { lakeShores: 0, riverShores: 0, lapping: 0, plainFrame: true };
+    tiles: for (let i = A.i0 - 64; i < A.i1 + 64; i++) for (let j = A.j0 - 64; j < A.j1 + 64; j++) {
+      if (T(i, j) !== "water") continue;
+      const k = sim.waterKindAt(i, j);
+      if (k === "sea") continue;
+      if (![[1, 0], [-1, 0], [0, 1], [0, -1]].some(([a, b]) => T(i + a, j + b) !== "water")) continue;
+      if (k === "lake") out.lakeShores++; else out.riverShores++;
+      const frames = new Set();
+      for (const clock of [0, 1, 2, 3, 4, 5, 6, 7]) {
+        const t = animat.tileOf(i, j);
+        frames.add(t.sx + "," + t.sy + "," + (t.shore ? 1 : 0));
+        sim.internals.tick();
+      }
+      if (frames.size > 1 || [...frames][0].endsWith(",1")) out.lapping++;
+      if ([...frames][0] !== "192,288,0") out.plainFrame = false;
+      if (out.lakeShores >= 20 && out.riverShores >= 20) break tiles;
+    }
+    return out;
+  });
+  r.check(fresh.lakeShores + fresh.riverShores >= 20 && fresh.lapping === 0 && fresh.plainFrame,
+    `lakes and rivers lie still: of ${fresh.lakeShores} lake and ${fresh.riverShores} river shore tiles about the start, ${fresh.lapping} lap; all plain water: ${fresh.plainFrame}`);
 
   // the test map
   const shapes = await p.evaluate(() => {
@@ -127,6 +164,7 @@ async function main(browser, r) {
     const stairs = (i, j) => i >= 56 && j >= 48 && i <= 66 && j <= 60 && (i - 56) + (j - 48) <= 7;
     const land = (i, j) => rect(i, j) || island(i, j) || lake(i, j) || stairs(i, j);
     sim.getTerrainAt = (i, j) => land(i, j) ? "grass" : "water";
+    sim.waterKindAt = (i, j) => land(i, j) ? null : "sea";
     sim.obstacleAt = () => null;
     sim.tileCorners = () => [0, 0, 0, 0];
     animat.setZoom(2); animat.centerCameraOn(52, 50);
@@ -238,7 +276,7 @@ async function main(browser, r) {
   r.check(shapes.island.corners === 4 && shapes.island.straightOk === 4 && shapes.island.straightBad === 0,
     `1-tile island: 4 straight tiles and 4 corner pieces (${shapes.island.straightOk}, ${shapes.island.corners})`);
   r.check(shapes.lakeIn.notches === 4 && shapes.lakeIn.straightBad === 0 && shapes.lakeIn.odd === 0,
-    `lake: an interior corner in each of its 4 corners, straight tiles along its sides (${shapes.lakeIn.notches} corners, ${shapes.lakeIn.straightBad} wrong)`);
+    `water ringed by land: an interior corner in each of its 4 corners, straight tiles along its sides (${shapes.lakeIn.notches} corners, ${shapes.lakeIn.straightBad} wrong)`);
   r.check(shapes.stairs.notches === shapes.stairs.notchTiles && shapes.stairs.notchTiles > 3,
     `staircase: an interior corner in every notch (${shapes.stairs.notches}/${shapes.stairs.notchTiles})`);
   r.check(shapes.stairs.beyond > 3 && shapes.stairs.beyondCornered === shapes.stairs.beyond,

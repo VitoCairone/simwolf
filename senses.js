@@ -334,17 +334,17 @@ function perceive(a) {
   return out;
 }
 
-// The tiles with grass on them whose centers are in the sight rectangle of critter a (as
-// much of it as it sees now: sightShare), or within share k of that, and in its field of
-// view: [{ i, j, kg }]. (Line of sight is left to the mind to check, with canSeeTile, for
-// the few it considers: there are thousands.)
-function grassAround(a, k = 1) {
+// The tiles with plant food on them (grass, undergrowth: sim.plantFoodAt) whose centers
+// are in the sight rectangle of critter a (as much of it as it sees now: sightShare), or
+// within share k of that, and in its field of view: [{ i, j, kg }]. (Line of sight is left
+// to the mind to check, with canSeeTile, for the few it considers: there are thousands.)
+function plantsAround(a, k = 1) {
   k *= sightShare(a);
   const out = [], ci = Math.floor(a.gx), cj = Math.floor(a.gy);
   const r = Math.ceil(k * (sightHalfWidthTiles + sightHalfHeightTiles) / 2) + 1;
   for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
     if (!inSight(i + 0.5 - a.gx, j + 0.5 - a.gy, k) || !inView(a, i + 0.5 - a.gx, j + 0.5 - a.gy)) continue;
-    const kg = sim.grassFoodAt(i, j);
+    const kg = sim.plantFoodAt(i, j);
     if (kg > 0) out.push({ i, j, kg });
   }
   return out;
@@ -352,7 +352,7 @@ function grassAround(a, k = 1) {
 
 // The shores whose centers are in the sight rectangle of critter a (as much of it as it
 // sees now) and its field of view: open land tiles beside water (on one of their four sides), [{ i, j }]. Line
-// of sight is left to the mind, as for grassAround.
+// of sight is left to the mind, as for plantsAround.
 function shoresAround(a) {
   const k = sightShare(a), ci = Math.floor(a.gx), cj = Math.floor(a.gy);
   const r = Math.ceil(k * (sightHalfWidthTiles + sightHalfHeightTiles) / 2) + 2, n = 2 * r + 1;
@@ -379,7 +379,7 @@ function attach(theSim) {
 }
 
 return {
-  attach, perceive, grassAround, shoresAround, trailsAround, inSight, inView, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
+  attach, perceive, plantsAround, shoresAround, trailsAround, inSight, inView, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
   sightHalfWidthTiles, sightHalfHeightTiles, fovDegBySpecies, keepSightS, trailMinStrength, hearingRangeTiles, airScentRangeTiles, eyeLevelsBySpecies, sniffTiles,
 };
 
