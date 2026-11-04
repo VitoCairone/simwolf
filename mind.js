@@ -96,6 +96,11 @@ const shoreWaitTiles = 1;        // a wolf this near its spot on the shore waits
 const waitCommitS = 3;           // ...and keeps to that spot at least this long
 const shoreLookAheadTiles = 40;  // looks this far along a swimmer's way for its landing
 const shoreRetryTurns = 10;      // a tired swimmer blocked this many turns looks for other land
+const swimSpentBelow = 0.1;      // a swimmer with this share of stamina or less makes for land
+                                 // even from a chase or flight (see TIRED SWIMMERS)
+const entryNearTiles = 3;        // where it entered the water: the shore this near its last
+                                 // footing on land
+const landLookEveryS = 1;        // a swimmer looks for land this often
 const returnToLandSureTiles = 4; // a calm swimmer this far from land surely heads for it
 const returnToLandGiveUpS = 1;   // ...but gives up after being blocked this long
 const mateCloseTiles = 1.2;      // stands ready to mate this near (center to center)
@@ -188,6 +193,10 @@ function memoryOf(a) {
       deathEnds: new Map(),   // ...and a carcass's death scent
       watch: null,            // a wolf waiting ashore: { i, j, way (its prey's tile and way), spot }
       shore: null,            // a tired swimmer's land: { gx, gy, blockedTurns }
+      lastDry: null,          // where it last stood on land, [gx, gy] (see TIRED SWIMMERS)
+      entry: null,            // swimming: the shore it entered the water from, [i, j]
+      landSeen: null,         // ...and the nearest it has seen since, [i, j]
+      landLook: -Infinity,    // ...the tick it last looked for land
       closing: null,          // the kin it is coming back to: "parent", "young", "mate" (see social)
       grazeAvoid: new Map(),  // tile key -> tick: grass it couldn't get to, left be until then
       grazeSince: 0,          // ...the tick it set off for its grazeTo, and its best distance
@@ -958,18 +967,59 @@ function social(a, m, now, romanceOnly = false) {
   return mateWith(best, m.known.get(best));
 }
 
-// A swimmer short of stamina (below sim.swimMinStamina) heads for the nearest land it
-// can see and climb onto, whatever else it would do; with none in sight, it swims on the
-// way it was going.
+// TIRED SWIMMERS: entering the water, a critter remembers where (the shore nearest its
+// last footing on land: entryNearTiles); swimming, it keeps looking for land it could
+// climb out onto (a land tile beside water, its bank within a step of it: climbable),
+// every landLookEveryS, and remembers the nearest it has seen (by where it is now); it
+// forgets both back on land.
+// A swimmer with sim.swimMinStamina of its stamina or less makes for the nearer of the two
+// (or land it sees now), unless it is chasing or fleeing; with swimSpentBelow or less,
+// whatever it is doing. Blocked on the way shoreRetryTurns turns, it forgets that shore and
+// makes for the other; knowing of none, it swims on the way it was going.
+function climbable(i, j) {
+  return sim.isLandTile(i, j) && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([di, dj]) => sim.getTerrainAt(i + di, j + dj) === "water");
+}
+
+// Notes where a critter stands for TIRED SWIMMERS: on land, its footing; swimming, where it
+// entered the water, and the nearest climbable land in sight (every landLookEveryS).
+function noteLand(a, m, now) {
+  if (a.pose !== "swim") { m.lastDry = [a.gx, a.gy]; m.entry = m.landSeen = null; m.landLook = -Infinity; return; }
+  if (!m.entry && m.lastDry) {
+    // (no need to see it: it has just stood there)
+    const [x, y] = m.lastDry, ci = Math.floor(x), cj = Math.floor(y);
+    let best = null, bestL2 = Infinity;
+    for (let i = ci - entryNearTiles; i <= ci + entryNearTiles; i++) for (let j = cj - entryNearTiles; j <= cj + entryNearTiles; j++) {
+      const l2 = (i + 0.5 - x) ** 2 + (j + 0.5 - y) ** 2;
+      if (l2 < bestL2 && climbable(i, j)) { best = [i, j]; bestL2 = l2; }
+    }
+    m.entry = best;
+  }
+  if (now - m.landLook < ticks(landLookEveryS)) return;
+  m.landLook = now;
+  const land = findNearestLand(a, a.gx, a.gy);
+  const d2 = t => (t[0] + 0.5 - a.gx) ** 2 + (t[1] + 0.5 - a.gy) ** 2;
+  if (land && (!m.landSeen || d2(land.tile) < d2(m.landSeen))) m.landSeen = land.tile;
+}
+
+// The land a tired swimmer makes for: the nearer of where it entered the water and the
+// nearest land it has seen since (TIRED SWIMMERS); null if it knows of neither.
+function shoreToMakeFor(a, m) {
+  const d2 = t => (t[0] + 0.5 - a.gx) ** 2 + (t[1] + 0.5 - a.gy) ** 2;
+  const known = [m.entry, m.landSeen].filter(Boolean);
+  return known.length ? known.reduce((p, q) => d2(q) < d2(p) ? q : p) : null;
+}
+
 function toShore(a, m, now) {
   m.mode = "ashore";
   const blocked = a.blockedTick > m.lastTurn;
-  if (!m.shore || (blocked && ++m.shore.blockedTurns > shoreRetryTurns)) {
-    const land = findNearestLand(a, a.gx, a.gy);
-    m.shore = land ? { gx: land.tile[0] + 0.5, gy: land.tile[1] + 0.5, blockedTurns: 0 } : null;
+  if (m.shore && blocked && ++m.shore.blockedTurns > shoreRetryTurns) {
+    // can't get there: forgets it
+    for (const k of ["entry", "landSeen"]) if (m[k] && m[k][0] === m.shore.tile[0] && m[k][1] === m.shore.tile[1]) m[k] = null;
+    m.shore = null;
   }
-  // no land in sight: swims on as it was going (its plan, kept from turn to turn)
-  if (!m.shore) return calm(a, m, now);
+  const t = shoreToMakeFor(a, m);
+  if (!t) { m.shore = null; return calm(a, m, now); } // swims on as it was going
+  if (!m.shore || m.shore.tile[0] !== t[0] || m.shore.tile[1] !== t[1]) m.shore = { tile: t, gx: t[0] + 0.5, gy: t[1] + 0.5, blockedTurns: 0 };
   m.plan = null;
   return move(a, m, m.shore.gx - a.gx, m.shore.gy - a.gy, "walk", now);
 }
@@ -1033,7 +1083,7 @@ function findNearestLand(a, gx, gy, maxR = Infinity) {
     if (best && r >= 1 && best.distL2 <= sq(r - 1)) break;
     for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
       if (Math.max(Math.abs(i - ci), Math.abs(j - cj)) !== r) continue;
-      if (!sim.isLandTile(i, j) || !senses.canSeeTile(a, i, j)) continue;
+      if (!climbable(i, j) || !senses.canSeeTile(a, i, j)) continue;
       const d = distToTileL2(i, j);
       if (!best || d < best.distL2) best = { tile: [i, j], distL2: d };
     }
@@ -1076,16 +1126,26 @@ function think() {
       // drop its own last decision, so it doesn't resume it the moment the player lets go
       if (m.intent) { sim.setIntent(a, null); m.intent = null; }
       m.playerTick = now; m.plan = null;
+      if (now % turnTicks === m.slot) noteLand(a, m, now); // (for when the player lets go in the water)
       continue;
     }
     if (now % turnTicks !== m.slot) continue;
     remember(a, m, now);
     noteShores(a, m, now);
+    noteLand(a, m, now);
     let intent;
-    if (a.pose !== "swim") m.shore = null;
+    const swimming = a.pose === "swim";
+    if (!swimming) m.shore = null;
     if (now - m.playerTick < ticks(playerHandoverS)) intent = IDLE;
-    else if (a.pose === "swim" && a.stamina < sim.swimMinStamina) intent = toShore(a, m, now);
-    else intent = a.species === "wolf" ? decideWolf(a, m, now) : decideDeer(a, m, now);
+    else if (swimming && a.stamina <= swimSpentBelow) intent = toShore(a, m, now);
+    else {
+      const reversed = m.reversedTick;
+      intent = a.species === "wolf" ? decideWolf(a, m, now) : decideDeer(a, m, now);
+      if (swimming && a.stamina <= sim.swimMinStamina && m.mode !== "chase" && m.mode !== "flee") {
+        m.reversedTick = reversed; // (the way it didn't take doesn't count as turning round)
+        intent = toShore(a, m, now);
+      }
+    }
     intent = giveWay(a, m, intent, now);
     m.intent = intent;
     m.lastTurn = now;
@@ -1183,7 +1243,7 @@ function stateOf(a) {
   const m = memories.get(a);
   if (!m) return null;
   return { mode: m.mode, target: m.target, searching: m.searching, flee: m.flee, detour: m.detour, watch: m.watch,
-    grazeTo: m.grazeTo, closing: m.closing, drinking: m.drinking, waterTo: m.waterTo !== null ? m.waters.get(m.waterTo) : null,
+    grazeTo: m.grazeTo, closing: m.closing, entry: m.entry, landSeen: m.landSeen, drinking: m.drinking, waterTo: m.waterTo !== null ? m.waters.get(m.waterTo) : null,
     waters: [...m.waters.values()].map(s => ({ ...s })),
     slot: m.slot, lastTurn: m.lastTurn, court: m.court, familiar: [...m.familiar],
     avoid: m.avoid.map(t => t > sim.tickCount ? 1 : 0).join(""),

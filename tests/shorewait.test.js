@@ -2,8 +2,11 @@
 //  - a wolf whose prey is swimming doesn't go in after it (nor kills it there): it waits
 //    on the shore, going (trotting, never into the water) to where the deer is swimming to
 //  - a critter with less than a quarter of its stamina may not go into the water (but the
-//    player's wolf while the player steers it); in the water, it heads for the nearest
-//    land it can climb onto
+//    player's wolf while the player steers it); in the water, with a quarter or less, it
+//    heads for the nearest land it can climb onto, unless fleeing or chasing; with a tenth
+//    or less, whatever it is doing
+//  - a swimmer remembers where it entered the water, and the nearest land it has seen since:
+//    seeing no land, tired, it swims back to where it went in
 
 const { openGame, runStandalone } = require("./helpers");
 
@@ -155,7 +158,60 @@ async function main(browser, r) {
   r.check(ashore.pose !== "swim" && ashore.x < shore[0] + 0.5 && ashore.modes.includes("ashore"),
     `a tired swimmer heads for the nearest land: ashore after ${ashore.s.toFixed(1)} s (${ashore.modes}; pose ${ashore.pose}, x ${ashore.x.toFixed(2)} vs shore ${shore[0]})`);
 
-  // 4. a critter climbing out up a bank higher than a step is slowed; onto a flat beach,
+  // 4. a swimmer remembers where it entered the water: seeing no land at all (its sight
+  // switched off for the test), tired, it swims back there
+  const back = await p.evaluate(([i, j]) => {
+    const S = sim.internals, see = senses.canSeeTile;
+    const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
+    d.gx = d.nextGX = i - 1.5; d.gy = d.nextGY = j + 0.5; d.stunnedUntil = 0; d.speed = 0; d.stamina = 1;
+    S.setCritterIdle(d); S.setFood(d, 1);
+    mind.forget(d); mind.ignore(d, false);
+    senses.canSeeTile = () => false;
+    for (let n = 0; n < 20; n++) S.tick(); // (its footing noted)
+    mind.ignore(d);
+    for (let n = 0; n < 6 * 60 && d.gx < i + 5; n++) { sim.setIntent(d, { dx: 1, dy: 0, gait: "walk" }); S.tick(); }
+    mind.ignore(d, false);
+    for (let n = 0; n < 20; n++) S.tick();
+    const out = { out: +d.gx.toFixed(2), entry: mind.stateOf(d).entry, landSeen: mind.stateOf(d).landSeen };
+    d.stamina = 0.2;
+    const modes = new Set();
+    let n = 0;
+    for (; n < 12 * 60 && d.pose === "swim"; n++) { S.tick(); modes.add(mind.stateOf(d)?.mode); }
+    Object.assign(out, { s: n * sim.tempo, pose: d.pose, x: d.gx, modes: [...modes].filter(Boolean).join(",") });
+    for (let k = 0; k < 12; k++) S.tick(); // (its next turn, on land)
+    out.after = mind.stateOf(d).entry;
+    senses.canSeeTile = see;
+    mind.ignore(d);
+    return out;
+  }, shore);
+  r.check(back.entry && back.entry[0] === shore[0] - 1 && Math.abs(back.entry[1] - shore[1]) <= 1 && back.landSeen === null && back.pose !== "swim" && back.modes.includes("ashore") && back.after === null,
+    `a swimmer remembers where it entered the water (${back.entry}): seeing no land, tired, it swims back there from ${back.out} (ashore after ${back.s.toFixed(1)} s, ` +
+    `then forgets it: ${back.after})`);
+
+  // 5. tired (a quarter of its stamina or less) it makes for land unless it is fleeing (or
+  // chasing); spent (a tenth or less), even from a chase or flight
+  const flight = await p.evaluate(([i, j]) => {
+    const S = sim.internals;
+    const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
+    const w = sim.allCritters.find(c => c.species === "wolf" && c !== sim.pcWolf && sim.isGrown(c));
+    const run = stamina => {
+      w.gx = w.nextGX = i - 2.5; w.gy = w.nextGY = j + 0.5; w.speed = 0; S.setCritterIdle(w); w.hx = 1; w.hy = 0;
+      d.gx = d.nextGX = i + 2.5; d.gy = d.nextGY = j + 0.5; d.stunnedUntil = 0; d.speed = 0; d.hx = -1; d.hy = 0;
+      S.setCritterIdle(d); S.setCritterMoving(d, sim.DIR_W, "walk");
+      mind.forget(d); mind.ignore(d, false);
+      const modes = new Set();
+      for (let n = 0; n < 60; n++) { d.stamina = stamina; S.tick(); if (d.pose === "swim") modes.add(mind.stateOf(d)?.mode); }
+      mind.ignore(d);
+      return [...modes].filter(Boolean);
+    };
+    const out = { tired: run(0.2), spent: run(0.08) };
+    w.gx = w.nextGX = w.gy = w.nextGY = -300;
+    return out;
+  }, shore);
+  r.check(flight.tired.includes("flee") && !flight.tired.includes("ashore") && flight.spent.includes("ashore") && !flight.spent.includes("flee"),
+    `a tired swimmer (20% stamina) fleeing a wolf on the shore keeps fleeing (${flight.tired}); spent (8%), it makes for land all the same (${flight.spent})`);
+
+  // 6. a critter climbing out up a bank higher than a step is slowed; onto a flat beach,
   // not; either way it speeds up out of the water as on land
   const climb = await p.evaluate(() => {
     const S = sim.internals, A = sim.startNear;

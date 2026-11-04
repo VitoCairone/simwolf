@@ -8,7 +8,8 @@
 //  - among trails of a kind (three deer passing minutes apart), the fresher the larger
 //    overall, and the more filled: the freshest solid, the next a thick ring, older ones
 //    thin rings; a trail alone is smaller the older it is
-//  - its own trail: thin rings, the freshest (where it stands) the largest
+//  - its own trail: thin rings, the freshest (where it stands) the largest; once it has
+//    mated, its partner's trail likewise
 //  - drawn over its own tile's undergrowth
 //  - none while the camera follows another critter, or is panned
 // Saves screenshots to tests/output/scentview/.
@@ -51,9 +52,9 @@ async function main(browser, r) {
     for (let n = 0; n < 1.5 / sim.tempo; n++) { S.setCritterMoving(w, sim.DIR_E, "walk"); S.tick(); }
     S.setCritterIdle(w); for (let n = 0; n < 30; n++) S.tick();
     animat.setZoom(4); animat.followWolf(); for (let k = 0; k < 30; k++) animat.render();
-    return { shown: animat.scentShown, wi: Math.floor(w.gx), wj: Math.floor(w.gy) };
+    return { shown: animat.scentShown, wi: Math.floor(w.gx), wj: Math.floor(w.gy), deerUid: d.uid };
   });
-  const deer = marks.shown.filter(m => m.species === "deer").sort((a, b) => a.ageS - b.ageS);
+  const deer = marks.shown.filter(m => m.species === "deer" && m.uid === marks.deerUid).sort((a, b) => a.ageS - b.ageS);
   const own = marks.shown.filter(m => m.kind === "own").sort((a, b) => a.ageS - b.ageS);
   const ordered = t => t.every((m, k) => k === 0 || m.d < t[k - 1].d);
   r.check(deer.length >= 3 && ordered(deer) && Math.abs(deer.at(-1).d - 0.25 * deer[0].d) < 1e-9 && deer.every(m => m.fill === 1),
@@ -96,6 +97,30 @@ async function main(browser, r) {
   r.check(colours.male === blue && colours.female === pink && colours.own === (colours.ownMale ? blue : pink),
     `wolves' marks by sex: a male's blue, a female's pink; its own rings ${colours.ownMale ? "blue (male)" : "pink (female)"}`);
   r.check(colours.death === "rgba(0, 0, 0, 0.85)", `death scent is drawn black (${colours.death})`);
+
+  // once mated, its partner's trail as thin rings, like its own; another's as before
+  const mate = await p.evaluate(() => {
+    const S = sim.internals, w = sim.pcWolf, H = sim.gridHeightN, wi = Math.floor(w.gx), wj = Math.floor(w.gy);
+    const partner = sim.allCritters.find(c => c.species === "wolf" && c.isMale !== w.isMale && c.mateUid === null);
+    const other = sim.allCritters.find(c => c.species === "wolf" && c !== w && c !== partner);
+    const was = [w.mateUid, partner.mateUid];
+    const lay = (uid, j) => { for (let n = 0; n < 5; n++) S.scentMarks.wolf.set((wi - 2 + n) * H + wj + j, [sim.now - 30 - n, uid]); };
+    lay(partner.uid, 2); lay(other.uid, -2);
+    const look = () => { animat.render();
+      const t = uid => animat.scentShown.filter(m => m.uid === uid).sort((a, b) => a.ageS - b.ageS).map(m => ({ kind: m.kind, d: +m.d.toFixed(3), fill: m.fill, colour: m.colour }));
+      return { partner: t(partner.uid), other: t(other.uid) }; };
+    const before = look();
+    S.pair(w, partner);
+    const after = look();
+    w.mateUid = was[0]; partner.mateUid = was[1];
+    for (const j of [2, -2]) for (let n = 0; n < 5; n++) S.scentMarks.wolf.delete((wi - 2 + n) * H + wj + j);
+    return { before, after, partnerMale: partner.isMale };
+  });
+  const pinkOrBlue = mate.partnerMale ? blue : pink;
+  const asOwn = t => t.length === 5 && t.every((m, k) => m.kind === "mate" && m.fill === 0 && m.colour === pinkOrBlue && (k === 0 ? m.d === 0.8 : m.d < t[k - 1].d));
+  r.check(mate.before.partner.length === 5 && mate.before.partner.every(m => m.kind === "wolf" && m.fill > 0) && asOwn(mate.after.partner) && mate.after.other.every(m => m.kind === "wolf" && m.fill > 0),
+    `once mated, its partner's trail is drawn as thin rings like its own (${mate.after.partner.map(m => m.d).join(", ")} m, ${mate.partnerMale ? "blue" : "pink"}); ` +
+    `before, filled like any wolf's; another wolf's still filled`);
 
   // three deer passing minutes apart (1, 5 and 10 minutes ago), each along its own row
   // across the patch, 0.7 s a tile

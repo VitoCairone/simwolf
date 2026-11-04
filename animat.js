@@ -1510,7 +1510,8 @@ function paintDebugWolf() {
 //     minutes apart still tell)
 //   its marks' fill (scentRankFill, by rank): the freshest solid, the next a thick ring
 //     (that share of the radius), older ones thin rings (scentThinPX wide)
-// The wolf's own trail: thin rings (scentRingPX wide), its largest scentOwnMaxM.
+// The wolf's own trail, and once it has mated its partner's: thin rings (scentRingPX wide),
+// in the maker's sex's colour, each trail's largest scentOwnMaxM.
 const scentMaxM = 0.9;              // metres: a tile is 1 m a side
 const scentOwnMaxM = 0.8;
 const scentTrailLeast = 0.25;
@@ -1519,11 +1520,11 @@ const scentRankFill = [1, 0.5, 0];  // share of the radius filled (0: a thin rin
 const scentFreshS = 10;
 const scentStaleScale = 0.6;
 const scentThinPX = 1;              // world pixels
-const scentRingPX = 0.5;            // world pixels: 1 screen pixel at 2x zoom
+const scentRingPX = 1;              // world pixels: 2 screen pixels at 2x zoom
 const scentColors = { death: "rgba(0, 0, 0, 0.85)", deer: "rgba(120, 72, 30, 0.85)", male: "rgba(40, 90, 210, 0.85)", female: "rgba(225, 95, 170, 0.85)" };
 const scentSexes = new Map(); // uid -> isMale, for marks whose maker is gone
 // the marks last drawn (for tests): { i, j, species, uid, kind ("death", "deer", "wolf",
-// "own"), rank (its trail's among its kind), s, ageS, d (diameter, m), fill, colour }
+// "mate", "own"), rank (its trail's among its kind), s, ageS, d (diameter, m), fill, colour }
 let scentShown = [];
 
 function scentMakerIsMale(uid) {
@@ -1541,27 +1542,28 @@ function describeScent() {
   const pxM = 1 / (Math.SQRT2 * halfTile); // a world pixel across, in metres
   const oldestS = Math.log2(1 / sMin) * half, logFresh = Math.log2(scentFreshS), logSpan = Math.log2(oldestS) - logFresh;
   // the trails: by kind, then maker
-  const kinds = { death: new Map(), deer: new Map(), wolf: new Map(), own: new Map() };
+  const kinds = { death: new Map(), deer: new Map(), wolf: new Map(), mate: new Map(), own: new Map() };
   for (const species of ["death", "deer", "wolf"]) for (const m of senses.trailsAround(w, species)) {
-    const kind = species === "wolf" && m.uid === w.uid ? "own" : species;
+    const kind = species !== "wolf" ? species : m.uid === w.uid ? "own" : m.uid === w.mateUid ? "mate" : "wolf";
     let trail = kinds[kind].get(m.uid);
     if (!trail) kinds[kind].set(m.uid, trail = []);
     trail.push({ i: m.i, j: m.j, species, uid: m.uid, kind, rank: 0, s: Math.pow(2, -m.ageS / half), ageS: m.ageS, d: 0, fill: 1,
       colour: scentColors[species !== "wolf" ? species : scentMakerIsMale(m.uid) ? "male" : "female"] });
   }
   const shown = [];
-  for (const kind of ["death", "deer", "wolf", "own"]) {
+  for (const kind of ["death", "deer", "wolf", "mate", "own"]) {
     const trails = [...kinds[kind].values()];
     for (const t of trails) t.sort((a, b) => a.ageS - b.ageS);
     trails.sort((a, b) => a[0].ageS - b[0].ageS);
     trails.forEach((t, rank) => {
       const r = Math.min(rank, scentRankScale.length - 1);
       const fresh = 1 - (1 - scentStaleScale) * Math.max(0, Math.min(1, (Math.log2(Math.max(scentFreshS, t[0].ageS)) - logFresh) / logSpan));
-      const top = kind === "own" ? scentOwnMaxM : scentMaxM * scentRankScale[r] * fresh;
+      const ringed = kind === "own" || kind === "mate";
+      const top = ringed ? scentOwnMaxM : scentMaxM * scentRankScale[r] * fresh;
       t.forEach((m, k) => {
         m.rank = rank;
         m.d = Math.max(pxM, top * (1 - (1 - scentTrailLeast) * (t.length > 1 ? k / (t.length - 1) : 0)));
-        m.fill = kind === "own" ? 0 : scentRankFill[r];
+        m.fill = ringed ? 0 : scentRankFill[r];
         shown.push(m);
       });
     });
@@ -1574,7 +1576,7 @@ function describeScent() {
 // (at least a pixel), or thin.
 function paintScentMark(m) {
   const [px, py] = groundProject(m.i + 0.5, m.j + 0.5), rx = m.d / 2 * halfTile * Math.SQRT2;
-  const width = m.kind === "own" ? scentRingPX : m.fill > 0 ? Math.max(1, m.fill * rx) : scentThinPX;
+  const width = m.kind === "own" || m.kind === "mate" ? scentRingPX : m.fill > 0 ? Math.max(1, m.fill * rx) : scentThinPX;
   ctx.setTransform(screen.A, 0, 0, screen.A, screen.Bx, screen.By);
   ctx.beginPath();
   ctx.ellipse(px, py, rx, rx / 2, 0, 0, 2 * Math.PI);
