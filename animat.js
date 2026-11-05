@@ -628,25 +628,10 @@ const riserCol = 15;       // sheet column of the one-level riser strip
 // A boulder rests on its tile: row 25 of its 32 x 32 cell, its footprint's center, goes
 // on the ground at the tile's center.
 const boulderFootCenterY = 25;
-// BOULDERS: each is one of the free-standing rocks in tiles.png, [column, row]: brown or
-// grey. The colour goes with the ground under it (grey on stone, brown on dirt) and, on
-// grass, a broad smooth field (rocks near each other, and along a wall, mostly share it);
-// which rock of that colour, a hash of the tile. Like the terrain, a pure function of the
-// tile: no random numbers, the same rock every time it is drawn.
-const boulderSprites = {
-  brown: [[9, 4], [10, 4], [0, 5], [1, 5], [2, 5], [3, 5], [4, 5], [5, 5]],
-  grey: [[7, 5], [9, 5], [10, 5], [0, 6], [1, 6]],
-};
-const greyGrassAbove = 1.1; // of the colour field's 0..2 range: less than half the grass grey
-
-function boulderSpriteAt(i, j, terrain) {
-  const tri = x => 2 * Math.abs(x - Math.floor(x + 0.5)); // a triangle wave, 0..1
-  const grey = terrain === "stone" || (terrain === "grass" && tri(i / 57 + 0.3) + tri(j / 49 + 0.6) > greyGrassAbove);
-  const set = boulderSprites[grey ? "grey" : "brown"];
-  let h = Math.imul(i, 73856093) ^ Math.imul(j, 19349663);
-  h = Math.imul(h ^ (h >>> 13), 0x5bd1e995);
-  return set[((h ^ (h >>> 15)) >>> 0) % set.length];
-}
+// BOULDERS: each is one of the artist's free-standing rocks in tiles.png: sim decides which
+// (sim.boulderRockAt: see BOULDER FOOTPRINTS in sim.js, measured from these sprites);
+// boulderRockCells has its [column, row], in sim.boulderRocks' order.
+const boulderRockCells = [[9, 4], [10, 4], [0, 5], [1, 5], [2, 5], [3, 5], [4, 5], [5, 5], [7, 5], [9, 5], [10, 5], [0, 6], [1, 6]];
 
 // UNDERGROWTH: low bushes and flowers (sim.undergrowthAt), the artist's from tiles.png,
 // in images/undergrowth.png (made by spritecraft/make_undergrowth.py): row 0 the whole
@@ -724,7 +709,7 @@ function describeTile(i, j, clock = shoreClockNow()) {
   for (let k = 1; k <= base - 1 - floor; k++) t.pieces.push({ col: riserCol, row, top: k * levelHeightPY });
   if (sim.obstacleAt(i, j) === "boulder") {
     // drawn among the critters (see DRAWING ORDER), its foot on the tile's center
-    const [col, brow] = boulderSpriteAt(i, j, terrain);
+    const [col, brow] = boulderRockCells[sim.boulderRockAt(i, j)];
     const centerAboveBase = (corners[0] + corners[1] + corners[2] + corners[3]) / 4 - base;
     const centerY = isoProject(0.5, 0.5)[1] - centerAboveBase * levelHeightPY;
     t.boulder = { i, j, col, row: brow, left: t.left, top: t.top + centerY - boulderFootCenterY, z: boulderZIndex(i, j) };

@@ -3,7 +3,8 @@
 // or sprints (swimBurst) when asked to gallop with the wind for it; it never stands still
 // in water (told to stand or eat, or after a stun, it swims on); swimming uses stamina (a
 // full reserve lasts swimTimeS: GAMIFIED 12 minutes for a wolf, 3 for a deer), a sprint
-// also wind; out of wind a sprint drops to swimming, out of stamina a swimmer can't move.
+// also wind; out of wind a sprint drops to swimming; out of stamina a swimmer swims on at
+// its swim speed (so it can get back to land: see shorewait.test.js).
 // The land in front of a swimmer covers it, and is drawn as it is around it.
 
 const path = require("path");
@@ -98,9 +99,10 @@ async function main(browser, r) {
     `no standing still in water: told to stand (${still.idle}) or eat (${still.eat}), or after a stun (${still.afterStun}), it swims on the way it faces`);
 
   // 3. asking to gallop in water sprints (swimBurst), using wind; out of wind it swims;
-  //    out of stamina it can't move at all
+  //    out of stamina it swims on, at its swim speed
   const spr = await p.evaluate(() => {
     const w = sim.pcWolf, S = sim.internals, v = S.travelSpeedBySpeciesAndPose.wolf;
+    const start = [w.gx, w.gy];
     w.wind = 1; w.stamina = 1;
     S.setCritterMoving(w, sim.DIR_N, "gallop");
     const sprint = { pose: w.pose, burst: w.targetSpeed === v.swimBurst, wind: w.wind };
@@ -110,12 +112,11 @@ async function main(browser, r) {
     S.setCritterMoving(w, sim.DIR_N, "gallop"); // can't start a sprint without wind
     const noRestart = w.targetSpeed === v.swim;
     w.stamina = 1e-9; S.tick();
-    for (let n = 0; n < 200 && w.speed > 0; n++) S.tick(); // (slowing to a stop)
-    const exhausted = { speed: w.speed, pose: w.pose };
     const at = [w.gx, w.gy];
-    S.setCritterMoving(w, sim.DIR_W, "walk"); // asked to move, it can't
+    S.setCritterMoving(w, sim.DIR_W, "walk");
     for (let n = 0; n < 60; n++) S.tick();
-    exhausted.stayed = w.gx === at[0] && w.gy === at[1] && w.speed === 0 && w.pose === "swim";
+    const exhausted = { stamina: w.stamina, speed: w.speed, pose: w.pose, moved: +(at[0] - w.gx).toFixed(2), swim: v.swim };
+    w.gx = w.nextGX = start[0]; w.gy = w.nextGY = start[1]; // (back where it was)
     w.wind = 1; w.stamina = 1; // rested again: gallop back west, for what follows
     S.setCritterMoving(w, sim.DIR_W, "gallop");
     return { sprint, outOfWind, noRestart, exhausted };
@@ -124,8 +125,8 @@ async function main(browser, r) {
     `gallop request in water = a sprint at swimBurst speed, using wind (pose ${spr.sprint.pose})`);
   r.check(spr.outOfWind.swim && !spr.outOfWind.burst && spr.noRestart,
     `out of wind, a sprint drops to swimming, and can't start again without wind`);
-  r.check(spr.exhausted.speed === 0 && spr.exhausted.stayed,
-    `out of stamina, a swimmer can't move: it treads water where it is (stuck, for now)`);
+  r.check(spr.exhausted.stamina === 0 && spr.exhausted.pose === "swim" && Math.abs(spr.exhausted.speed - spr.exhausted.swim) < 1e-9 && spr.exhausted.moved > 0.5,
+    `out of stamina, a swimmer swims on at its swim speed (${spr.exhausted.moved} tiles west in 1 s)`);
 
   // 4. swimming back west onto land resumes the requested land pose and the land sheet
   const back = await p.evaluate(() => {

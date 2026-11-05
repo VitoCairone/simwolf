@@ -717,6 +717,51 @@ function obstacleAt(gx, gy) {
   return b.boulder[(i - b.i0) * terrainBlockTiles + j - b.j0] ? "boulder" : null;
 }
 
+// BOULDER FOOTPRINTS: each boulder is one of the artist's rocks (boulderRocks, measured
+// from their sprites by spritecraft/measure_boulders.py: animat.js draws boulderRockAt's
+// with its sprite), standing on part of its tile, which its sprite shows. A line of sight
+// is stopped by the rock itself, not its whole tile: heading in direction d (sim's 8:
+// E = +i, S = +j, ...), the rock spans `across[d]` = [lo, hi] along d's left-hand normal
+// (-dy, dx), in tiles from the tile's center (see senses.js: walkLine). The colour goes
+// with the ground under it (grey on stone, brown on dirt) and, on grass, a broad smooth
+// field (rocks near each other, and along a wall, mostly share it); which rock of that
+// colour, a hash of the tile: a pure function of the tile.
+const boulderRocks = [ // across: [lo, hi] by direction (E, SE, S, SW, W, NW, N, NE)
+  { colour: "brown", across: [[-0.33, 0.45], [-0.42, 0.38], [-0.42, 0.23], [-0.53, 0.31], [-0.45, 0.33], [-0.38, 0.42], [-0.23, 0.42], [-0.31, 0.53]] }, // tiles.png [9, 4]
+  { colour: "brown", across: [[-0.61, 0.48], [-0.42, 0.51], [-0.45, 0.70], [-0.35, 0.62], [-0.48, 0.61], [-0.51, 0.42], [-0.70, 0.45], [-0.62, 0.35]] }, // tiles.png [10, 4]
+  { colour: "brown", across: [[-0.48, 0.36], [-0.42, 0.46], [-0.45, 0.64], [-0.35, 0.57], [-0.36, 0.48], [-0.46, 0.42], [-0.64, 0.45], [-0.57, 0.35]] }, // tiles.png [0, 5]
+  { colour: "brown", across: [[-0.67, 0.48], [-0.55, 0.60], [-0.45, 0.70], [-0.44, 0.75], [-0.48, 0.67], [-0.60, 0.55], [-0.70, 0.45], [-0.75, 0.44]] }, // tiles.png [1, 5]
+  { colour: "brown", across: [[-0.48, 0.48], [-0.51, 0.60], [-0.48, 0.61], [-0.53, 0.62], [-0.48, 0.48], [-0.60, 0.51], [-0.61, 0.48], [-0.62, 0.53]] }, // tiles.png [2, 5]
+  { colour: "brown", across: [[-0.42, 0.36], [-0.46, 0.29], [-0.42, 0.23], [-0.44, 0.35], [-0.36, 0.42], [-0.29, 0.46], [-0.23, 0.42], [-0.35, 0.44]] }, // tiles.png [3, 5]
+  { colour: "brown", across: [[-0.27, 0.45], [-0.38, 0.51], [-0.48, 0.48], [-0.53, 0.40], [-0.45, 0.27], [-0.51, 0.38], [-0.48, 0.48], [-0.40, 0.53]] }, // tiles.png [4, 5]
+  { colour: "brown", across: [[-0.67, 0.67], [-0.42, 0.60], [-0.33, 0.58], [-0.44, 0.62], [-0.67, 0.67], [-0.60, 0.42], [-0.58, 0.33], [-0.62, 0.44]] }, // tiles.png [5, 5]
+  { colour: "grey", across: [[-0.61, 0.48], [-0.51, 0.51], [-0.48, 0.61], [-0.44, 0.62], [-0.48, 0.61], [-0.51, 0.51], [-0.61, 0.48], [-0.62, 0.44]] }, // tiles.png [7, 5]
+  { colour: "grey", across: [[-0.55, 0.55], [-0.51, 0.51], [-0.48, 0.48], [-0.53, 0.53], [-0.55, 0.55], [-0.51, 0.51], [-0.48, 0.48], [-0.53, 0.53]] }, // tiles.png [9, 5]
+  { colour: "grey", across: [[-0.55, 0.55], [-0.51, 0.51], [-0.48, 0.48], [-0.53, 0.53], [-0.55, 0.55], [-0.51, 0.51], [-0.48, 0.48], [-0.53, 0.53]] }, // tiles.png [10, 5]
+  { colour: "grey", across: [[-0.36, 0.48], [-0.51, 0.42], [-0.73, 0.48], [-0.62, 0.35], [-0.48, 0.36], [-0.42, 0.51], [-0.48, 0.73], [-0.35, 0.62]] }, // tiles.png [0, 6]
+  { colour: "grey", across: [[-0.64, 0.52], [-0.51, 0.51], [-0.48, 0.61], [-0.44, 0.62], [-0.52, 0.64], [-0.51, 0.51], [-0.61, 0.48], [-0.62, 0.44]] }, // tiles.png [1, 6]
+];
+const boulderRocksByColour = { brown: [], grey: [] };
+boulderRocks.forEach((r, k) => boulderRocksByColour[r.colour].push(k));
+const greyGrassAbove = 1.1; // of the colour field's 0..2 range: less than half the grass grey
+
+// The rock (an index into boulderRocks) of the boulder on tile (i, j), which has one.
+function boulderRockAt(i, j) {
+  const terrain = getTerrainAt(i, j);
+  const tri = x => 2 * Math.abs(x - Math.floor(x + 0.5)); // a triangle wave, 0..1
+  const grey = terrain === "stone" || (terrain === "grass" && tri(i / 57 + 0.3) + tri(j / 49 + 0.6) > greyGrassAbove);
+  const set = boulderRocksByColour[grey ? "grey" : "brown"];
+  let h = Math.imul(i, 73856093) ^ Math.imul(j, 19349663);
+  h = Math.imul(h ^ (h >>> 13), 0x5bd1e995);
+  return set[((h ^ (h >>> 15)) >>> 0) % set.length];
+}
+
+// The span [lo, hi] of the obstacle on tile (i, j) across a line of sight heading dir (see
+// BOULDER FOOTPRINTS); null for none.
+function obstacleAcross(i, j, dir) {
+  return obstacleAt(i, j) ? boulderRocks[boulderRockAt(i, j)].across[dir] : null;
+}
+
 function isBoulderSite(x, y) {
   const region = (jag(x / 71 + 0.3) + jag(y / 61 + 0.6)) / 2;
   let u = null;
@@ -901,12 +946,17 @@ function levelRangeIn(i0, j0, i1, j1) {
   return lo <= hi ? [lo, hi] : [0, 0];
 }
 
-// The height a line of sight must clear over tile (i, j): the ground at its center plus
-// any obstacle on it (for senses.js).
-function sightHeightAt(i, j) {
+// The height of the ground at tile (i, j)'s center: what a line of sight must clear over
+// it, but for any obstacle (for senses.js).
+function centerHeightAt(i, j) {
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 0;
   const b = terrainBlock(i, j), k = (i - b.i0) * terrainBlockTiles + j - b.j0, c = b.corners;
-  return (c[k * 4] + c[k * 4 + 1] + c[k * 4 + 2] + c[k * 4 + 3]) / 4 + (b.boulder[k] ? obstacleHeightLevels.boulder : 0);
+  return (c[k * 4] + c[k * 4 + 1] + c[k * 4 + 2] + c[k * 4 + 3]) / 4;
+}
+
+// ...and with any obstacle on it: the height of the obstacle's top.
+function sightHeightAt(i, j) {
+  return centerHeightAt(i, j) + obstacleHeightAt(i, j);
 }
 
 // The ground's height, in levels, at any grid point.
@@ -2535,7 +2585,11 @@ function applyExertion(a) {
     a.stamina = Math.max(0, a.stamina - dt / ex.trotFullStaminaS);
   } else if (a.pose === "swim") {
     if (a.swimBurst) a.wind = Math.max(0, a.wind - dt / ex.gallopFullWindS);
+    const had = a.stamina;
     a.stamina = Math.max(0, a.stamina - (a.swimBurst ? gallopStaminaCostFactor : 1) * dt / ex.swimTimeS);
+    // (the mind turns a swimmer back in time: see TIRED SWIMMERS in mind.js)
+    if (had > 0 && a.stamina <= 0 && !(a === pcWolf && playerHasControl()))
+      (console.error || console.log)(`[stamina] ${a.species} ${a.uid} ran out of stamina in the water (it shouldn't)`);
   }
   const windHalfLifeS = windRefillHalfLifeSByPose[a.pose];
   if (windHalfLifeS) a.wind += (1 - a.wind) * (1 - Math.pow(0.5, dt / windHalfLifeS));
@@ -2560,14 +2614,15 @@ function applyExertion(a) {
 // or after a stun, it swims on the way it faces. Swimming uses stamina (a full reserve
 // lasts swimTimeS; a sprint uses it gallopStaminaCostFactor times as fast, and wind as a
 // gallop does) and nothing refills it in the water. A sprint out of wind drops to a swim;
-// a swimmer out of stamina can't move.
+// a swimmer out of stamina swims on at its swim speed (so it can still get back to land:
+// a critter's mind should turn it back long before; running out logs an error, but for
+// the player's wolf while the player steers it).
 // A critter below SPEEDS.swimMinStaminaFrac stamina may not enter the water, except the
 // player's wolf while the player steers it: such a move is blocked like a boulder.
 // a.landPose is the land gait last asked for, resumed on climbing out. A critter climbing
 // out up a bank higher than one step (bankAboveStep) is held to a walk for
 // SPEEDS.climbOutSlowS (until a.climbingUntil). Out of the water, any critter speeds up
 // as on land (SPEED CHANGES), from its swimming speed.
-// TODO: rescue (or drown) a swimmer out of stamina; for now it can only starve.
 
 // a.waterState caches the answer for one position. moveAllTogether fills it from what
 // findCollidingPairs has already looked up, so the lookup here only runs for critters
@@ -2589,9 +2644,8 @@ function mayEnterWater(a) {
   return a.stamina >= SPEEDS.swimMinStaminaFrac || (a === pcWolf && playerHasControl());
 }
 
-// A swimmer's speed: its sprint, its swim, or 0 out of stamina.
+// A swimmer's speed: its sprint, or its swim (out of stamina too).
 function swimSpeed(a) {
-  if (a.stamina <= 0) return 0;
   return travelSpeedBySpeciesAndPose[a.species][a.swimBurst ? "swimBurst" : "swim"];
 }
 
@@ -3098,7 +3152,8 @@ return {
   get startArea() { return startArea; }, // where the critters started (THE START)
   // the square startNearTiles a side about it (for tests: where to look for features)
   get startNear() { const m = (startNearTiles - startTiles) / 2; return startArea && { i0: startArea.i0 - m, j0: startArea.j0 - m, i1: startArea.i1 + m, j1: startArea.j1 + m }; },
-  isBlockedTile, isLandTile, isWaterAt, canStepTo, obstacleHeightAt, sightHeightAt, isLiveCritter,
+  isBlockedTile, isLandTile, isWaterAt, canStepTo, obstacleHeightAt, sightHeightAt, centerHeightAt, isLiveCritter,
+  boulderRockAt, obstacleAcross, boulderRocks,
   // scent and wind
   scentAt, get wind() { return { x: windX, y: windY }; },
   get scentHalfLifeS() { return SPEEDS.scentHalfLifeS; },

@@ -96,8 +96,8 @@ const shoreWaitTiles = 1;        // a wolf this near its spot on the shore waits
 const waitCommitS = 3;           // ...and keeps to that spot at least this long
 const shoreLookAheadTiles = 40;  // looks this far along a swimmer's way for its landing
 const shoreRetryTurns = 10;      // a tired swimmer blocked this many turns looks for other land
-const swimSpentBelow = 0.1;      // a swimmer with this share of stamina or less makes for land
-                                 // even from a chase or flight (see TIRED SWIMMERS)
+const swimTurnBackShare = 0.45;  // a swimmer that has burned this share of the stamina it
+                                 // went in with makes for land (see TIRED SWIMMERS)
 const entryNearTiles = 3;        // where it entered the water: the shore this near its last
                                  // footing on land
 const landLookEveryS = 1;        // a swimmer looks for land this often
@@ -183,13 +183,14 @@ function memoryOf(a) {
       familiar: new Set(),    // uids of its species met while it or they were infants
       court: null,            // the critter it is courting: { uid, since }
       refused: new Map(),     // uid -> courting it again only after this tick
-      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | drink | ashore | court | mate | family | nurse | yield
+      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | drink | ashore | court | seek | mate | family | nurse | yield
       yield: null,            // giving way: { until, intent } (see giveWay)
       target: null,           // a wolf's prey (uid)
       targetUntil: -Infinity, // ...kept until this tick at least
       flee: null,             // a deer's way to flee: { dx, dy, until, since }
       searching: false,       // a wolf has reached where its unseen prey should be
       trailEnds: new Map(),   // deer uid -> the game time its trail was given up at (see track)
+      mateTrailEnds: new Map(), // ...and a prospective mate's (see social)
       deathEnds: new Map(),   // ...and a carcass's death scent
       watch: null,            // a wolf waiting ashore: { i, j, way (its prey's tile and way), spot }
       shore: null,            // a tired swimmer's land: { gx, gy, blockedTurns }
@@ -197,6 +198,7 @@ function memoryOf(a) {
       entry: null,            // swimming: the shore it entered the water from, [i, j]
       landSeen: null,         // ...and the nearest it has seen since, [i, j]
       landLook: -Infinity,    // ...the tick it last looked for land
+      entryStamina: null,     // ...and the stamina it went in with
       closing: null,          // the kin it is coming back to: "parent", "young", "mate" (see social)
       grazeAvoid: new Map(),  // tile key -> tick: grass it couldn't get to, left be until then
       grazeSince: 0,          // ...the tick it set off for its grazeTo, and its best distance
@@ -762,12 +764,13 @@ function hunt(a, m, now) {
 // up that one (by its maker: m.trailEnds, m.deathEnds) as far as that end, and looks for
 // another; death scent of a carcass it knows is bare it leaves be. Deer trails it follows
 // at the hunt's gait (DASHING), death scent at a trot. null if it smells none worth
-// following.
-function track(a, m, now, species = "deer", gait = "trot") {
-  const i = Math.floor(a.gx), j = Math.floor(a.gy), t0 = sim.now, ends = species === "deer" ? m.trailEnds : m.deathEnds;
+// following. (Also for a prospective mate's trail: those `suits` accepts, its own ends;
+// see social.)
+function track(a, m, now, species = "deer", gait = "trot", suits = null, ends = species === "deer" ? m.trailEnds : m.deathEnds) {
+  const i = Math.floor(a.gx), j = Math.floor(a.gy), t0 = sim.now;
   for (const [uid, at] of ends) if (t0 - at > trailEndKeepS) ends.delete(uid);
   const bare = uid => { const k = m.known.get(uid); return k && !k.alive && k.meat === 0; };
-  const worth = t => !(t0 - t.ageS <= (ends.get(t.uid) ?? -Infinity)) && !(species === "death" && bare(t.uid));
+  const worth = t => !(t0 - t.ageS <= (ends.get(t.uid) ?? -Infinity)) && !(species === "death" && bare(t.uid)) && (!suits || suits(t));
   const trails = senses.trailsAround(a, species).filter(worth);
   const here = trails.find(t => t.i === i && t.j === j);
   let best = null;
@@ -888,7 +891,9 @@ function settle(a, m, now) {
 //   An unpaired grown critter courts the nearest unpaired grown critter of its species
 //     and the other sex, if not kin or familiar (WESTERMARCK): goes to it and stands
 //     ready to mate within mateCloseTiles. It gives up on one that hasn't mated with it in
-//     courtGiveUpS.
+//     courtGiveUpS. Knowing of none, it follows the freshest trail about of one that would
+//     do (its scent tells: see SMELL in senses.js), the way it was laid (as TRACKING, at a
+//     trot: mode "seek"), until it meets the maker.
 // Kin out of sight are looked for where last seen; not there, they are lost until seen
 // again.
 function social(a, m, now, romanceOnly = false) {
@@ -956,7 +961,14 @@ function social(a, m, now, romanceOnly = false) {
     const d2 = d2Of(k);
     if (d2 < bestD2) { best = uid; bestD2 = d2; }
   }
-  if (best === null) { m.court = null; return null; }
+  if (best === null) {
+    m.court = null;
+    const suits = t => t.isMale !== a.isMale && t.grown && !t.paired && t.uid !== a.uid
+      && !m.familiar.has(t.uid) && !isKin(a, t.uid) && !((m.refused.get(t.uid) ?? -Infinity) > now);
+    const seek = track(a, m, now, a.species, "trot", suits, m.mateTrailEnds);
+    if (seek) m.mode = "seek";
+    return seek;
+  }
   if (!m.court || m.court.uid !== best) m.court = { uid: best, since: now };
   else if (now - m.court.since > ticks(courtGiveUpS)) {
     m.refused.set(best, now + ticks(courtRetryS));
@@ -968,14 +980,15 @@ function social(a, m, now, romanceOnly = false) {
 }
 
 // TIRED SWIMMERS: entering the water, a critter remembers where (the shore nearest its
-// last footing on land: entryNearTiles); swimming, it keeps looking for land it could
-// climb out onto (a land tile beside water, its bank within a step of it: climbable),
-// every landLookEveryS, and remembers the nearest it has seen (by where it is now); it
-// forgets both back on land.
-// A swimmer with sim.swimMinStamina of its stamina or less makes for the nearer of the two
-// (or land it sees now), unless it is chasing or fleeing; with swimSpentBelow or less,
-// whatever it is doing. Blocked on the way shoreRetryTurns turns, it forgets that shore and
-// makes for the other; knowing of none, it swims on the way it was going.
+// last footing on land: entryNearTiles) and its stamina then; swimming, it keeps looking
+// for land it could climb out onto (a land tile beside water, its bank within a step of
+// it: climbable), every landLookEveryS, and remembers the nearest it has seen (by where it
+// is now); it forgets all this back on land. Once it has burned swimTurnBackShare of the
+// stamina it went in with, it makes for the nearer of the two (looking about afresh then),
+// whatever else it would do: going back the way it came takes no more than it has burned,
+// so it has the stamina to get there. Blocked on the way shoreRetryTurns turns, it forgets
+// that shore and makes for the other; knowing of none, it swims on the way it was going.
+// (The player's wolf decides for itself while the player steers it.)
 function climbable(i, j) {
   return sim.isLandTile(i, j) && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([di, dj]) => sim.getTerrainAt(i + di, j + dj) === "water");
 }
@@ -983,7 +996,8 @@ function climbable(i, j) {
 // Notes where a critter stands for TIRED SWIMMERS: on land, its footing; swimming, where it
 // entered the water, and the nearest climbable land in sight (every landLookEveryS).
 function noteLand(a, m, now) {
-  if (a.pose !== "swim") { m.lastDry = [a.gx, a.gy]; m.entry = m.landSeen = null; m.landLook = -Infinity; return; }
+  if (a.pose !== "swim") { m.lastDry = [a.gx, a.gy]; m.entry = m.landSeen = m.entryStamina = null; m.landLook = -Infinity; return; }
+  if (m.entryStamina === null) m.entryStamina = a.stamina;
   if (!m.entry && m.lastDry) {
     // (no need to see it: it has just stood there)
     const [x, y] = m.lastDry, ci = Math.floor(x), cj = Math.floor(y);
@@ -1010,6 +1024,7 @@ function shoreToMakeFor(a, m) {
 }
 
 function toShore(a, m, now) {
+  if (m.mode !== "ashore") { m.landLook = -Infinity; noteLand(a, m, now); } // (a fresh look about)
   m.mode = "ashore";
   const blocked = a.blockedTick > m.lastTurn;
   if (m.shore && blocked && ++m.shore.blockedTurns > shoreRetryTurns) {
@@ -1134,18 +1149,10 @@ function think() {
     noteShores(a, m, now);
     noteLand(a, m, now);
     let intent;
-    const swimming = a.pose === "swim";
-    if (!swimming) m.shore = null;
+    if (a.pose !== "swim") m.shore = null;
     if (now - m.playerTick < ticks(playerHandoverS)) intent = IDLE;
-    else if (swimming && a.stamina <= swimSpentBelow) intent = toShore(a, m, now);
-    else {
-      const reversed = m.reversedTick;
-      intent = a.species === "wolf" ? decideWolf(a, m, now) : decideDeer(a, m, now);
-      if (swimming && a.stamina <= sim.swimMinStamina && m.mode !== "chase" && m.mode !== "flee") {
-        m.reversedTick = reversed; // (the way it didn't take doesn't count as turning round)
-        intent = toShore(a, m, now);
-      }
-    }
+    else if (a.pose === "swim" && a.stamina <= m.entryStamina * (1 - swimTurnBackShare)) intent = toShore(a, m, now);
+    else intent = a.species === "wolf" ? decideWolf(a, m, now) : decideDeer(a, m, now);
     intent = giveWay(a, m, intent, now);
     m.intent = intent;
     m.lastTurn = now;
@@ -1243,7 +1250,7 @@ function stateOf(a) {
   const m = memories.get(a);
   if (!m) return null;
   return { mode: m.mode, target: m.target, searching: m.searching, flee: m.flee, detour: m.detour, watch: m.watch,
-    grazeTo: m.grazeTo, closing: m.closing, entry: m.entry, landSeen: m.landSeen, drinking: m.drinking, waterTo: m.waterTo !== null ? m.waters.get(m.waterTo) : null,
+    grazeTo: m.grazeTo, closing: m.closing, entry: m.entry, landSeen: m.landSeen, entryStamina: m.entryStamina, drinking: m.drinking, waterTo: m.waterTo !== null ? m.waters.get(m.waterTo) : null,
     waters: [...m.waters.values()].map(s => ({ ...s })),
     slot: m.slot, lastTurn: m.lastTurn, court: m.court, familiar: [...m.familiar],
     avoid: m.avoid.map(t => t > sim.tickCount ? 1 : 0).join(""),

@@ -13,8 +13,11 @@
 // MacBook, about 1,290 x 810 CSS pixels; in grid terms, screen-horizontal is dx - dy and
 // screen-vertical dx + dy, so the rectangle needs no square root), in its FIELD OF VIEW
 // (inView: within fovDegBySpecies, centered on its heading, all of it seen alike) and in
-// its LINE OF SIGHT: the straight line from its eye to the other's (eyeLevelsBySpecies, by its size)
-// passes above the ground and boulders (sim.sightHeightAt) of every tile in between.
+// its LINE OF SIGHT: the straight line from its eye to the other's (eyeLevelsBySpecies, by
+// its size) passes above the ground at the center of every tile in between, and above or
+// beside its boulder: a boulder stops it only where the rock itself stands, its width
+// across the line's direction (the nearest of the 8) as its sprite shows (sim.js: BOULDER
+// FOOTPRINTS), not across its whole tile.
 // Only creatures inside the rectangle are traced: O(n^2) in critters, for now. Sight
 // alone tells a creature's sex, age (an infant, grown), its partner, and whether a female
 // is in heat (as smell would, up close). Grass, land and water a critter can see are
@@ -36,7 +39,8 @@
 //   sniffTiles whatever the wind. It tells species, whether alive, and a carcass's meat;
 //   a carcass with no meat left is smelled only within sniffTiles.
 //   on the ground: trails (sim.scentAt), which trailsAround lists for the mind to follow,
-//   as faint as the critter's nose can still smell (trailMinStrength).
+//   as faint as the critter's nose can still smell (trailMinStrength). A critter's trail
+//   tells who laid it, and (as scent marks do) its sex, whether grown and whether paired.
 // TOUCH: a mother feels which of her young is suckling from her (nursingOnMe), and
 // perceives it by "touch" if by nothing else.
 // The player sees what the player's wolf sees while the camera follows it (animat.js,
@@ -122,15 +126,19 @@ function eyeLevels(a) {
 
 // Walks the straight line from point (ex, ey) at height ez to (tx, ty) at height tz, tile
 // by tile (a grid traversal), over every tile in between (not the first or the last),
-// calling stop(i, j, z) with the line's height z where it comes nearest the tile's
-// center, until stop returns true; whether it did. The last tile too if an obstacle
-// stands on it and the line ends beyond its center (behind the obstacle). Distances along the line are
-// fractions: no square roots.
+// calling stop(i, j, z, off, dir) with the line's height z where it comes nearest the
+// tile's center, how far from the center it passes there (off, along the left-hand normal
+// of dir) and the nearest of sim's 8 directions to the line's (dir), until stop returns
+// true; whether it did. The last tile too if an obstacle stands on it and the line ends
+// beyond its center (behind the obstacle). Distances along the line are fractions: no
+// square roots.
 function walkLine(ex, ey, ez, tx, ty, tz, stop) {
   let ci = Math.floor(ex), cj = Math.floor(ey);
   const ti = Math.floor(tx), tj = Math.floor(ty);
   if (ci === ti && cj === tj) return false;
   const dx = tx - ex, dy = ty - ey, dz = tz - ez, len2 = dx * dx + dy * dy;
+  const dir = sim.getDir(dx, dy), [ux, uy] = sim.moveVecByDir[dir], nx = -uy, ny = ux;
+  const off = (i, j, t) => (ex + dx * t - i - 0.5) * nx + (ey + dy * t - j - 0.5) * ny;
   // t (0 at the eye, 1 at the target) at which the line next crosses a vertical (i) and a
   // horizontal (j) tile edge, and how much t each whole tile takes
   const stepI = dx > 0 ? 1 : -1, stepJ = dy > 0 ? 1 : -1;
@@ -143,17 +151,24 @@ function walkLine(ex, ey, ez, tx, ty, tz, stop) {
     if (ci === ti && cj === tj) break;
     let t = ((ci + 0.5 - ex) * dx + (cj + 0.5 - ey) * dy) / len2;
     t = t < 0 ? 0 : t > 1 ? 1 : t;
-    if (stop(ci, cj, ez + dz * t)) return true;
+    if (stop(ci, cj, ez + dz * t, off(ci, cj, t), dir)) return true;
   }
   // the last tile's obstacle hides the part of it beyond its center
   if (sim.obstacleHeightAt(ti, tj) <= 0) return false;
   const t = ((ti + 0.5 - ex) * dx + (tj + 0.5 - ey) * dy) / len2;
-  return t > 0 && t < 1 && stop(ti, tj, ez + dz * t);
+  return t > 0 && t < 1 && stop(ti, tj, ez + dz * t, off(ti, tj, t), dir);
 }
 
+// Whether the obstacle on tile (i, j), if any, stops a line at height z passing its center
+// at off heading dir (see walkLine): above the line, and the rock across its way.
+const obstacleBlocks = (i, j, z, off, dir) => {
+  const across = sim.obstacleAcross(i, j, dir);
+  return across !== null && off >= across[0] && off <= across[1] && sim.sightHeightAt(i, j) > z;
+};
+
 // Whether the line passes above every tile in between: the ground at each one's center,
-// and any obstacle on it.
-const sightBlocked = (i, j, z) => sim.sightHeightAt(i, j) > z;
+// and any obstacle on it where the rock stands.
+const sightBlocked = (i, j, z, off, dir) => sim.centerHeightAt(i, j) > z || obstacleBlocks(i, j, z, off, dir);
 function clearLine(ex, ey, ez, tx, ty, tz) {
   return !walkLine(ex, ey, ez, tx, ty, tz, sightBlocked);
 }
@@ -181,7 +196,6 @@ function canSeeTile(a, i, j) {
 // Whether an obstacle (sim.obstacleHeightAt) stands in the way of critter a's line of
 // sight to grid point (gx, gy) at height gz (by default, the ground there), whatever else
 // does.
-const obstacleBlocks = (i, j, z) => sim.obstacleHeightAt(i, j) > 0 && sim.sightHeightAt(i, j) > z;
 function obstacleInWay(a, gx, gy, gz = sim.heightAt(gx, gy)) {
   if (!use.lineOfSight) return false;
   return walkLine(a.gx, a.gy, sim.heightAt(a.gx, a.gy) + eyeLevels(a), gx, gy, gz,
@@ -271,16 +285,27 @@ function inSniffPatch(di, dj, r) {
 }
 
 // The trails of species in the sniffing patch of critter a (trailSniffTiles) that it can
-// still smell: [{ i, j, ageS, uid }].
+// still smell: [{ i, j, ageS, uid }], and for a critter's trail its maker's isMale, grown
+// and paired.
 function trailsAround(a, species) {
   if (!use.smell) return [];
+  const makers = new Map(); // uid -> { isMale, grown, paired }
+  const maker = uid => {
+    let k = makers.get(uid);
+    if (k === undefined) {
+      const c = sim.allCritters.find(c => c.uid === uid) || sim.allCorpses.find(c => c.uid === uid);
+      k = c ? { isMale: c.isMale, grown: sim.isGrown(c), paired: c.mateUid !== null } : null;
+      makers.set(uid, k);
+    }
+    return k;
+  };
   const r = trailSniffTiles[a.species], R = r + 2, ci = Math.floor(a.gx), cj = Math.floor(a.gy);
   const maxAgeS = Math.log2(1 / trailMinStrength[a.species]) * sim.scentHalfLifeS;
   const out = [];
   for (let i = ci - R; i <= ci + R; i++) for (let j = cj - R; j <= cj + R; j++) {
     if (!inSniffPatch(i - ci, j - cj, r)) continue;
     const s = sim.scentAt(i, j, species);
-    if (s && s.ageS <= maxAgeS) out.push({ i, j, ageS: s.ageS, uid: s.uid });
+    if (s && s.ageS <= maxAgeS) out.push(species === "death" ? { i, j, ageS: s.ageS, uid: s.uid } : { i, j, ageS: s.ageS, uid: s.uid, ...maker(s.uid) });
   }
   return out;
 }

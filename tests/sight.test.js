@@ -4,8 +4,9 @@
 //  - ground it has never seen is black, and so are the map's surroundings
 //  - the wolf sees only within its field of view (about 250 degrees about its heading):
 //    beyond it the ground is drawn without colour, along straight lines from its eye
-//  - a lone boulder casts a shadow with straight edges, where the lines of sight from the
-//    wolf's eye past the boulder's corners run: just inside them the ground is drawn
+//  - a lone boulder casts a shadow as wide as the rock (not its whole tile: its span across
+//    the line of sight, from its sprite), with straight edges, where the lines of sight
+//    from the wolf's eye past the rock's edges run: just inside them the ground is drawn
 //    without colour (greyed out, or black where never seen), just outside in colour
 //  - the boulder hides the part of its own tile beyond its center too
 //  - on water as on land, the field of view's edges run straight
@@ -87,23 +88,45 @@ async function main(browser, r) {
   const onView = await p.evaluate(() => animat.sightViewOn());
   r.check(onView, "the sight view is on while the camera follows the player's wolf");
 
-  // the shadow's edges: the lines from the eye past the boulder tile's outermost corners
-  // (by angle), and points just inside and just outside each, 2.5 and 4.5 tiles past the
-  // boulder's center
-  const ang = (x, y) => Math.atan2(y - ey, x - ex);
-  const corners = [[bi, bj], [bi + 1, bj], [bi, bj + 1], [bi + 1, bj + 1]].sort((a, b) => ang(...a) - ang(...b));
-  const edges = [corners[0], corners[3]];
-  const off = 0.15, probes = [];
-  for (const [k, c] of edges.entries()) {
-    const dx = c[0] - ex, dy = c[1] - ey, len = Math.hypot(dx, dy), ux = dx / len, uy = dy / len;
-    const inward = k === 0 ? 1 : -1; // toward the boulder's side of the line
+  // the shadow's edges: where lines from the eye pass the boulder's center just at the
+  // rock's edges (its span across their direction: sim.obstacleAcross), found along
+  // cross-lines 2.5 and 4.5 tiles past the boulder's center; points just inside and just
+  // outside each. And the shadow the whole tile would cast there (past its outermost
+  // corners), for comparison.
+  const edgesAt = await p.evaluate(([bi, bj, ex, ey]) => {
+    const cx = bi + 0.5, cy = bj + 0.5, l = Math.hypot(cx - ex, cy - ey), ux = (cx - ex) / l, uy = (cy - ey) / l;
+    const at = (s, L) => [ex + ux * s - uy * L, ey + uy * s + ux * L];
+    // how a line from the eye to (x, y) passes the boulder: inside the rock's span or not (as senses.js: walkLine)
+    const passes = (x, y) => {
+      const dx = x - ex, dy = y - ey, dir = sim.getDir(dx, dy), [vx, vy] = sim.moveVecByDir[dir];
+      const t = ((cx - ex) * dx + (cy - ey) * dy) / (dx * dx + dy * dy);
+      const off = (ex + dx * t - cx) * -vy + (ey + dy * t - cy) * vx, [lo, hi] = sim.obstacleAcross(bi, bj, dir);
+      return off >= lo && off <= hi;
+    };
+    const out = [];
     for (const past of [2.5, 4.5]) {
-      const s = len + past, x = ex + ux * s, y = ey + uy * s;
-      // the normal (-uy, ux) turns toward larger angles
-      probes.push({ inside: true, x: x - uy * off * inward, y: y + ux * off * inward });
-      probes.push({ inside: false, x: x + uy * off * inward, y: y - ux * off * inward });
+      const s = l + past, edge = [];
+      for (const way of [-1, 1]) { // bisect from the middle (inside) outward
+        let a = 0, b = 3 * way;
+        for (let n = 0; n < 30; n++) { const m = (a + b) / 2; if (passes(...at(s, m))) a = m; else b = m; }
+        edge.push(a);
+      }
+      // the whole tile's shadow there: its corners' lateral offsets, scaled out to s
+      const lat = [[bi, bj], [bi + 1, bj], [bi, bj + 1], [bi + 1, bj + 1]].map(([x, y]) => {
+        const along = (x - ex) * ux + (y - ey) * uy, side = -(x - ex) * uy + (y - ey) * ux;
+        return side * s / along;
+      });
+      out.push({ s, edge, rock: edge[1] - edge[0], tile: Math.max(...lat) - Math.min(...lat), at: [-1, 1].map((w, k) => [at(s, edge[k] + 0.15 * w), at(s, edge[k] - 0.15 * w)]) });
     }
+    return out;
+  }, [bi, bj, ex, ey]);
+  const probes = [];
+  for (const e of edgesAt) for (const [outside, inside] of e.at) {
+    probes.push({ inside: true, x: inside[0], y: inside[1] });
+    probes.push({ inside: false, x: outside[0], y: outside[1] });
   }
+  r.check(edgesAt.every(e => e.rock < 0.85 * e.tile),
+    `a boulder's shadow is as wide as the rock, narrower than its tile's would be (${edgesAt.map(e => `${e.rock.toFixed(2)} vs ${e.tile.toFixed(2)} tiles, ${(e.s - edgesAt[0].s + 2.5).toFixed(1)} past it`).join("; ")})`);
   const sightOf = await p.evaluate(probes => probes.map(q => {
     const [px, py] = animat.isoProject(q.x, q.y);
     return { sees: senses.canSeePoint(sim.pcWolf, q.x, q.y),
@@ -111,7 +134,7 @@ async function main(browser, r) {
   }), probes);
   const shadowPx = await pixels(p, sightOf.map(s => s.at));
   const okSenses = probes.every((q, k) => sightOf[k].sees === !q.inside);
-  r.check(okSenses, `the wolf's senses: the ground just inside the lines past the boulder's corners is hidden, just outside seen`);
+  r.check(okSenses, `the wolf's senses: the ground just inside the lines past the rock's edges is hidden, just outside seen`);
   const okDrawn = probes.every((q, k) => q.inside ? colourOf(shadowPx[k]) <= 3 : colourOf(shadowPx[k]) > 20);
   r.check(okDrawn, `drawn so: in its shadow without colour, just beside it in colour, along two straight lines ` +
     `(${probes.map((q, k) => `${q.inside ? "in" : "out"} ${colourOf(shadowPx[k])}`).join(", ")})`);
