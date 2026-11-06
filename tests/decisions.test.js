@@ -101,11 +101,11 @@ async function main(browser, r) {
     if (!setup({ deerAt: [4, 4], wolfThinks: false })) return null;
     const [w, d] = [__w, __d];
     const d0 = Math.hypot(d.gx - w.gx, d.gy - w.gy);
-    for (let n = 0; n < 60; n++) sim.internals.tick(); // (picking up speed from a standstill)
+    for (let n = 0; n < 120; n++) sim.internals.tick(); // (turning round, picking up speed from a standstill)
     return { d0, d1: Math.hypot(d.gx - w.gx, d.gy - w.gy), mode: mind.stateOf(d).mode, pose: d.pose };
   })()`);
   r.check(flee && flee.mode === "flee" && flee.d1 > flee.d0 + 3,
-    `a deer flees a wolf it sees (${flee && flee.d0.toFixed(1)} -> ${flee && flee.d1.toFixed(1)} tiles in 1 s, ${flee && flee.pose})`);
+    `a deer flees a wolf it sees (${flee && flee.d0.toFixed(1)} -> ${flee && flee.d1.toFixed(1)} tiles in 2 s, turning round first, ${flee && flee.pose})`);
 
   // 3. a wolf chases a deer in sight
   await fresh();
@@ -246,7 +246,7 @@ async function main(browser, r) {
       const rootsSame = roots;
       const slope = (w.gy - from[1]) / (w.gx - from[0]), facing = w.currentDirection;
       sim.setIntent(w, { dx: 1, dy: 3, gait: "walk" });                  // a new heading
-      sim.internals.tick();
+      for (let n = 0; n < 60; n++) sim.internals.tick();                  // (turned to it: TURNING in sim.js)
       return { slope, facing, rootsSame, rootsNew: roots - rootsSame, facingNew: w.currentDirection,
         E: sim.DIR_E, S: sim.DIR_S };
     } finally { Math.sqrt = sqrt; }

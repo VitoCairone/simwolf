@@ -71,7 +71,7 @@ async function main(browser, r) {
       if (!tile) return null;
       const w = sim.pcWolf;
       w.gx = w.nextGX = tile[0] + 0.5; w.gy = w.nextGY = tile[1] + 0.5; w.stunnedUntil = 0;
-      sim.internals.setCritterIdle(w);
+      sim.internals.setCritterIdle(w); w.hx = w.hy = undefined; // (no heading yet: it takes this one at once, not turning to it)
       sim.setPlayerIntent({ dir: sim.DIR_E, gait: "walk" });
       for (let n = 0; n < 60; n++) sim.internals.tick();
       sim.setPlayerIntent(null); sim.internals.tick();
@@ -86,7 +86,7 @@ async function main(browser, r) {
     if (boulderTile) {
       const w = sim.pcWolf;
       w.gx = w.nextGX = boulderTile[0] + 0.5; w.gy = w.nextGY = boulderTile[1] + 0.5;
-      w.stunnedUntil = 0; sim.internals.setCritterIdle(w);
+      w.stunnedUntil = 0; sim.internals.setCritterIdle(w); w.hx = w.hy = undefined;
       sim.setPlayerIntent({ dir: sim.DIR_E, gait: "walk" });
       let n = 0;
       for (; n < 120 && w.blockedTick !== sim.tickCount - 1; n++) sim.internals.tick();

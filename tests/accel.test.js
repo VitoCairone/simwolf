@@ -23,6 +23,7 @@ async function main(browser, r) {
       const full = S.travelSpeedBySpeciesAndPose[a.species].gallop;
       const back = () => { a.gx = a.nextGX = home[0]; a.gy = a.nextGY = home[1]; a.wind = a.stamina = 1; };
       S.setCritterMoving(a, sim.DIR_E, "gallop");
+      a.hx = a.wantHx; a.hy = a.wantHy; // (already facing that way)
       const pose0 = a.pose;
       let up = 0;
       for (; up < 600 && a.speed < full; up++) { S.tick(); back(); }

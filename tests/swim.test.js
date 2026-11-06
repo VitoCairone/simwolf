@@ -113,7 +113,7 @@ async function main(browser, r) {
     const noRestart = w.targetSpeed === v.swim;
     w.stamina = 1e-9; S.tick();
     const at = [w.gx, w.gy];
-    S.setCritterMoving(w, sim.DIR_W, "walk");
+    S.setCritterMoving(w, sim.DIR_W, "walk"); w.hx = w.wantHx; w.hy = w.wantHy; // (turned that way)
     for (let n = 0; n < 60; n++) S.tick();
     const exhausted = { stamina: w.stamina, speed: w.speed, pose: w.pose, moved: +(at[0] - w.gx).toFixed(2), swim: v.swim };
     w.gx = w.nextGX = start[0]; w.gy = w.nextGY = start[1]; // (back where it was)

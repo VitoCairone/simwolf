@@ -13,7 +13,7 @@
 //  - a female in heat mated by a fertile male conceives; gestation, litter size, the
 //    oldest fertile age and one breeding a year are kept; her womb fills from her body as
 //    the litter grows, and at the birth is its newborns' bodies; she loses a litter while
-//    starving, taking it back into her body; the litter is born beside her, can't walk
+//    starving, taking it back into her body; the litter is born beside her, can't walk (it crawls)
 //    until old enough, and nurses from her
 //  - nursing: an infant suckles only touching its mother, a stomachful over feedingMinS
 //    at least: milk from her body into its stomach, making no biomass,
@@ -283,12 +283,13 @@ async function main(browser, r) {
     const parents = young.every(c => c.parentUids.join() === [f.uid, m.uid].join()) && f.youngUids.length === young.length;
     const kg = young.map(c => c.weightKg);
     const mortal = young.every(c => c.lifespanS > 0 && isFinite(c.lifespanS));
-    // can't walk yet
+    // can't walk yet: it crawls (at 30% of a walk)
     const pup = young[0];
-    sim.setIntent(pup, { dx: 1, dy: 0, gait: "walk" }); mind.ignore(pup);
-    const at = [pup.gx, pup.gy];
-    runUntil(() => false, 1);
-    const stayed = pup.gx === at[0] && pup.gy === at[1];
+    pup.hx = 1; pup.hy = 0; // (facing that way)
+    mind.ignore(pup); sim.setIntent(pup, { dx: 1, dy: 0, gait: "walk" });
+    const at = [pup.gx, pup.gy], crawlPose = new Set();
+    runUntil(() => { crawlPose.add(pup.pose); return false; }, 1);
+    const crawled = { tiles: +(pup.gx - at[0]).toFixed(2), poses: [...crawlPose], walk: sim.gaitSpeed("wolf", "walk") / sim.tempo };
     animat.render();
     const stages = young.map(c => animat.spriteOf(c)?.cls);
     // collision boxes by size; a newborn-sized pup walks straight at its mother until stopped
@@ -382,7 +383,7 @@ async function main(browser, r) {
       tissuesGain: +(sim.biomassKg(f3.tissues) - tissuesS).toFixed(3), alive: sim.isLiveCritter(f3) };
     return { nursing, womb, milkEfficiency: S.milkEfficiency, nurseMinFood: sim.nurseMotherMinFood, ownUseS: 1 / S.SPEEDS.foodFullS.wolf, dueMin: Math.min(...dues), dueMax: Math.max(...dues), g: B.gestationS, wolf: stats(litters.wolf),
       deer: stats(litters.deer), twins: litters.deer.filter(n => n === 2).length / litters.deer.length,
-      n: young.length, near, parents, kg, mortal, boxes, stayed, stages, wolfPreg: !!f.pregnancy };
+      n: young.length, near, parents, kg, mortal, boxes, crawled, stages, wolfPreg: !!f.pregnancy };
   });
   r.check(birth.dueMin >= birth.g.min - 1e-6 && birth.dueMax <= birth.g.max + 1e-6,
     `gestation is ${(birth.dueMin / 60).toFixed(2)}-${(birth.dueMax / 60).toFixed(2)} game minutes, within the wolf's (63 days, gamified)`);
@@ -398,7 +399,9 @@ async function main(browser, r) {
     `the smallest two sizes have collision boxes shrunk to their size (half-widths ${birth.boxes.newborn.toFixed(2)}, ` +
     `${birth.boxes.stage2.toFixed(2)}, then ${birth.boxes.stage3}): a pup walks up to ${birth.boxes.closest.toFixed(2)} tiles ` +
     `from its mother (an adult stops at 0.8)`);
-  r.check(birth.stayed, "a newborn pup can't walk yet");
+  const cr = birth.crawled;
+  r.check(cr.poses.includes("crawl") && !cr.poses.includes("walk") && cr.tiles > 0.6 * 0.3 * cr.walk && cr.tiles <= 0.3 * cr.walk + 1e-9,
+    `a newborn pup can't walk yet: told to walk, it crawls (${cr.poses}), ${cr.tiles} tiles in 1 s (a walk ${cr.walk.toFixed(2)} a second)`);
   const N = birth.nursing;
   r.check(N.apart.on === null && N.apart.food < 0.2 && N.apart.gut === 0 && N.apart.mother >= N.apart.motherOwn - 1e-9,
     `an infant a tile from its mother doesn't suckle (${JSON.stringify(N.apart)})`);

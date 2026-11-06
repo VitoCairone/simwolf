@@ -31,7 +31,7 @@ below any natural background. So both species hear alike; only the source differ
 | deer, dirt | 38 | 48 | 61 |
 | deer, stone | 46 | 56 | 68 |
 
-A wolf stalking: 10 dB under its walk. Splashing (swimming): about 55.
+A wolf stalking: 10 dB under its walk; a newborn crawling (wolf or deer), as quiet. Splashing (swimming): about 55.
 
 Scaled from human footsteps (soft shoes on a hard floor 37-39 dBA at 0.5 m; gravel about
 58 dBA at the ear), by body mass and by how hard each gait strikes the ground (a trot

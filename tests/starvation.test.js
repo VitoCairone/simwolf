@@ -36,7 +36,7 @@ async function main(browser, r) {
       if (wolves.length && deer.every(d => wolves.every(w => Math.hypot(w.gx - d.gx, w.gy - d.gy) > goneTiles))) {
         if (deerGone === null) deerGone = sim.now;
         escaped = deer.length;
-      } else deerGone = null;
+      } else if (wolves.length) deerGone = null; // (the last wolf gone, the deer stay gone)
       most = Math.max(most, live("wolf"));
     }
     const net = S.ledgerNetKg() - net0;

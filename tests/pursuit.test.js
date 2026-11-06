@@ -5,7 +5,8 @@
 //    spare, walking to get it back: each gallop a good stretch, no stuttering in and out
 //    of it), comes up on the deer with wind enough to run it down, and kills it
 //  - once the deer flees, it keeps after that deer: out of sight and hearing, it follows
-//    that deer's trail, at a gallop while its wind lasts
+//    that deer's trail (the deer's own, if it flees before the wolf knows of it), at a
+//    gallop while its wind lasts
 //  - a deer 100 tiles ahead spooked by another wolf flees at once, unseen by this one; the
 //    wolf strides along its trail all the same (a trail laid faster than it trots), and kills it
 // Runs sim.js, senses.js and mind.js in Node (no browser).
@@ -77,7 +78,7 @@ async function main(browser, r) {
       // after the deer fled, out of its sight and hearing
       if (fledAt !== null && ws.mode === "track") {
         after.track++;
-        if (ws.target === deer.uid) after.kept++;
+        if (ws.target === deer.uid || !ws.known.some(k => k.uid === deer.uid)) after.kept++; // (or on its trail, not knowing of it yet)
         if (wolf.pose === "gallop" || wolf.wind < 0.05) after.galloping++;
       }
     }

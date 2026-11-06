@@ -108,6 +108,10 @@ const frameDataBySpeciesAndPose = {
       holdTks: 5, topToShadow: 39 },
     trot: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 },
+    // crawling (a newborn: CRAWLING in sim.js): the walk, at 30% of its pace
+    // TODO: placeholder art, not canonical (admin/design_notes.md): real crawling frames
+    crawl: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
+      holdTks: 17, topToShadow: 39 },
     // stalking: the run, slowly, shaded dark purple
     // TODO: placeholder art, not canonical (admin/design_notes.md): real stalking frames
     stalk: {sheet: "wolf-stalk", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
@@ -144,6 +148,10 @@ const frameDataBySpeciesAndPose = {
     // (columns 10 and 44 are the preview's start and stop of a run, in no cycle)
     walk: {sheet: "deer", nFrames: 10, colZero: 0, frameW: 48, frameH: 41,
       holdTks: 6, topToShadow: 33},
+    // crawling (a newborn: CRAWLING in sim.js): the walk, at 30% of its pace
+    // TODO: placeholder art, not canonical (admin/design_notes.md): real crawling frames
+    crawl: {sheet: "deer", nFrames: 10, colZero: 0, frameW: 48, frameH: 41,
+      holdTks: 20, topToShadow: 33},
     // standing, looking about, turning its head and lowering it, with a pause at each
     idle: {sheet: "deer", cols: deerIdleCols,
       holds: deerIdleCols.map(c => (c === 19 || c === 26 || c === 33 ? 30 : 6)),

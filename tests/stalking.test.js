@@ -5,7 +5,8 @@
 //  - it goes less far on its stamina stalking than trotting (and walking costs none)
 //  - all but silent: a deer just ahead of a wolf, its back to it, hears it trotting, not
 //    stalking; by day or by night, a wolf stalking is heard no farther than 2 tiles off on
-//    any ground, a deer farther than a wolf at any gait, and anything farther by night
+//    any ground (a newborn crawling, wolf or deer, as far), a deer farther than a wolf at
+//    any gait, and anything farther by night
 // Runs sim.js, senses.js and mind.js in Node (no browser).
 
 const path = require("path");
@@ -71,6 +72,7 @@ async function main(browser, r) {
     // the tables
     const T = senses.hearingRangeTiles, grounds = ["grass", "dirt", "stone"];
     out.stalkMax = Math.max(...grounds.flatMap(g => T.wolf[g].stalk));
+    out.crawlSame = ["wolf", "deer"].every(sp => grounds.every(g => T[sp][g].crawl.join() === T.wolf[g].stalk.join()));
     out.deerLouder = grounds.every(g => ["walk", "trot", "gallop"].every(k => T.deer[g][k][0] > T.wolf[g][k][0] && T.deer[g][k][1] > T.wolf[g][k][1]));
     out.nightFarther = ["wolf", "deer"].every(sp => grounds.every(g => Object.values(T[sp][g]).every(([day, night]) => night >= day)));
     return out;
@@ -83,8 +85,8 @@ async function main(browser, r) {
     `stalking goes less far on its stamina than trotting (${(1 / per("stalk")).toFixed(0)} tiles a unit of stamina, trotting ${(1 / per("trot")).toFixed(0)}); walking uses none (${wolf.walk.used})`);
   r.check(heard.trot === "hearing" && heard.stalk === null,
     `a deer 2.2 tiles ahead of a wolf, its back to it, hears it trotting (${heard.trot}), not stalking (${heard.stalk}) (daylight ${heard.light})`);
-  r.check(res.stalkMax <= 2 && res.deerLouder && res.nightFarther,
-    `a wolf stalking is heard ${res.stalkMax} tiles off at most; a deer farther than a wolf at any gait (${res.deerLouder}); anything farther by night (${res.nightFarther})`);
+  r.check(res.stalkMax <= 2 && res.crawlSame && res.deerLouder && res.nightFarther,
+    `a wolf stalking is heard ${res.stalkMax} tiles off at most, a newborn crawling as far (${res.crawlSame}); a deer farther than a wolf at any gait (${res.deerLouder}); anything farther by night (${res.nightFarther})`);
 }
 
 module.exports = { name: "stalking", main };

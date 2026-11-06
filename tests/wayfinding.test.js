@@ -7,6 +7,9 @@
 //  - a wolf kept pacing to and fro over a few tiles comes to know it is trapped, and goes off
 //    to ground it hasn't been (mode "escape")
 //  - a deer penned in by boulders never bumps them, and finds the way out once one is gone
+//  - FORESEEING: a wolf striding along a deer trail that turns sharply by a wall of
+//    boulders (levelled land) slows for the bend in time, galloping before and after it,
+//    never bumping the wall
 // Runs sim.js, senses.js and mind.js in Node (no browser).
 
 const path = require("path");
@@ -119,9 +122,41 @@ async function main(browser, r) {
       out.pen = { s: o.s, modes: [...new Set([...shut.modes, ...o.modes])], out: !inside(), stuns: shut.stuns + o.stuns };
       away(d); clear();
     }
+    // a wolf striding along a minute-old deer trail: 20 tiles east, then sharply north
+    // (-j), a wall of boulders 2 tiles beyond the bend (land levelled, boulders cleared)
+    {
+      const H = sim.gridHeightN, w = grown("wolf"), d = grown("deer", 3);
+      const t0 = S.allLandTiles.find(([i, j]) => {
+        if (i % 3 || j % 3) return false;
+        for (let di = -8; di <= 34; di += 2) for (let dj = -30; dj <= 8; dj += 2) if (sim.getTerrainAt(i + di, j + dj) === "water") return false;
+        return true;
+      });
+      const [a0, b0] = t0, lv = sim.tileCorners(a0, b0)[0];
+      for (let di = -9; di <= 35; di++) for (let dj = -31; dj <= 9; dj++) { S.setTileCorners(a0 + di, b0 + dj, [lv, lv, lv, lv]); S.setBoulder(a0 + di, b0 + dj, false); }
+      const wall = [];
+      for (let dj = -4; dj <= 4; dj++) { S.setBoulder(a0 + 22, b0 + dj); wall.push([a0 + 22, b0 + dj]); }
+      for (const sp of ["deer", "wolf", "death"]) S.scentMarks[sp].clear();
+      const marks = [];
+      for (let k = 1; k <= 20; k++) marks.push([a0 + k, b0]);
+      for (let k = 1; k <= 25; k++) marks.push([a0 + 20, b0 - k]);
+      marks.forEach(([i, j], k) => S.scentMarks.deer.set(i * H + j, [sim.now - 60 - (marks.length - k) / 1.4, d.uid]));
+      put(w, a0 - 4.5 - i0, b0 + 0.5 - j0); w.gx = w.nextGX = a0 - 4.5; w.gy = w.nextGY = b0 + 0.5;
+      d.gx = d.nextGX = d.gy = d.nextGY = -650; // (gone on, far off)
+      S.setFood(w, 0.4); w.wind = w.stamina = 1; mind.forget(w); mind.ignore(w, false);
+      let galloped = { before: false, after: false }, past = false, least = Infinity;
+      const o = run(w, 14, () => {
+        if (w.pose === "gallop") galloped[w.gy < b0 - 3 ? "after" : "before"] = true;
+        if (Math.abs(w.gx - a0 - 20.5) < 3 && Math.abs(w.gy - b0) < 3) least = Math.min(least, w.speed / sim.tempo);
+        return (past = w.gy < b0 - 12);
+      });
+      out.bend = { ...o, galloped, past, least: +least.toFixed(1) };
+      wall.forEach(([i, j]) => S.setBoulder(i, j, false));
+      away(w);
+    }
     return out;
   })()`, c);
-  const { flee, gap, paced, pen } = res;
+  const { flee, gap, paced, pen, bend } = res;
+  const sim_gallop = vm.runInContext("sim.gaitSpeed('wolf', 'gallop') / sim.tempo", c);
   r.check(flee.modes.includes("flee") && flee.stuns === 0 && flee.from > 6,
     `a deer fleeing toward a wall of boulders it sees turns along it, never stunned (${flee.stuns} stuns in ${flee.s} s; ` +
     `${flee.from} tiles from the wolf; ${flee.modes})`);
@@ -131,6 +166,9 @@ async function main(browser, r) {
   r.check(paced.trapped > 0.3 && paced.modes.includes("escape") && paced.far >= 12,
     `a wolf that has paced to and fro over a few tiles a while comes to know it is trapped (up to ${paced.trapped}), ` +
     `and goes off to ground it hasn't been (${paced.far} tiles off in ${paced.s} s; ${paced.modes})`);
+  r.check(bend.past && bend.stuns === 0 && bend.galloped.before && bend.least < 0.6 * sim_gallop,
+    `a wolf striding along a deer trail that turns sharply by a wall slows for the bend in time (to ${bend.least} m/s), ` +
+    `never bumping the wall (${bend.stuns} stuns; galloping before the bend ${bend.galloped.before}, after ${bend.galloped.after}; past it in ${bend.s} s; ${bend.modes})`);
   r.check(pen.out && pen.stuns === 0,
     `a deer penned in by boulders stands or walks about inside never bumping them, and finds the way out once one is taken away ` +
     `(in ${pen.s} s; ${pen.modes}; ${pen.stuns} stuns)`);

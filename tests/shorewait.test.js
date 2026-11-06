@@ -43,7 +43,7 @@ async function main(browser, r) {
     w.hx = w.hy = Math.SQRT1_2; // (facing the deer)
     sim.internals.setFood(w, 0.3); w.wind = w.stamina = 1; d.wind = d.stamina = 1;
     mind.forget(w); mind.ignore(w, false);
-    S.setCritterMoving(d, sim.DIR_W, "walk"); // swimming for the shore (grid -x)
+    S.setCritterMoving(d, sim.DIR_W, "walk"); d.hx = d.wantHx; d.hy = d.wantHy; // swimming for the shore (grid -x)
     let wolfSwam = false, galloped = false, modes = new Set(), spot = null;
     let n = 0;
     for (; n < 6 * 60 && d.pose === "swim"; n++) {
@@ -58,10 +58,11 @@ async function main(browser, r) {
     const out = { wolfSwam, galloped, modes: [...modes].join(","), spot, landedAfterS: n * sim.tempo,
       deerAt: [d.gx, d.gy], wolfAt: [w.gx, w.gy], wolfToDeer: Math.hypot(w.gx - d.gx, w.gy - d.gy) };
     // swimming away from the shore: it looks for the far shore along its way
-    place(d, i + 2.5, j); S.setCritterMoving(d, sim.DIR_E, "walk");
+    place(d, i + 2.5, j); S.setCritterMoving(d, sim.DIR_E, "walk"); d.hx = d.wantHx; d.hy = d.wantHy; // (turned that way)
     let far = null;
     for (let k = 1; k <= 40 && !far; k++) if (sim.isLandTile(i + 2 + k, j)) far = [i + 2.5 + k, j + 0.5];
-    for (let k = 0; k < 20; k++) { S.setCritterMoving(d, sim.DIR_E, "walk"); S.tick(); }
+    // (past the wolf's waitCommitS on the spot it had)
+    for (let k = 0; k < 3.5 / sim.tempo; k++) { S.setCritterMoving(d, sim.DIR_E, "walk"); S.tick(); }
     out.awaySpot = mind.stateOf(w).watch?.spot ?? null; out.far = far; out.awayDeerX = d.gx;
     mind.ignore(w);
     place(w, -60, -60); place(d, -64, -64);

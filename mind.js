@@ -121,8 +121,7 @@ const suckleTouchTiles = 0.1;    // stops this near touching its mother (box to 
 const suckleGraceS = 0.6;        // getting nothing this long (longer than a stun)...
 const suckleRetryS = 5;          // ...it tries again after this long
 const keepCloseShare = 0.5;      // keeping near kin, it comes back to within this share of the distance
-const tendTouchTiles = 0.17;     // a mother tending her infants goes this near each, her box to its middle (a newborn suckles within 0.22)...
-const tendStayS = 3;             // ...and stands there this long
+const broodTiles = 2;            // a mother keeps her young too young to walk within this of her (BROODING)
 const followParentTiles = 3;     // an infant keeps within this of a parent...
 const followWeanedTiles = 10;    // ...a weaned youngster, within this
 const kinSpacingTiles = 1.5;     // coming back to kin, it stops at least this far off
@@ -205,8 +204,6 @@ function memoryOf(a) {
       striding: false,        // galloping along a trail (PACE)
       pursuit: null,          // { uid, tick }: the prey it is running down, perceived then (PACE)
       prowl: null,            // { dx, dy, x, y, until }: its leg, searching for prey (PROWLING)
-      tended: new Map(),      // a mother's infant uid -> the tick she last went to it or nursed it (TENDING)
-      tend: null,             // { uid, since }: the infant she stands by
       mateTrailEnds: new Map(), // ...and a prospective mate's (see social)
       deathEnds: new Map(),   // ...and a carcass's death scent
       watch: null,            // a wolf waiting ashore: { i, j, way (its prey's tile and way), spot }
@@ -278,7 +275,8 @@ function remember(a, m, now) {
       seenTick: now, by: o.by,
       isMale: seen ? o.isMale : old.isMale, infant: seen ? o.infant : old.infant,
       grown: seen ? o.grown : old.grown, mateUid: seen ? o.mateUid : old.mateUid,
-      inHeat: seen ? o.inHeat : old.inHeat, nursingOnMe: !!o.nursingOnMe,
+      inHeat: seen ? o.inHeat : old.inHeat, walks: seen ? o.walks : old.walks, nursingOnMe: !!o.nursingOnMe,
+      littermate: !!o.littermate,
       // perceived since now, unless it was at its last turn too
       sightedTick: before && before.seenTick === m.lastTurn ? before.sightedTick : now });
     if (seen && o.species === a.species && (selfInfant || o.infant)) m.familiar.add(o.uid);
@@ -339,12 +337,14 @@ const straightTiles = 10;
 const pathReachTiles = 24;
 const pathMaxNodes = 3000;
 const pathLookTiles = 6;
+const routeTiles = 12;           // foreseeing its way along a path, as far as this beyond its waypoint
 const replanS = 2;
 const pathSwitchTiles = 3;
 const arriveTiles = 1.5;         // this near where it will stop, it walks
 const feelTiles = 2;
 const headTiles = 16;
 const crowdTiles = 3;
+const firstStepTiles = 0.05;
 const touchKeepS = 1;
 const bumpKeepS = 20;
 const crowdMarginTiles = 0.05;  // room it leaves past another's box
@@ -358,9 +358,11 @@ const dirSteps = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [
 function wayContext(a, m, now, opts) {
   const dry = a.pose !== "swim" && (!!opts.dry || !sim.mayEnterWater(a));
   const crowd = new Set(), others = [];
+  // (a newborn too young to walk crawls in among its littermates: CRAWLING in sim.js)
+  const crawls = !sim.can(a, "walk");
   const through = uid => Array.isArray(opts.through) ? opts.through.includes(uid) : uid === opts.through;
   for (const [uid, k] of m.known) {
-    if (!k.alive || k.seenTick !== now || through(uid)) continue;
+    if (!k.alive || k.seenTick !== now || through(uid) || (crawls && k.littermate)) continue;
     if (Math.abs(k.gx - a.gx) > crowdTiles || Math.abs(k.gy - a.gy) > crowdTiles) continue;
     if (!k.infant) crowd.add(Math.floor(k.gx) * 100000 + Math.floor(k.gy)); // (an infant is too small to bar a tile)
     others.push(k);
@@ -371,7 +373,7 @@ function wayContext(a, m, now, opts) {
     if (!felt?.infant) crowd.add(Math.floor(a.touchedX) * 100000 + Math.floor(a.touchedY));
     others.push({ gx: a.touchedX, gy: a.touchedY, infant: felt?.infant });
   }
-  return { a, m, now, dry, crowd, others, share: senses.sightShare(a), sees: sim.can(a, "see"), known: new Map(), open: new Map(), corners: new Map() };
+  return { a, m, now, dry, crowd, others, through: opts.through, share: senses.sightShare(a), sees: sim.can(a, "see"), known: new Map(), open: new Map(), corners: new Map() };
 }
 
 // Whether the critter knows the lie of the land on tile (i, j).
@@ -470,6 +472,9 @@ function wayClear(c, x, y) {
   const a = c.a, r = a.boxRad, n = Math.max(1, Math.ceil(Math.max(Math.abs(x - a.gx), Math.abs(y - a.gy)) * 5));
   let px = a.gx, py = a.gy, pi = Math.floor(px), pj = Math.floor(py), ph = sim.heightAt(px, py);
   const bi0 = Math.floor(a.gx - r), bi1 = Math.floor(a.gx + r), bj0 = Math.floor(a.gy - r), bj1 = Math.floor(a.gy + r);
+  // (its first step, a tick's at a gallop, as the simulation checks it: grazing another's box)
+  const f = firstStepTiles / Math.max(Math.abs(x - a.gx), Math.abs(y - a.gy), firstStepTiles);
+  if (!crowdClear(c, a.gx + (x - a.gx) * f, a.gy + (y - a.gy) * f)) return false;
   for (let s = 1; s <= n; s++) {
     const sx = a.gx + (x - a.gx) * s / n, sy = a.gy + (y - a.gy) * s / n;
     // (its box over the whole step: from where it stands, it may touch nothing it is against;
@@ -637,6 +642,11 @@ function goTo(a, m, tx, ty, gait, now, opts = {}) {
     }
   }
   const end = p && !p.whole && p.tiles.length ? p.tiles.at(-1) : null;
+  // (the way on along the path, for foreseeing it: FORESEEING)
+  if (p && p.tiles.length) {
+    const wi = Math.floor(way[0]), wj = Math.floor(way[1]), at = p.tiles.findIndex(([i, j]) => i === wi && j === wj);
+    c.route = [way, ...p.tiles.slice(at + 1, at + 1 + routeTiles).map(([i, j]) => [i + 0.5, j + 0.5])];
+  }
   return toward(a, m, way[0] - a.gx, way[1] - a.gy, end ? arrive(end[0] + 0.5, end[1] + 0.5) : arrive(tx, ty), now, c);
 }
 
@@ -738,7 +748,14 @@ function head(a, m, dx, dy, gait, now, opts = {}) {
 // heading); rather than turn right round twice within reverseAgainS, it stands still. Its
 // gait no faster than the way ahead is clear for (as far as it would go before its next
 // turn, with room to spare): coming to a turn of its path, it slows for it, and going
-// faster than a walk with the way not clear even for that, it stops first.
+// faster than a walk with the way not clear even for that, it stops first. Turning to a
+// new heading takes it a while (TURNING in sim.js), going on meanwhile much the way it
+// faces at the speed it has. Faster than a trot, it foresees the way it will go at each
+// gait (FORESEEING: along the path it follows, or to the new heading and on), and takes
+// the fastest whose way keeps off all it knows would stop it, else slows to a walk,
+// turning still; slower, it stops short of what it would bump (TURNING), so the way it
+// faces need only be clear for as far as it goes turning, or it slows to a walk. Turning
+// right round is from the heading it last asked for (or its own, having asked none).
 function toward(a, m, dx, dy, gait, now, c) {
   let vx = dx, vy = dy;
   const k = 2 / Math.max(Math.abs(a.hx), Math.abs(a.hy), 1e-9);
@@ -749,26 +766,77 @@ function toward(a, m, dx, dy, gait, now, c) {
   }
   const prev = m.intent && m.intent.dx !== undefined ? m.intent : { dx: a.hx, dy: a.hy };
   if (keep) { vx = prev.dx; vy = prev.dy; }
-  else if (a.hx !== undefined) {
-    const along = dx * a.hx + dy * a.hy;
-    if (along < 0 && along * along >= 0.5 * (dx * dx + dy * dy)) { // 135 degrees or more
+  else if (prev.dx !== undefined) {
+    const along = dx * prev.dx + dy * prev.dy;
+    if (along < 0 && along * along >= 0.5 * (dx * dx + dy * dy) * (prev.dx * prev.dx + prev.dy * prev.dy)) { // 135 degrees or more
       if (now - m.reversedTick < ticks(reverseAgainS) && m.reversedTick !== now) return IDLE; // (this turn's, asked again: fine)
       m.reversedTick = now;
     }
   }
   if (a.pose !== "swim") {
     const span = Math.max(Math.abs(vx), Math.abs(vy), 1e-9);
+    // the angle to turn, near enough (from its cosine squared: no trig)
+    const dot = a.hx * vx + a.hy * vy, c2 = dot * dot / (vx * vx + vy * vy || 1);
+    const angle = keep ? 0 : Math.PI / 2 * (dot >= 0 ? 1 - c2 : 1 + c2);
+    const walk = sim.gaitSpeed(a.species, "walk"), v0 = a.speed, fast = v0 > 1.05 * sim.gaitSpeed(a.species, "trot");
+    const turning = angle > 0.1 && !fast && v0 > 1.05 * walk ? Math.min(straightTiles, v0 * angle / sim.turnStep(v0)) + 0.3 : 0;
+    if (turning && !wayClear(c, a.gx + a.hx * turning, a.gy + a.hy * turning)) return { dx: vx, dy: vy, gait: "walk" };
+    // (foreseeing its way: along the path it follows, or to (vx, vy) turning to it)
+    const pts = fast ? c.route || [[a.gx + vx, a.gy + vy]] : null;
     let clear = false;
     for (const g of gait === "gallop" ? ["gallop", "trot", "walk"] : gait === "trot" ? ["trot", "walk"] : gait === "stalk" ? ["stalk", "walk"] : [gait]) {
       gait = g;
-      const reach = Math.max(a.speed, sim.gaitSpeed(a.species, g)) * turnTicks * 1.5 + 0.3;
-      if ((clear = wayClear(c, a.gx + vx / span * reach, a.gy + vy / span * reach))) break;
+      const reach = Math.max(v0, sim.gaitSpeed(a.species, g)) * turnTicks * 1.5 + 0.3;
+      if ((clear = wayClear(c, a.gx + vx / span * reach, a.gy + vy / span * reach) && (!pts || sweepClear(c, pts, g)))) break;
     }
+    if (pts && !clear) return { dx: vx, dy: vy, gait: "walk" };
     // (too fast to stop short of what is ahead: it stops first)
-    if (!clear && a.speed > 1.2 * sim.gaitSpeed(a.species, "walk")) return IDLE;
+    if (!clear && v0 > 1.2 * walk) return IDLE;
   }
   if (keep) return prev.gait === gait ? prev : { dx: prev.dx, dy: prev.dy, gait };
   return { dx: vx, dy: vy, gait };
+}
+
+// FORESEEING (FAST TURNS): the way critter c.a will go over the next sweepTicks, at gait
+// g, steering for each of the spots pts in turn (the next once within a tile of one), and
+// straight on past the last (going to another critter, which won't be there by then, only
+// sweepTailTicks more), as the simulation turns and speeds it (TURNING
+// and SPEED CHANGES in sim.js), in steps of sweepStepTicks: whether its box keeps off all
+// it knows would stop it (tileOpen), with sweepMarginTiles to spare, while faster than a
+// trot (slower, it would stop short). No square roots: it steers by the
+// sign of the cross product, and its heading's length is kept 1 by a Newton step.
+const sweepTicks = 90, sweepTailTicks = 40, sweepStepTicks = 2, sweepMarginTiles = 0.3;
+function sweepClear(c, pts, g) {
+  const a = c.a, r = a.boxRad, rm = r + sweepMarginTiles, cos2 = sim.pivotCos * sim.pivotCos;
+  const acc = sim.accelStep(a.species) * sweepStepTicks, vg = sim.gaitSpeed(a.species, g);
+  const walk = sim.gaitSpeed(a.species, "walk"), trot = sim.gaitSpeed(a.species, "trot");
+  const bi0 = Math.floor(a.gx - r), bi1 = Math.floor(a.gx + r), bj0 = Math.floor(a.gy - r), bj1 = Math.floor(a.gy + r);
+  let x = a.gx, y = a.gy, hx = a.hx, hy = a.hy, v = a.speed, t = 0, tail = 0;
+  for (let n = 0; n < sweepTicks; n += sweepStepTicks) {
+    while (t < pts.length && Math.abs(pts[t][0] - x) < 1 && Math.abs(pts[t][1] - y) < 1) t++;
+    if (t === pts.length && (tail += sweepStepTicks) > (c.through ? sweepTailTicks : sweepTicks)) return true;
+    const [px, py] = t < pts.length ? pts[t] : [x + hx, y + hy]; // (past the last: straight on)
+    const dx = px - x, dy = py - y, d2 = dx * dx + dy * dy, dot = hx * dx + hy * dy;
+    const target = dot < 0 || (dot * dot < cos2 * d2 && v <= walk) ? 0 : vg;
+    v = v < target ? Math.min(target, v + acc) : Math.max(target, v - acc);
+    const s = sim.turnStep(v) * sweepStepTicks, c1 = 1 - s * s / 2;
+    let nx, ny;
+    if (dot > 0 && dot * dot >= c1 * c1 * d2) { const q = 1 / dot; nx = dx * q; ny = dy * q; } // (there)
+    else {
+      const sn = (hx * dy - hy * dx >= 0 ? 1 : -1) * (s - s * s * s / 6);
+      nx = hx * c1 - hy * sn; ny = hy * c1 + hx * sn;
+    }
+    const k = 1.5 - 0.5 * (nx * nx + ny * ny);
+    hx = nx * k; hy = ny * k;
+    x += hx * v * sweepStepTicks; y += hy * v * sweepStepTicks;
+    if (v > trot) {
+      for (let i = Math.floor(x - rm); i <= Math.floor(x + rm); i++) for (let j = Math.floor(y - rm); j <= Math.floor(y + rm); j++) {
+        if (i >= bi0 && i <= bi1 && j >= bj0 && j <= bj1) continue; // (against it already)
+        if (!tileOpen(c, i, j, false)) return false;
+      }
+    }
+  }
+  return true;
 }
 
 // TRAPPED: every trapLookS a critter notes where it is (the last trapSamples places) and
@@ -1418,7 +1486,6 @@ function landingAhead(a, k) {
 function nurseOrSuckle(a, m, now) {
   if (!a.isMale && a.youngUids.some(uid => { const k = m.known.get(uid); return k && k.nursingOnMe && k.seenTick === now; })) {
     m.mode = "nurse"; m.plan = null;
-    for (const uid of a.youngUids) if (m.known.get(uid)?.nursingOnMe) m.tended.set(uid, now);
     return m.intent === EAT ? EAT : IDLE;
   }
   if (!sim.isInfant(a) || a.pose === "swim") { m.suckle = null; return null; }
@@ -1451,6 +1518,7 @@ function settle(a, m, now) {
   const s = social(a, m, now);
   if (s) return s;
   m.mode = "calm";
+  if (!sim.can(a, "walk")) return IDLE; // (a newborn lies still by its mother)
   return calm(a, m, now);
 }
 
@@ -1459,10 +1527,11 @@ function settle(a, m, now) {
 //   The young (not grown) keep near a parent (the mother first): an infant within
 //     followParentTiles, a weaned youngster within followWeanedTiles (it hunts or grazes
 //     for itself, and roams around the family).
-//   TENDING: a mother goes the round of her infants (those too young to walk can't come
-//     to her to suckle): to each in turn, right up to it (her box within tendTouchTiles of
-//     its middle, at the nearest of the 8 spots about it with room for her), standing by
-//     it tendStayS (or while it suckles).
+//   A newborn too young to walk (CRAWLING in sim.js) crawls, to its mother to suckle and
+//     back within followParentTiles of her; otherwise it lies still.
+//   BROODING: a mother with young too young to walk (as she sees them) keeps by them: she
+//     goes to the farthest of them while it is beyond broodTiles of her, and otherwise
+//     stands by them (mode "brood"), so the litter crawls to her and suckles together.
 //   A paired critter mates with its partner while she is in heat (she while she is); a
 //     paired male otherwise keeps within pairStayTiles of her, and she within twice that
 //     of him (so one trotting off at the other's speed can't leave the other behind).
@@ -1517,36 +1586,20 @@ function social(a, m, now, romanceOnly = false) {
   }
 
   if (!a.isMale && !romanceOnly) {
-    // TENDING: to the infant she has gone to (or nursed) least lately, nearest of those as
-    // long, right up to it; she stands there tendStayS (it suckles, if hungry), then goes
-    // on to the next
-    let infant = null, best = null;
+    // BROODING: to the farthest of her young too young to walk while beyond broodTiles of
+    // her; else she stands by them (they crawl to her to suckle)
+    let far = null, farD2 = broodTiles * broodTiles, any = false;
     for (const uid of a.youngUids) {
       const k = live(uid);
-      if (!k || !k.infant) continue;
-      const key = [m.tended.get(uid) ?? -Infinity, d2Of(k)];
-      if (!best || key[0] < best[0] || (key[0] === best[0] && key[1] < best[1])) { infant = uid; best = key; }
+      if (!k || k.walks !== false) continue;
+      any = true;
+      const d2 = d2Of(k);
+      if (d2 > farD2) { far = k; farD2 = d2; }
     }
-    if (infant !== null) {
-      m.mode = "family"; m.closing = null;
-      const k = live(infant), reach = a.boxRad + tendTouchTiles;
-      if (Math.abs(k.gx - a.gx) > reach || Math.abs(k.gy - a.gy) > reach) {
-        m.tend = null;
-        // to the nearest of the 8 spots right by it with room for her (others clear of it)
-        const c = wayContext(a, m, now, { through: a.youngUids }), d = reach - 0.02; // (she steps among them)
-        let spot = null, spotD2 = Infinity;
-        for (const [ux, uy] of dirSteps) {
-          const sx = k.gx + ux * d, sy = k.gy + uy * d, s2 = (sx - a.gx) ** 2 + (sy - a.gy) ** 2;
-          if (s2 < spotD2 && tileOpen(c, Math.floor(sx), Math.floor(sy), false) && crowdClear(c, sx, sy)) { spot = [sx, sy]; spotD2 = s2; }
-        }
-        const go = spot ? goTo(a, m, spot[0], spot[1], d2Of(k) > 9 ? "trot" : "walk", now, { through: a.youngUids }) : null;
-        if (go && !(m.path && m.path.failed)) return go;
-        m.tended.set(infant, now); // (no way it knows of: the next)
-      } else {
-        if (!m.tend || m.tend.uid !== infant) m.tend = { uid: infant, since: now };
-        if (now - m.tend.since <= ticks(tendStayS)) return IDLE;
-        m.tended.set(infant, now); m.tend = null;
-      }
+    if (any) {
+      m.mode = "brood"; m.closing = null;
+      const go = far && goTo(a, m, far.gx, far.gy, "walk", now, { through: a.youngUids });
+      return go && !(m.path && m.path.failed) ? go : IDLE;
     }
   }
 
@@ -1748,13 +1801,14 @@ function findNearestLand(a, gx, gy, maxR = Infinity) {
   return best;
 }
 
-// GIVING WAY: a critter at ease (standing still, wandering or keeping near kin)
+// GIVING WAY: a critter at ease (standing still, wandering or keeping near kin; not one
+// suckling or being suckled)
 // that another has just moved into (sim's BUMPED: it feels it) steps aside for yieldS,
 // across the bumper's way, to the side it is on if it can step there; so a family around one of them
 // never pens it in. Then it carries on.
 function giveWay(a, m, intent, now) {
-  const atEase = intent === IDLE || (intent && intent.gait === "idle")
-    || m.mode === "calm" || m.mode === "rest" || m.mode === "family" || m.mode === "yield";
+  const atEase = m.mode !== "nurse" && (intent === IDLE || (intent && intent.gait === "idle")
+    || m.mode === "calm" || m.mode === "rest" || m.mode === "family" || m.mode === "yield");
   if (m.yield && now < m.yield.until && atEase) return m.yield.intent;
   m.yield = null;
   if (!atEase || a.pose === "swim" || !(sim.tickCount - a.bumpedTick <= turnTicks)) return intent;

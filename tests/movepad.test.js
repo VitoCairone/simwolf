@@ -1,4 +1,5 @@
-// Movement pad and arrow-key controls (see #move-pad in index.html).
+// Movement pad and arrow-key controls (see #move-pad in index.html). The wolf turns to a
+// new heading in its time (TURNING in sim.js), so the checks of its heading wait for that.
 
 const { openGame, moveToOpenLand, runStandalone } = require("./helpers");
 
@@ -43,14 +44,14 @@ async function main(browser, r) {
   r.check((dx > 0 && Math.abs(dy) < Math.abs(dx) * 0.2) || after.pose === "idle",
     `pointer right -> wolf moves right on screen (dx ${dx.toFixed(1)}, dy ${dy.toFixed(1)})`);
   await p.mouse.move(pad.x, pad.y - 0.3 * pad.R, { steps: 3 });
-  await p.waitForTimeout(80);
+  await p.waitForTimeout(600);
   const up = await p.evaluate(() => sim.pcWolf.currentDirection === sim.DIR_NW);
   r.check(up, "pointer up -> grid NW (straight up on screen)");
 
   // any heading: the wolf goes exactly the way the pointer is from the center, on screen
   await p.evaluate(() => { sim.pcWolf.stunnedUntil = 0; });
   await p.mouse.move(pad.x + 0.5 * pad.R, pad.y + 0.2 * pad.R, { steps: 3 });
-  await p.waitForTimeout(80);
+  await p.waitForTimeout(700);
   const aim = await p.evaluate(() => {
     const w = sim.pcWolf;
     // the screen direction of its heading (isoProject is linear apart from the offset)
@@ -99,10 +100,10 @@ async function main(browser, r) {
   await p.mouse.move(400, 300, { steps: 3 });
   await p.click("#arrow-mode-toggle"); await p.mouse.move(400, 300);
   r.check(await p.evaluate(() => controls.arrowsMoveWolf), "toggle switches arrows to moving the wolf");
-  await p.keyboard.down("ArrowUp"); await p.waitForTimeout(150);
+  await p.keyboard.down("ArrowUp"); await p.waitForTimeout(600);
   let w = await p.evaluate(() => [sim.pcWolf.pose, sim.pcWolf.currentDirection === sim.DIR_NW]);
   r.check(w[0] === "walk" && w[1], "wolf mode, outside the pad: ArrowUp walks the wolf straight up on screen (grid NW)");
-  await p.mouse.move(pad.x, pad.y + 0.9 * pad.R, { steps: 4 }); await p.waitForTimeout(300);
+  await p.mouse.move(pad.x, pad.y + 0.9 * pad.R, { steps: 4 }); await p.waitForTimeout(1000);
   w = await p.evaluate(() => [sim.pcWolf.pose, sim.pcWolf.currentDirection === sim.DIR_SE]);
   r.check(w[0] === "gallop" && w[1], "wolf mode, inside the pad with ArrowUp held: the pad wins");
   await p.mouse.move(pad.x, pad.y, { steps: 3 }); await p.waitForTimeout(200);

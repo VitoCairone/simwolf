@@ -228,18 +228,18 @@ const seesCreature = seesNow;
 // (sim.clock.light). Worked out from each footfall's loudness at 1 m (estimates, in dBA:
 // a wolf's padded feet walking on grass 30, on dirt 33, on stone 37; a deer's hooves 4 to
 // 9 dB louder; a trot some 9 dB over a walk, a gallop some 20; a wolf stalking 10 dB under
-// a walk), fading 6 dB as the distance doubles, and 5 dB more each 100 m over the ground
+// a walk, and a newborn crawling as quiet), fading 6 dB as the distance doubles, and 5 dB more each 100 m over the ground
 // (admin/hearing.md). Splashing, swimming, is heard as far on any water.
 const hearingRangeTiles = {
   wolf: {
-    grass: { stalk: [0.5, 1],   walk: [1, 3],     trot: [2.5, 8], gallop: [9, 27] },
-    dirt:  { stalk: [0.5, 1.5], walk: [1.5, 4.5], trot: [4, 12],  gallop: [16, 44] },
-    stone: { stalk: [0.5, 2],   walk: [2, 7],     trot: [6, 18],  gallop: [27, 68] },
+    grass: { crawl: [0.5, 1],   stalk: [0.5, 1],   walk: [1, 3],     trot: [2.5, 8], gallop: [9, 27] },
+    dirt:  { crawl: [0.5, 1.5], stalk: [0.5, 1.5], walk: [1.5, 4.5], trot: [4, 12],  gallop: [16, 44] },
+    stone: { crawl: [0.5, 2],   stalk: [0.5, 2],   walk: [2, 7],     trot: [6, 18],  gallop: [27, 68] },
   },
   deer: {
-    grass: { walk: [1.5, 5],    trot: [5, 15],    gallop: [18, 48] },
-    dirt:  { walk: [2.5, 8],    trot: [8, 22],    gallop: [30, 73] },
-    stone: { walk: [6, 18],     trot: [18, 48],   gallop: [57, 123] },
+    grass: { crawl: [0.5, 1],   walk: [1.5, 5],    trot: [5, 15],    gallop: [18, 48] },
+    dirt:  { crawl: [0.5, 1.5], walk: [2.5, 8],    trot: [8, 22],    gallop: [30, 73] },
+    stone: { crawl: [0.5, 2],   walk: [6, 18],     trot: [18, 48],   gallop: [57, 123] },
   },
 };
 const swimHeardTiles = [16, 44];
@@ -315,8 +315,9 @@ function trailsAround(a, species) {
 
 // What critter a perceives now, one snapshot per creature it perceives (the dying and the
 // dead included), by the most telling sense:
-//   { uid, species, alive, gx, gy, vx, vy, swimming, meat, by,
-//     isMale, infant, grown, mateUid, inHeat }   (these last by sight only)
+//   { uid, species, alive, gx, gy, vx, vy, swimming, meat, by, littermate,
+//     isMale, infant, grown, walks, mateUid, inHeat }   (these last by sight only)
+//   littermate: true for one born with it to its mother, by any sense (its scent tells)
 //   by:      "sight", "hearing" or "smell"
 //   vx, vy:  its velocity, tiles a tick (0 by smell)
 //   meat:    for a carcass, the share of its meat left (1 all, 0 only bones)
@@ -350,8 +351,9 @@ function perceive(a) {
         meat: b.carcass ? sim.carcassMeatKg(b) / b.carcassFullKg : undefined, by,
       };
       if (suckling) o.nursingOnMe = true;
+      if (a.parentUids.length && b.parentUids && b.parentUids[0] === a.parentUids[0] && b.birthTime === a.birthTime) o.littermate = true;
       if (by === "sight") {
-        o.isMale = b.isMale; o.infant = sim.isInfant(b); o.grown = sim.isGrown(b);
+        o.isMale = b.isMale; o.infant = sim.isInfant(b); o.grown = sim.isGrown(b); o.walks = sim.can(b, "walk");
         o.mateUid = b.mateUid; o.inHeat = alive && sim.inHeat(b);
       }
       out.push(o);

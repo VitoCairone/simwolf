@@ -1,12 +1,12 @@
 // No critter stuck in place (see WAYFINDING, KEEPING DRY, TIRED SWIMMERS and CALM in mind.js):
 //  - over 20 minutes of play, from two starts, no critter stays within a tile and a half for
 //    a minute while not eating, mating, nursing, resting or waiting ashore for swimming prey
-//    (all by choice) for most of it; none stands (out of its
+//    or brooding (all by choice) for most of it; none stands (out of its
 //    swimming pose) on a water tile for long
 //  - a deer too tired to swim, standing in the shallows with land beside it, walks out
 //  - a wolf penned in by boulders, its mate outside, doesn't stand waiting: it wanders
-//  - TENDING: a mother goes the round of her newborn litter (too young to walk): every one
-//    suckles
+//  - BROODING: a mother with a newborn litter (too young to walk) stays by it, and the
+//    pups crawl to her: every one suckles, at the same time
 // Runs sim.js, senses.js and mind.js in Node (no browser).
 
 const path = require("path");
@@ -43,7 +43,7 @@ async function main(browser, r) {
           else wetSince.delete(a);
           let h = hist.get(a);
           if (!h) hist.set(a, h = []);
-          h.push([a.gx, a.gy, a.eating || !!a.matingWith || a.nursingOn !== null || ["rest", "wait"].includes(mind.stateOf(a)?.mode)]);
+          h.push([a.gx, a.gy, a.eating || !!a.matingWith || a.nursingOn !== null || ["rest", "wait", "brood"].includes(mind.stateOf(a)?.mode)]);
           if (h.length > W) h.shift();
           if (h.length < W) continue;
           const xs = h.map(q => q[0]), ys = h.map(q => q[1]), busy = h.filter(q => q[2]).length;
@@ -108,7 +108,7 @@ async function main(browser, r) {
     }
     out.pen = { idleS: +(idle * sim.tempo).toFixed(1), longestS: +(longest * sim.tempo).toFixed(1), modes: [...modes] };
     for (const [i, j] of rocks) S.setBoulder(i, j, false);
-    // TENDING: a litter born beside its mother, too young to walk: she goes the round of them
+    // BROODING: a litter born beside its mother, too young to walk: they crawl to her
     put(he, i0 + 3.5, j0 + 0.5); S.setFood(he, 1); S.setFood(she, 1);
     put(she, i0 + 0.5, j0 + 0.5); she.lastBredAt = -Infinity; S.conceive(she, he); she.pregnancy.dueAt = sim.now + 1;
     for (const a of [he, she]) { mind.forget(a); mind.ignore(a, false); }
@@ -116,10 +116,18 @@ async function main(browser, r) {
     she.lastBredAt = sim.now; // (not in heat again)
     const pups = sim.allCritters.filter(a => a.parentUids[0] === she.uid);
     pups.forEach(a => { mind.forget(a); mind.ignore(a, false); a.lifespanS = 1e12; });
-    const fed = new Set(), still = pups.map(p => [p.gx, p.gy]);
-    for (let n = 0; n < 120 / sim.tempo; n++) { S.tick(); pups.forEach(p => { if (p.nursingOn !== null) fed.add(p.uid); }); }
-    out.litter = { n: pups.length, fed: fed.size, moved: pups.filter((p, k) => p.gx !== still[k][0] || p.gy !== still[k][1]).length,
-      foods: pups.map(p => +p.food.toFixed(2)) };
+    pups.forEach(p => S.setFood(p, 0.5)); // (hungry)
+    const fed = new Set(), still = pups.map(p => [p.gx, p.gy]), her = [she.gx, she.gy], poses = new Set();
+    let together = 0, herMoved = 0;
+    for (let n = 0; n < 60 / sim.tempo; n++) {
+      S.tick();
+      const now = pups.filter(p => p.nursingOn !== null);
+      now.forEach(p => fed.add(p.uid)); together = Math.max(together, now.length);
+      pups.forEach(p => poses.add(p.pose));
+      herMoved = Math.max(herMoved, Math.hypot(she.gx - her[0], she.gy - her[1]));
+    }
+    out.litter = { n: pups.length, fed: fed.size, together, crawled: pups.filter((p, k) => p.gx !== still[k][0] || p.gy !== still[k][1]).length,
+      poses: [...poses], herMoved: +herMoved.toFixed(1), mode: mind.stateOf(she).mode, foods: pups.map(p => +p.food.toFixed(2)) };
     return out;
   })()`, c);
   const { shallows, pen, litter } = res;
@@ -127,9 +135,10 @@ async function main(browser, r) {
     `a deer too tired to swim (stamina ${shallows && shallows.stamina}), standing in the shallows with land beside it, walks out (after ${shallows && shallows.wetS} s; ${JSON.stringify(shallows)})`);
   r.check(pen.longestS < 30,
     `a wolf penned in by boulders, its mate outside, doesn't stand waiting: it wanders the pen (still ${pen.idleS} s of 60, ${pen.longestS} s at most at a time; ${pen.modes})`);
-  r.check(litter.n >= 2 && litter.moved === 0 && litter.fed === litter.n,
-    `a mother goes the round of her newborn litter, too young to walk (${litter.moved} of ${litter.n} moved): every one suckles in 2 minutes ` +
-    `(${litter.fed}; their meters ${litter.foods.join(", ")})`);
+  r.check(litter.n >= 2 && litter.fed === litter.n && litter.together >= Math.min(litter.n, 3) && litter.poses.includes("crawl")
+    && !litter.poses.includes("walk") && litter.herMoved <= 3,
+    `a mother stays by her newborn litter, too young to walk (she went ${litter.herMoved} tiles at most; ${litter.mode}), and the pups crawl to her ` +
+    `(${litter.crawled} of ${litter.n}; ${litter.poses}): every one suckles in a minute, ${litter.together} at once (their meters ${litter.foods.join(", ")})`);
 }
 
 module.exports = { name: "no critter stuck", main, slow: true };

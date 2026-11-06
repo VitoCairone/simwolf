@@ -33,14 +33,15 @@ async function main(browser, r) {
       const start = sim.allCritters.map(a => [a.gx, a.gy]);
       for (let n = 0; n < 600; n++) sim.internals.tick(); // 10 game-seconds
       const moved = sim.allCritters.filter((a, i) => a.gx !== start[i][0] || a.gy !== start[i][1]).length;
-      sim.setPlayerIntent({ dir: sim.DIR_E, gait: "walk" }); sim.internals.tick();
+      sim.setPlayerIntent({ dir: sim.DIR_E, gait: "walk" });
+      for (let n = 0; n < 60; n++) sim.internals.tick(); // (turned to it: TURNING in sim.js)
       const obeyed = sim.pcWolf.currentDirection === sim.DIR_E && sim.pcWolf.speed > 0;
       ({ ticks: sim.tickCount, critters: sim.allCritters.length, moved, obeyed })`, context);
   } catch (e) {
     r.check(false, `sim.js runs without a browser: ${e.message}`);
   }
   if (alone) {
-    r.check(alone.ticks === 601 && alone.critters > 0,
+    r.check(alone.ticks === 660 && alone.critters > 0,
       `sim.js runs without a browser: ${alone.ticks} ticks, ${alone.critters} critters`);
     r.check(alone.moved === 0, `on its own the simulation decides nothing: ${alone.moved} critters moved in 10 s`);
     r.check(alone.obeyed, "an intent (the player's) moves the wolf with no controls attached");

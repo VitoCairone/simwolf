@@ -264,6 +264,7 @@ const REALISTIC = {
     wolf: {
       walk: 5,        // estimate; no direct figure found
       stalk: 7,       // creeping up on prey, all but silent (a game gait: see EXERTION)
+      crawl: 1.5,     // a newborn too young to walk: 30% of a walk (a game gait: see MOVING)
       trot: 9,        // the travel gait, kept up for hours (Mech & Boitani: 8-9 km/h)
       gallop: 55,     // chasing prey: 50-64 km/h for 1-8 km
       swim: 3.5,      // ~3 mph; reported figures are sparse
@@ -271,6 +272,7 @@ const REALISTIC = {
     },
     deer: {
       walk: 5,
+      crawl: 1.5,
       trot: 15,       // estimate from the elk's sustained "dogtrot"
       gallop: 65,     // an escape burst of about 1 km (top reported 72 km/h)
       swim: 5,        // ~5 mph: deer outswim wolves
@@ -290,9 +292,9 @@ const REALISTIC = {
     },
   },
   // Wind: half of what's missing comes back every this many seconds, by pose.
-  windRefillHalfLifeSByPose: { idle: 45, walk: 60, stalk: 180, trot: 180 },
+  windRefillHalfLifeSByPose: { idle: 45, walk: 60, crawl: 60, stalk: 180, trot: 180 },
   // Stamina: seconds from empty to full, by pose.
-  staminaFullRefillSByPose: { idle: 30000, walk: 120000 },
+  staminaFullRefillSByPose: { idle: 30000, walk: 120000, crawl: 120000 },
   gallopStaminaCostFactor: 2, // galloping uses stamina twice as fast as trotting
   windStartFrac: 0.25,        // wind needed to start a gallop
   staminaStartFrac: 0.1,      // stamina needed to start a trot or gallop
@@ -344,8 +346,8 @@ const scaledTimes = (table, k) => Array.isArray(table) ? table.map(v => v * k)
 const GAMIFIED = {
   name: "gamified",
   travelKph: {
-    wolf: { walk: 5, stalk: 7, trot: 9, gallop: 55, swim: 3.5, swimBurst: 6 },
-    deer: { walk: 5, trot: 15, gallop: 65, swim: 5, swimBurst: 10 },
+    wolf: { walk: 5, crawl: 1.5, stalk: 7, trot: 9, gallop: 55, swim: 3.5, swimBurst: 6 },
+    deer: { walk: 5, crawl: 1.5, trot: 15, gallop: 65, swim: 5, swimBurst: 10 },
   },
   exertion: (() => {
     const ex = scaledTimes(REALISTIC.exertion, 1 / gameExertionSpeedup);
@@ -2397,13 +2399,15 @@ function giveBirth(f) {
 //                          when right beside it (see GRASS)
 //   { gait: "mate", with } stand still, ready to mate with critter uid `with` (see BREEDING)
 //   { dx, dy, gait }       move along grid vector (dx, dy), any length, at walk, stalk, trot or
-//                          gallop, or the best gait wind and stamina allow
+//                          gallop, or the best gait wind and stamina allow (a newborn
+//                          too young to walk crawls: CRAWLING)
 //   { dir, gait }          the same along one of the 8 directions
 // HEADINGS: a moving critter goes along (a.hx, a.hy), a unit vector. An intent's vector
 // is scaled to unit length when it is set (the only square root), and setting the same
 // vector again reuses it. The sprite faces the nearest of 8 directions
 // (a.currentDirection) but keeps its facing while the heading is within facingKeepCos of
-// it, so a heading near a boundary doesn't flip the sprite.
+// it, so a heading near a boundary doesn't flip the sprite. It turns to a new heading in
+// its time (TURNING).
 // STUNNED: a move that fails (another live critter in its way: see COLLISIONS; a boulder,
 // a cliff, the map's edge, or water for a tired critter) leaves the critter at its last legal position,
 // stopped, for stunMinS to stunMaxS; its intent waits. a.blockedTick and a.stunnedUntil
@@ -2481,8 +2485,11 @@ function stun(a) {
 // Gaits: walk, trot and gallop on land, swim in water; and for a wolf, STALKING: between a
 // walk and a trot, all but silent (see HEARING in senses.js), and costing stamina as a
 // trot does, so going a little less far on it (its use is stealth, not saving strength).
-// A deer can't stalk (it walks). A gait (a.pose) changes at once; the speed follows it
-// (SPEED CHANGES).
+// A deer can't stalk (it walks). CRAWLING: a newborn too young to walk (lifeStageAgesS)
+// crawls, whatever gait it is asked: at 30% of a walk, as quiet as a wolf stalking,
+// costing what a walk does (nothing: its reserves refill as walking), and never into the
+// water (it can't swim yet); none older crawls (asked to, it walks). A gait (a.pose)
+// changes at once; the speed follows it (SPEED CHANGES).
 
 // Move along one of the 8 directions (for tests and debugging; intents use
 // setCritterHeading).
@@ -2507,10 +2514,11 @@ function facingFor(a, hx, hy) {
 function setCritterHeading(a, hx, hy, newPose = "walk", facing = undefined) {
   if (!isLiveCritter(a) || isMating(a)) return;
   if (a.stunnedUntil > g_tick) return;
-  if (!_can(a, "walk")) return; // a newborn that can't walk yet stays put
-  const same = a.hx === hx && a.hy === hy && (facing === undefined || facing === a.currentDirection);
-  if (newPose === a.pose && same) return;
+  const same = a.wantHx === hx && a.wantHy === hy && a.wantFacing === facing;
+  if (newPose === a.pose && same && a.targetSpeed > 0) return;
 
+  if (!_can(a, "walk")) newPose = isInWater(a) ? "swim" : "crawl"; // (CRAWLING)
+  else if (newPose === "crawl") newPose = "walk";
   if (isInWater(a)) {
     a.landPose = newPose;
     a.swimBurst = newPose === "gallop" && canUseGait(a, "gallop", a.pose === "swim" && a.swimBurst);
@@ -2529,14 +2537,75 @@ function setCritterHeading(a, hx, hy, newPose = "walk", facing = undefined) {
   if (newPose === a.pose && same && a.targetSpeed > 0 && a.targetSpeed === speed) return;
 
   setPose(a, newPose);
-  a.currentDirection = facing !== undefined ? facing : facingFor(a, hx, hy);
-  a.hx = hx;
-  a.hy = hy;
+  // (it turns to the heading at its turning rate: TURNING)
+  if (!same) a.facingWas = a.currentDirection;
+  a.wantHx = hx; a.wantHy = hy; a.wantFacing = facing;
+  if (a.hx === undefined) { a.hx = hx; a.hy = hy; }
+  if (a.hx === hx && a.hy === hy) a.currentDirection = facing !== undefined ? facing : facingFor(a, hx, hy);
   a.targetSpeed = speed;
+}
+
+// TURNING: a critter turns its heading (a.hx, a.hy) toward the one it was set
+// (a.wantHx, a.wantHy) at no more than turnMaxRadS / (1 + v / turnHalfSpeedMps) radians a
+// second, v its speed (m/s): quickest standing, slower the faster it goes (the same for
+// wolf and deer: about 0.8 s to turn right round standing or walking, 0.8-0.9 s trotting,
+// 2 s galloping, braking as below; at the same speed, as quick in any gait). With the heading it wants more than 90 degrees from
+// its own, it brakes (SPEED CHANGES: toward a stop) and turns the quicker for slowing, then
+// speeds up again: so turning right round costs a slowing and a speeding up, and a small
+// change of heading doesn't. Turning in small steps is no quicker: the limit is on the
+// heading itself, however it is asked. Its facing (a.currentDirection) follows the heading,
+// and ends as it would have turned at once (HEADINGS: kept if near enough the new heading).
+// At a walk or slower, it turns more than 45 degrees on the spot (pivotCos). A swimmer
+// neither brakes nor turns on the spot: it swims on as it turns. Turning, or coming to a
+// stop, at a trot or slower (or swimming), it doesn't step into a boulder, over a cliff
+// or off the map along the way it faces (it feels it there, or sees it close enough to
+// check its step): it stops short, turning on the spot until that way is clear; and it stops short of
+// another critter it would bump, unstunned (though each feels the other: BUMPED). Faster,
+// it bumps (STUNNED).
+// No trig: a step of angle s turns the heading by cos s ~ 1 - s^2/2, sin s ~ s - s^3/6,
+// and its length is kept 1 by a Newton step.
+const turnMaxRadS = 4.2;        // ~240 degrees a second, standing
+const turnHalfSpeedMps = 7.5;   // the rate halves at this speed
+const pivotCos = Math.SQRT1_2;
+// Whether it is turning or coming to a stop at a trot or slower (or swimming): it stops
+// short of what it would bump.
+function steadying(a) {
+  const turning = a.turnedTick === g_tick || (a.wantHx !== undefined && !(a.hx === a.wantHx && a.hy === a.wantHy));
+  return (turning || !(a.targetSpeed > 0)) && a.speed <= travelSpeedBySpeciesAndPose[a.species].trot;
+}
+function pivoting(a, nextGX, nextGY) {
+  if (!steadying(a)) return false;
+  const r = a.boxRad;
+  if (!(nextGX >= r && nextGX < gridWidthN - r && nextGY >= r && nextGY < gridHeightN - r)) return true;
+  if (Math.abs(heightAt(nextGX, nextGY) - heightAt(a.gx, a.gy)) > maxStepLevels) return true;
+  for (let i = Math.floor(nextGX - r); i <= Math.floor(nextGX + r); i++)
+    for (let j = Math.floor(nextGY - r); j <= Math.floor(nextGY + r); j++) if (isBlockedTile(i, j)) return true;
+  return false;
+}
+function turnToward(a) {
+  const wx = a.wantHx, wy = a.wantHy;
+  if (wx === undefined || a.stunnedUntil > g_tick || !isLiveCritter(a) || isMating(a)) return;
+  const hx = a.hx, hy = a.hy;
+  if (hx === wx && hy === wy) return;
+  a.turnedTick = g_tick;
+  const step = turnMaxRadS * tempo / (1 + a.speed / tempo / turnHalfSpeedMps);
+  const dot = hx * wx + hy * wy, cross = hx * wy - hy * wx;
+  if (dot >= 1 - step * step / 2) { // within a step: there, facing as it would have turned at once
+    a.hx = wx; a.hy = wy;
+    if (a.wantFacing !== undefined) a.currentDirection = a.wantFacing;
+    else { a.currentDirection = a.facingWas; a.currentDirection = facingFor(a, wx, wy); }
+    return;
+  }
+  const c = 1 - step * step / 2, sn = (cross >= 0 ? 1 : -1) * (step - step * step * step / 6);
+  let nx = hx * c - hy * sn, ny = hy * c + hx * sn;
+  const k = 1.5 - 0.5 * (nx * nx + ny * ny);
+  a.hx = nx * k; a.hy = ny * k;
+  a.currentDirection = facingFor(a, a.hx, a.hy);
 }
 
 function setCritterIdle(a) {
   if (a.pose === "death" || a.pose === "dead" || isMating(a)) return;
+  a.wantHx = a.wantHy = a.wantFacing = undefined; // (it stops turning)
   a.landPose = "idle";
   a.swimBurst = false;
   if (isInWater(a)) { // nothing stands still in water: it swims on the way it faces
@@ -2556,12 +2625,16 @@ function setCritterIdle(a) {
 // SPEEDS.accelToGallopS. A critter told to stop keeps its moving pose until it has
 // stopped. Stopping dead (a stun, death) is immediate.
 function changeSpeed(a) {
-  const target = a.targetSpeed ?? 0;
+  // (turning right round, it brakes; at a walk or slower, turning more than 45 degrees, it
+  // turns on the spot; swimming, it swims on as it turns: TURNING)
+  const dot = a.wantHx !== undefined && a.pose !== "swim" ? a.hx * a.wantHx + a.hy * a.wantHy : 1;
+  const braking = dot < 0 || (dot < pivotCos && a.speed <= travelSpeedBySpeciesAndPose[a.species].walk);
+  const target = braking ? 0 : a.targetSpeed ?? 0;
   if (a.speed !== target) {
     const step = accelBySpecies[a.species];
     a.speed = a.speed < target ? Math.min(target, a.speed + step) : Math.max(target, a.speed - step);
   }
-  if (a.speed === 0 && target === 0 && a.pose !== "idle" && a.pose !== "swim" && !isMating(a) && isLiveCritter(a)) {
+  if (a.speed === 0 && !(a.targetSpeed > 0) && a.pose !== "idle" && a.pose !== "swim" && !isMating(a) && isLiveCritter(a)) {
     a.nextGX = a.gx;
     a.nextGY = a.gy;
     setPose(a, "idle");
@@ -2572,7 +2645,7 @@ function changeSpeed(a) {
 //   wind     limits galloping: drains while galloping (or sprinting in water) and refills
 //            otherwise, quickly at first, faster the more restful the gait
 //   stamina  limits trotting: drains while trotting (or stalking, as fast), galloping and
-//            swimming, and refills slowly while idle or walking
+//            swimming, and refills slowly while idle, walking or crawling
 // A gait can only be started with some reserve in hand (windStartFrac,
 // staminaStartFrac), so critters don't flicker in and out of it near empty; once in it,
 // they keep going until the reserve runs out.
@@ -2610,9 +2683,9 @@ function applyExertion(a) {
 
   // out of a reserve: the next gait down
   if (a.pose === "gallop" && (a.wind <= 0 || a.stamina <= 0)) {
-    setCritterHeading(a, a.hx, a.hy, "trot");
+    setCritterHeading(a, a.wantHx ?? a.hx, a.wantHy ?? a.hy, "trot", a.wantFacing);
   } else if ((a.pose === "trot" || a.pose === "stalk") && a.stamina <= 0) {
-    setCritterHeading(a, a.hx, a.hy, "walk");
+    setCritterHeading(a, a.wantHx ?? a.hx, a.wantHy ?? a.hy, "walk", a.wantFacing);
   } else if (a.pose === "swim" && a.targetSpeed > 0) {
     if (a.swimBurst && (a.wind <= 0 || a.stamina <= 0)) a.swimBurst = false;
     a.targetSpeed = swimSpeed(a);
@@ -2653,6 +2726,7 @@ function isWaterAt(gx, gy, boxRad = critterBoxRad) {
 }
 
 function mayEnterWater(a) {
+  if (!_can(a, "walk")) return false; // (CRAWLING)
   return a.stamina >= SPEEDS.swimMinStaminaFrac || (a === pcWolf && playerHasControl());
 }
 
@@ -2677,7 +2751,7 @@ function updateTerrainPose(a) {
     const resume = a.landPose || "walk";
     if (a.targetSpeed > 0 && resume !== "idle") {
       setPose(a, null); // so setCritterHeading applies the gait and its checks
-      setCritterHeading(a, a.hx, a.hy, resume);
+      setCritterHeading(a, a.wantHx ?? a.hx, a.wantHy ?? a.hy, resume, a.wantFacing);
     } else {
       setCritterIdle(a);
     }
@@ -2756,9 +2830,10 @@ function updateAllCritters() {
   allCritters.forEach(a => {
     // done scrambling up a bank: back to the gait it was asked for
     if (a.climbingUntil === g_tick && a.pose === "walk" && a.landPose !== "walk" && a.targetSpeed > 0)
-      setCritterHeading(a, a.hx, a.hy, a.landPose);
+      setCritterHeading(a, a.wantHx ?? a.hx, a.wantHy ?? a.hy, a.landPose, a.wantFacing);
     applyExertion(a);
     if (a.pose === "swim" && a.targetSpeed === 0 && !(a.stunnedUntil > g_tick)) a.targetSpeed = swimSpeed(a);
+    turnToward(a);
     changeSpeed(a);
 
     if (a.speed === 0) {
@@ -2769,6 +2844,7 @@ function updateAllCritters() {
 
     const nextGX = a.gx + a.hx * a.speed;
     const nextGY = a.gy + a.hy * a.speed;
+    if (pivoting(a, nextGX, nextGY)) { a.speed = 0; a.nextGX = a.gx; a.nextGY = a.gy; return; }
     const r = a.boxRad;
     if (nextGX >= r && nextGX < gridWidthN - r && nextGY >= r && nextGY < gridHeightN - r) {
       if (Math.abs(heightAt(nextGX, nextGY) - heightAt(a.gx, a.gy)) > maxStepLevels) {
@@ -2824,8 +2900,10 @@ function updateAllCritters() {
 // TODO: kill only when the wolf bites, front-on.
 function moveAllTogether(movers) {
   const allColliders = movers;
-  // (a mother and her young too young to walk don't collide: she steps among them)
-  const litter = (p, q) => q.parentUids[0] === p.uid && !_can(q, "walk");
+  // (a mother and her young too young to walk don't collide: she steps among them, and
+  // they crawl in among each other to her)
+  const litter = (p, q) => !_can(q, "walk") && (q.parentUids[0] === p.uid
+    || (!_can(p, "walk") && p.parentUids[0] !== undefined && p.parentUids[0] === q.parentUids[0]));
   const collidePairs = findCollidingPairs(allColliders).filter(([i, j]) => i === -1
     || !(litter(allColliders[i], allColliders[j]) || litter(allColliders[j], allColliders[i])));
   const didCollide = {};
@@ -2871,7 +2949,8 @@ function moveAllTogether(movers) {
     }
     if (thing.nextGX === thing.gx && thing.nextGY === thing.gy) return;
     if (didCollide[idx]) {
-      stun(thing);
+      if (steadying(thing)) { thing.speed = 0; thing.nextGX = thing.gx; thing.nextGY = thing.gy; } // (TURNING)
+      else stun(thing);
     } else {
       thing.gx = thing.nextGX;
       thing.gy = thing.nextGY;
@@ -3172,6 +3251,9 @@ return {
   // the square startNearTiles a side about it (for tests: where to look for features)
   get startNear() { const m = (startNearTiles - startTiles) / 2; return startArea && { i0: startArea.i0 - m, j0: startArea.j0 - m, i1: startArea.i1 + m, j1: startArea.j1 + m }; },
   gaitSpeed: (species, gait) => travelSpeedBySpeciesAndPose[species][gait] || 0, // tiles a tick
+  turnStep: v => turnMaxRadS * tempo / (1 + v / tempo / turnHalfSpeedMps), // radians a tick at v tiles a tick (TURNING)
+  accelStep: species => accelBySpecies[species], // tiles a tick, a tick (SPEED CHANGES)
+  pivotCos,
   isBlockedTile, isLandTile, isWaterAt, canStepTo, mayEnterWater, obstacleHeightAt, sightHeightAt, centerHeightAt, isLiveCritter,
   boulderRockAt, obstacleAcross, boulderRocks,
   // scent and wind

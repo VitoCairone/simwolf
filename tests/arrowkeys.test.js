@@ -46,6 +46,7 @@ async function main(browser, r) {
       const [i, j] = window.__openTile;
       sim.pcWolf.gx = sim.pcWolf.nextGX = i + 0.5; sim.pcWolf.gy = sim.pcWolf.nextGY = j + 0.5; sim.pcWolf.stunnedUntil = 0;
       sim.internals.setCritterIdle(sim.pcWolf); sim.pcWolf.speed = 0; animat.render(); // (placed: standing)
+      sim.pcWolf.hx = sim.pcWolf.hy = undefined; // (and no heading yet: it takes the keys' at once, not turning to it)
     });
     const before = await p.evaluate(() => animat.isoProject(sim.pcWolf.gx, sim.pcWolf.gy));
     for (const k of keys) await p.keyboard.down(k);
@@ -67,7 +68,7 @@ async function main(browser, r) {
   await p.waitForTimeout(200);
   r.check(await p.evaluate(() => sim.pcWolf.targetSpeed === 0), // stopping (it slows in its time)
     "Left+Right together cancel: the wolf stands still");
-  await p.keyboard.down("ArrowUp"); await p.waitForTimeout(200);
+  await p.keyboard.down("ArrowUp"); await p.waitForTimeout(700); // (turned that way: TURNING in sim.js)
   r.check(await p.evaluate(() => sim.pcWolf.pose === "walk" && sim.pcWolf.currentDirection === sim.DIR_NW),
     "Left+Right+Up: the horizontal keys cancel, the wolf walks straight up");
   for (const k of ["ArrowLeft", "ArrowRight", "ArrowUp"]) await p.keyboard.up(k);

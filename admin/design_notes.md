@@ -72,6 +72,9 @@ art from them.
   wolf's land sheet shaded 20% toward dark purple (`spritecraft/make_stalk_sheets.py`),
   its run frames played slowly. A stopgap until real stalking frames (crouched, head low)
   are drawn.
+- **Crawling.** A newborn too young to walk crawls on its walk frames played at 30% of
+  their pace (`crawl` in animat.js, wolf and deer alike). A stopgap until real crawling
+  frames (belly low, legs splayed) are drawn.
 
 - **Shore corners.** `images/shore-outer.png` (outer corners, water off a corner of land)
   and `images/shore-inner.png` (interior corners, water in a notch of land) are made from
