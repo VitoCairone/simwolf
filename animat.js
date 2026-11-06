@@ -108,6 +108,10 @@ const frameDataBySpeciesAndPose = {
       holdTks: 5, topToShadow: 39 },
     trot: {sheet: "wolf", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
       holdTks: 5, topToShadow: 39 },
+    // stalking: the run, slowly, shaded dark purple
+    // TODO: placeholder art, not canonical (admin/design_notes.md): real stalking frames
+    stalk: {sheet: "wolf-stalk", nFrames: 8, colZero: 0, frameW: 64, frameH: 64,
+      holdTks: 6, topToShadow: 39 },
     gallop: wolfRun,
     idle: {sheet: "wolf", nFrames: 4, colZero: 8, frameW: 64, frameH: 64,
       holdTks: 12, topToShadow: 39 },
@@ -315,6 +319,7 @@ const IMG = "./images/";
 // YOUNG STAGES); the frame sizes are frameDataBySpeciesAndPose's.
 const sheetImages = {
   "wolf":         { adult: "wolf-land.png",    young: "young/wolf-land-stage" },
+  "wolf-stalk":   { adult: "wolf-stalk.png",   young: "young/wolf-stalk-stage" }, // TODO: placeholder art (admin/design_notes.md)
   "wolf-swim":    { adult: "wolf-swim.png",    young: "young/wolf-swim-stage" },
   "deer":         { adult: "stag-land.png",    hind: "hind-land.png",    young: "young/hind-land-stage" },
   "deer-swim":    { adult: "stag-swim.png",    hind: "hind-swim.png",    young: "young/hind-swim-stage" },

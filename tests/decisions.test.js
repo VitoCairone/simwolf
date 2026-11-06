@@ -85,7 +85,7 @@ async function main(browser, r) {
     const put = (d, u, v) => { d.gx = w.gx + (u + v) / 2; d.gy = w.gy + (v - u) / 2; };
     put(d1, 0.99 * W, 0); put(d2, 1.01 * W, 0); put(d3, 0, 0.99 * H); put(d4, 0, -1.01 * H); put(d5, -0.5 * W, 0);
     // the rectangle and field of view alone (line of sight is tested in senses.test.js)
-    senses.use.lineOfSight = false;
+    senses.use.lineOfSight = false; senses.forgetSight(w); // (nothing seen before kept in sight)
     const seen = senses.perceive(w).filter(o => o.by === "sight").map(o => o.uid);
     senses.use.lineOfSight = true;
     return { W, H, side: seen.includes(d1.uid), pastSide: seen.includes(d2.uid),
@@ -179,7 +179,8 @@ async function main(browser, r) {
   r.check(wolfMem && !wolfMem.seesDeer && (wolfMem.mode === "chase" || wolfMem.mode === "track") && east > 1,
     `out of sight, a wolf keeps after a deer, the way it was heading (or along its trail) (moved ${east && east.toFixed(1)} tiles east in 1 s, ${wolfMem && wolfMem.mode}; after ${JSON.stringify(wolfMem && wolfMem.chasing)})`);
   // (a hungry wolf may then follow the trails deer left on the map: see senses.test.js)
-  r.check(wolfMem && (wolfMem.modeLater === "calm" || wolfMem.modeLater === "track"),
+  // (then, hungry, it follows other trails about, or prowls: see hunting.test.js)
+  r.check(wolfMem && ["calm", "track", "prowl"].includes(wolfMem.modeLater),
     `...and gives up the chase later (22 s on: ${wolfMem && wolfMem.modeLater})`);
 
   // 6. two deer about as near, in opposite directions: the wolf picks the one it faces
@@ -303,9 +304,10 @@ async function main(browser, r) {
     }
     return byMode;
   });
-  const calmGallops = Object.entries(gallops).filter(([mode]) => mode !== "chase" && mode !== "track" && mode !== "flee");
+  // (escaping a trap while fleeing, it gallops: see TRAPPED in mind.js)
+  const calmGallops = Object.entries(gallops).filter(([mode]) => !["chase", "track", "flee", "escape"].includes(mode));
   r.check(calmGallops.length === 0,
-    `galloping only to chase (or track) or flee (critter-ticks galloping in a minute: ${JSON.stringify(gallops)})`);
+    `galloping only to chase (or track) or flee (or escape fleeing) (critter-ticks galloping in a minute: ${JSON.stringify(gallops)})`);
 
   // PACING: grass under a boulder, and a paired stag keeping near his hind
   await fresh();
@@ -401,13 +403,13 @@ async function main(browser, r) {
     // the wolf 1.5 tiles west of it, out of reach, hungry
     put(w, B[0] - 2, B[1] + 0.5); S.setFood(w, 0.3); mind.forget(w); mind.ignore(w, false);
     const meat0 = sim.carcassMeatKg(d);
-    let ate = false, n = 0, detour = false;
+    let ate = false, n = 0, pathed = false;
     for (; n < 10 / sim.tempo && !ate; n++) {
-      S.tick(); ate = w.eating && sim.carcassMeatKg(d) < meat0; detour = detour || !!mind.stateOf(w).detour;
+      S.tick(); ate = w.eating && sim.carcassMeatKg(d) < meat0; pathed = pathed || !!mind.stateOf(w).path;
     }
-    return { ate, detour, s: +(n * sim.tempo).toFixed(1), d: +Math.hypot(w.gx - d.gx, w.gy - d.gy).toFixed(2) };
+    return { ate, pathed, s: +(n * sim.tempo).toFixed(1), d: +Math.hypot(w.gx - d.gx, w.gy - d.gy).toFixed(2) };
   });
-  r.check(byRock && byRock.ate && !byRock.detour,
+  r.check(byRock && byRock.ate && !byRock.pathed,
     `a hungry wolf goes straight to a carcass beside a boulder and eats it (${JSON.stringify(byRock)})`);
 
   // GIVING WAY: a deer standing in another's path, bumped, steps aside, and the other walks

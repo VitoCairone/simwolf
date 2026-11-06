@@ -45,7 +45,8 @@
 // again only with room in its stomach.
 // THIRST: its water meter, a.water (sim.js, BODY: WATER). It drinks while thirsty (see
 // thirst).
-// Every move goes through steer, which finds a way round obstacles.
+// Every move goes through goTo (WAYFINDING): to a spot, round what it knows is in the way.
+// A critter going round in a small patch escapes it (TRAPPED).
 
 const mind = (() => {
 
@@ -75,8 +76,6 @@ const grazeGiveUpS = 4;          // gives up on grass it has got no nearer to in
 const grazeAvoidS = 60;          // ...and leaves it be this long
 const wolfFamishedHungerAbove = 0.5; // a wolf this hungry (1 - its food meter)...
 const wolfFamishedGutBelow = 0.5; // ...its stomach below this, eats or hunts before all else
-const wolfDashWindAbove = 0.5;   // after prey, it gallops with wind above this and stamina
-                                 // above its food meter (DASHING)
 const wolfHuntBelow = 0.75;      // a wolf hunts only with its food meter below this...
 const wolfHuntGutBelow = 0.25;   // ...and its stomach below this
 const wolfFullAt = 0.99;         // eats until it is this full (or its stomach is)...
@@ -84,7 +83,9 @@ const wolfFeedBelow = 0.9;       // ...and goes back to a carcass only below thi
 const wolfFeedGutBelow = 0.5;    // ...with its stomach below this
 const feedQueueTiles = 3;        // blocked this near a carcass, a wolf waits its turn...
 const feedWaitS = 1;             // ...this long, then tries again
-const wolfForgetPreyS = 20;      // gives up on prey it last saw this long ago
+const outOfReachS = 30;          // leaves be a carcass it knows no way to this long
+const carcassKeepS = 10 * 60;    // remembers a carcass with meat on it this long since it last perceived it
+const wolfForgetPreyS = 20;      // gives up on prey it last perceived (or smelled the trail of) this long ago
 const trailEndKeepS = 4 * 3600;  // remembers a trail's dead end this long (longer than any trail lasts)
 const wolfLeadMaxS = 2;          // expects unseen prey to carry on this long, at most
 const wolfCommitS = 5;           // keeps to a chosen prey at least this long
@@ -92,6 +93,12 @@ const wolfSimilarRatio = 2;      // deer within this of the nearest's squared di
                                  // about as near: choose among them by facing
 const wolfSwitchRatio = 0.5;     // after wolfCommitS, changes prey only for one this much
                                  // nearer (squared distance)
+const wolfRushTiles = 30;        // PACE: gallops at prey unaware of it this near...
+const wolfFleeingShare = 0.7;    // ...or fleeing it (moving at this share of a deer's trot)...
+const wolfPursueS = 10;          // ...perceived as lately as this
+const wolfStalkTrailS = 30;      // on a deer trail fresher than this, it stalks...
+const wolfStrideWindFrom = 0.8;  // ...on an older one gallops from this much wind...
+const wolfStrideWindTo = 0.6;    // ...down to this, then walks until it has that much again
 const shoreWaitTiles = 1;        // a wolf this near its spot on the shore waits there
 const waitCommitS = 3;           // ...and keeps to that spot at least this long
 const shoreLookAheadTiles = 40;  // looks this far along a swimmer's way for its landing
@@ -114,17 +121,19 @@ const suckleTouchTiles = 0.1;    // stops this near touching its mother (box to 
 const suckleGraceS = 0.6;        // getting nothing this long (longer than a stun)...
 const suckleRetryS = 5;          // ...it tries again after this long
 const keepCloseShare = 0.5;      // keeping near kin, it comes back to within this share of the distance
-const motherStayTiles = 4;       // a mother keeps within this of her infants
+const tendTouchTiles = 0.17;     // a mother tending her infants goes this near each, her box to its middle (a newborn suckles within 0.22)...
+const tendStayS = 3;             // ...and stands there this long
 const followParentTiles = 3;     // an infant keeps within this of a parent...
 const followWeanedTiles = 10;    // ...a weaned youngster, within this
 const kinSpacingTiles = 1.5;     // coming back to kin, it stops at least this far off
+const kinRetryS = 10;            // gives up going to kin it knows no way to this long
 const yieldS = 0.8;              // bumped while standing, it steps aside this long
 const kinLostTiles = 2;          // kin not where last seen, this near: lost until seen again
 const roamS = 40;                // an unpaired grown critter roams one way up to this long
+const calmRoamStamina = 0.5;     // ...with stamina above this
+const calmRestShare = 0.1;       // at ease and fully rested, it rests this share of its plans
 const playerHandoverS = 2;       // after the player lets go, the wolf waits this long
-const avoidBlockedS = 0.5;       // after a blocked move, avoid that direction this long
 const keepHeadingCos2 = 0.97;    // keep the current heading within 10 degrees (cos^2)
-const detourS = 3;               // keep going round an obstacle the same way this long
 const reverseAgainS = 1;         // don't turn right round again sooner than this
 const drinkBelow = 0.8;           // goes to drink with its water meter below this (some 3%
                                   // of its weight lost: estimate)...
@@ -183,13 +192,21 @@ function memoryOf(a) {
       familiar: new Set(),    // uids of its species met while it or they were infants
       court: null,            // the critter it is courting: { uid, since }
       refused: new Map(),     // uid -> courting it again only after this tick
-      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | drink | ashore | court | seek | mate | family | nurse | yield
+      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | drink | ashore | court | seek | mate | family | nurse | yield | escape | prowl | rest
       yield: null,            // giving way: { until, intent } (see giveWay)
       target: null,           // a wolf's prey (uid)
       targetUntil: -Infinity, // ...kept until this tick at least
       flee: null,             // a deer's way to flee: { dx, dy, until, since }
       searching: false,       // a wolf has reached where its unseen prey should be
       trailEnds: new Map(),   // deer uid -> the game time its trail was given up at (see track)
+      trackMark: null,        // { species, t, laid, tick }: the mark it is going to (TRACKING)
+      outOfReach: new Map(),  // carcass uid -> the tick until which it leaves it be (WOLVES)
+      preyTrail: null,        // { uid, tick }: its prey's trail, followed lately (see HUNTING)
+      striding: false,        // galloping along a trail (PACE)
+      pursuit: null,          // { uid, tick }: the prey it is running down, perceived then (PACE)
+      prowl: null,            // { dx, dy, x, y, until }: its leg, searching for prey (PROWLING)
+      tended: new Map(),      // a mother's infant uid -> the tick she last went to it or nursed it (TENDING)
+      tend: null,             // { uid, since }: the infant she stands by
       mateTrailEnds: new Map(), // ...and a prospective mate's (see social)
       deathEnds: new Map(),   // ...and a carcass's death scent
       watch: null,            // a wolf waiting ashore: { i, j, way (its prey's tile and way), spot }
@@ -219,8 +236,17 @@ function memoryOf(a) {
       search: null,           // searching for water: { dx, dy, until }
       lookFrom: null,         // ...where it began to look, [gx, gy]
       plan: null,             // a calm critter's plan: { kind, until, intent, ... }
-      avoid: new Array(8).fill(-Infinity), // by direction: avoid until this tick
-      detour: null,           // going round an obstacle: { side, until, reversed }
+      rocks: new Set(),       // tile keys of the boulders it has seen (WAYFINDING)
+      bumps: new Map(),       // ...and of those it has bumped into, to when it keeps them
+      wet: new Set(),         // ...and of water it has seen, keeping dry
+      path: null,             // the path it is following: { tx, ty (its spot), dry, made (tick), tiles, failed }
+      heading: null,          // heading one way: { dx, dy, tx, ty (the spot it heads for) }
+      visits: new Map(),      // square key -> { s (time spent there), at (game time) } (TRAPPED)
+      trapSeen: [],           // ...where it was every trapLookS: [gx, gy, path so far]
+      trapPath: 0,            // ...how far it has gone, tiles
+      trapLook: -Infinity,    // ...the tick it last looked
+      trapped: 0,             // ...how trapped it is, 0..1
+      escape: null,           // ...escaping: { tx, ty, until }
       reversedTick: -Infinity,
       lastTurn: -Infinity,
       intent: null,           // its last decision
@@ -235,10 +261,10 @@ function memoryOf(a) {
 // MEMORY: the latest perception of every creature a critter has seen, heard or smelled
 // (k.seenTick, by k.by: where, which way and how fast, whether alive, swimming, the meat
 // left on a carcass, and, from when it was last seen, its sex, age and partner and whether
-// in heat), kept after losing track of it until too old to matter; its kin's (partner,
-// parents, young) for good. A carcass it would smell (within senses.sniffTiles) but
-// doesn't is forgotten: it is gone. Up close it smells whether any meat is left, so it
-// stops going to a bare one.
+// in heat), kept after losing track of it until too old to matter (a carcass with meat
+// on it, carcassKeepS); its kin's (partner, parents, young) for good. A carcass it would
+// smell (within senses.sniffTiles) but doesn't is forgotten: it is gone. Up close it
+// smells whether any meat is left, so it stops going to a bare one.
 // WESTERMARCK: it never forgets those of its species it met while it or they were
 // infants (m.familiar), and never mates with them.
 function remember(a, m, now) {
@@ -259,7 +285,8 @@ function remember(a, m, now) {
   }
   const longest = ticks(Math.max(deerAlarmS, wolfForgetPreyS)), sniff2 = senses.sniffTiles ** 2;
   for (const [uid, k] of m.known) {
-    if (now - k.seenTick > longest && !isKin(a, uid)) m.known.delete(uid);
+    const carcass = !k.alive && k.meat > 0;
+    if (now - k.seenTick > (carcass ? ticks(carcassKeepS) : longest) && !isKin(a, uid)) m.known.delete(uid);
     // a carcass not smelled where it was, up close, is gone
     else if (senses.use.smell && !k.alive && k.species === "deer" && k.seenTick !== now
       && (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2 <= sniff2) m.known.delete(uid);
@@ -277,99 +304,549 @@ function expectedAt(k, now) {
   return [k.gx + k.vx * t, k.gy + k.vy * t];
 }
 
-// STEERING: the way to go to head along (dx, dy): a grid vector, KEEP (carry on as it
-// is), or null if boxed in. Straight the wanted way if it can (sim.canStepTo); otherwise
-// round by the 8 directions, always turning the same way, so it slides along a wall
-// instead of dithering. A dead end turns it right round, and it keeps going back out for
-// the rest of the detour. It avoids a direction it was just blocked in (by a critter,
-// say), and keeps its heading while within keepHeadingCos2 of the wanted way, since each
-// new heading costs the simulation a square root. Carrying on needs one tile clear
-// ahead, turning needs two, so it doesn't flip between ways; but going to a spot (goal:
-// (dx, dy) is the way there), it looks no further than the spot, so what lies beyond a
-// carcass doesn't keep it away. With dry, it also keeps out of the water (while on land).
-const KEEP = "keep";
-function steer(a, m, dx, dy, now, dry = false, goal = false) {
-  const moving = a.targetSpeed > 0;
-  const keepDry = dry && a.pose !== "swim";
-  const bin = (vx, vy) => sim.getDir(vx, vy, a.currentDirection || 0);
-  if (a.blockedTick > m.lastTurn) m.avoid[bin(a.hx, a.hy)] = now + ticks(avoidBlockedS);
-  // Whether `tiles` ahead along (vx, vy) is clear. Scaling the vector by its larger part
-  // (no square root) looks 1 to 1.4 times that far.
-  const clear = (vx, vy, tiles) => {
-    if (m.avoid[bin(vx, vy)] > now) return false;
-    const k = tiles / Math.max(Math.abs(vx), Math.abs(vy));
-    const x = a.gx + vx * k, y = a.gy + vy * k;
-    return sim.canStepTo(a, x, y) && !(keepDry && sim.isWaterAt(x, y));
+// WAYFINDING: a critter going to a spot (goTo) goes straight for it while the way ahead is
+// clear as far as it knows (wayClear: straightTiles ahead, or to the spot); otherwise along
+// a path (findPath: A* over the tiles within pathReachTiles of it, to the spot, or as near
+// it as that reaches) round what it knows is in the way: boulders, ledges it can't step up
+// or down, water while it keeps dry (or hasn't the stamina to go in), and critters within
+// crowdTiles that it perceives now or touched within touchKeepS (where it stood then; see
+// TOUCHED in sim.js: the path round their tiles, but an infant's, too small to bar one),
+// but the one it is going to, `through` (a uid, or a list of them). Heading one way (head)
+// is going to a spot headTiles off that way.
+//   WHAT IT KNOWS OF THE GROUND: boulders it has seen (m.rocks: their tops in its line of
+//   sight; kept, as boulders don't move) and water it has seen while keeping dry (m.wet);
+//   tiles it was stopped going into by something it didn't know of, for bumpKeepS
+//   (m.bumps: noteBump); the lie of the land (ledges, water) in its sight rectangle and
+//   field of view; and all of it within feelTiles (it feels its footing). Elsewhere it
+//   takes the ground to be open, and learns better as it goes.
+//   FOLLOWING A PATH: it heads for the farthest of the next pathLookTiles tiles of it that it
+//   can go straight to (cutting corners where it can). It plans afresh when the spot moves
+//   off the path's end, when blocked, and when it can't go straight to the path's next tile;
+//   at the end of a path that doesn't reach the spot, it stands there (as near as it knows
+//   how to get) until replanS after planning it. Every replanS it looks for a better way,
+//   taking it only if it reaches the spot where the old didn't, or is shorter by more than
+//   pathSwitchTiles (so it doesn't waver between two ways about as good).
+//   KEEPING DRY: told to keep dry (opts.dry true), it never plans through water it knows
+//   of; rather dry ("rather"), it does when no dry way reaches the spot and a wet one
+//   does, and keeps to that. Swimming, it keeps to no such thing (it is in the water).
+//   It keeps its heading while within keepHeadingCos2 of the wanted way (each new heading
+//   costs the simulation a square root). Rather than turn right round twice within
+//   reverseAgainS, it stands still. It goes no faster than the way ahead is clear for, as
+//   far as it would go before its next turn: coming to a bend, it slows for it (or stops);
+//   within arriveTiles of where it will stop (the spot, or a path's end short of it), it
+//   walks (but not closing on another critter).
+const straightTiles = 10;
+const pathReachTiles = 24;
+const pathMaxNodes = 3000;
+const pathLookTiles = 6;
+const replanS = 2;
+const pathSwitchTiles = 3;
+const arriveTiles = 1.5;         // this near where it will stop, it walks
+const feelTiles = 2;
+const headTiles = 16;
+const crowdTiles = 3;
+const touchKeepS = 1;
+const bumpKeepS = 20;
+const crowdMarginTiles = 0.05;  // room it leaves past another's box
+const waterCostFactor = 3;       // swimming a tile costs this much more than walking one
+const rocksKept = 5000, wetKept = 5000;
+const SQ2 = Math.SQRT2;
+const dirSteps = [[1, 0], [1, 1], [0, 1], [-1, 1], [-1, 0], [-1, -1], [0, -1], [1, -1]];
+
+// The facts about the ground a critter goes by this turn (WHAT IT KNOWS OF THE GROUND),
+// worked out as asked for and kept for the turn.
+function wayContext(a, m, now, opts) {
+  const dry = a.pose !== "swim" && (!!opts.dry || !sim.mayEnterWater(a));
+  const crowd = new Set(), others = [];
+  const through = uid => Array.isArray(opts.through) ? opts.through.includes(uid) : uid === opts.through;
+  for (const [uid, k] of m.known) {
+    if (!k.alive || k.seenTick !== now || through(uid)) continue;
+    if (Math.abs(k.gx - a.gx) > crowdTiles || Math.abs(k.gy - a.gy) > crowdTiles) continue;
+    if (!k.infant) crowd.add(Math.floor(k.gx) * 100000 + Math.floor(k.gy)); // (an infant is too small to bar a tile)
+    others.push(k);
+  }
+  // (one it has just touched, seen or not: where it stood)
+  const felt = m.known.get(a.touchedBy);
+  if (now - a.touchedTick <= ticks(touchKeepS) && !through(a.touchedBy) && !(felt?.seenTick === now)) {
+    if (!felt?.infant) crowd.add(Math.floor(a.touchedX) * 100000 + Math.floor(a.touchedY));
+    others.push({ gx: a.touchedX, gy: a.touchedY, infant: felt?.infant });
+  }
+  return { a, m, now, dry, crowd, others, share: senses.sightShare(a), sees: sim.can(a, "see"), known: new Map(), open: new Map(), corners: new Map() };
+}
+
+// Whether the critter knows the lie of the land on tile (i, j).
+function groundKnown(c, i, j) {
+  const key = i * 100000 + j;
+  let v = c.known.get(key);
+  if (v === undefined) {
+    const dx = i + 0.5 - c.a.gx, dy = j + 0.5 - c.a.gy;
+    v = (Math.abs(dx) <= feelTiles + 0.5 && Math.abs(dy) <= feelTiles + 0.5)
+      || (c.sees && senses.inSight(dx, dy, c.share) && senses.inView(c.a, dx, dy));
+    c.known.set(key, v);
+  }
+  return v;
+}
+
+function cornersOf(c, i, j) {
+  const key = i * 100000 + j;
+  let v = c.corners.get(key);
+  if (v === undefined) { v = sim.tileCorners(i, j); c.corners.set(key, v); }
+  return v;
+}
+
+// Notes the tile a critter bumped into, stunned by something it didn't know of (not
+// another critter: it touches that), as a tile it may not go onto, for bumpKeepS: the one
+// its box's leading corner was pushing into, or (that its own) the one ahead along its
+// heading's greater part.
+function noteBump(a, m, now) {
+  if (!(a.blockedTick > m.lastTurn) || a.touchedTick === a.blockedTick || a.pose === "swim") return;
+  const d = a.boxRad + 0.1, ci = Math.floor(a.gx), cj = Math.floor(a.gy);
+  let i = Math.floor(a.gx + Math.sign(a.hx) * d * (Math.abs(a.hx) > 0.38 ? 1 : 0));
+  let j = Math.floor(a.gy + Math.sign(a.hy) * d * (Math.abs(a.hy) > 0.38 ? 1 : 0));
+  if (i === ci && j === cj) {
+    if (Math.abs(a.hx) >= Math.abs(a.hy)) i = Math.floor(a.gx + Math.sign(a.hx) * d);
+    else j = Math.floor(a.gy + Math.sign(a.hy) * d);
+  }
+  if (i === ci && j === cj) return;
+  m.bumps.set(i * 100000 + j, now + ticks(bumpKeepS));
+  if (m.bumps.size > 50) for (const [k, until] of m.bumps) if (until < now) m.bumps.delete(k);
+}
+
+// Whether the critter may go onto tile (i, j), as far as it knows (a boulder it knows of,
+// water it knows of while dry, a tile it bumped into lately: no; nor, with crowd, a critter
+// about it there).
+function tileOpen(c, i, j, crowd = true) {
+  const key = i * 100000 + j;
+  if (crowd && c.crowd.has(key)) return false;
+  let v = c.open.get(key);
+  if (v !== undefined) return v;
+  v = !(c.m.bumps.get(key) > c.now);
+  if (i < 0 || j < 0 || i >= sim.gridWidthN || j >= sim.gridHeightN) v = false;
+  else if (sim.isBlockedTile(i, j)) {
+    const rocks = c.m.rocks;
+    if (rocks.has(key)) v = false;
+    else {
+      const dx = i + 0.5 - c.a.gx, dy = j + 0.5 - c.a.gy;
+      const near = Math.abs(dx) <= feelTiles + 0.5 && Math.abs(dy) <= feelTiles + 0.5;
+      if (near || (groundKnown(c, i, j) && senses.canSeePoint(c.a, i + 0.5, j + 0.5, sim.heightAt(i + 0.5, j + 0.5) + sim.obstacleHeightAt(i, j)))) {
+        rocks.add(key);
+        if (rocks.size > rocksKept) rocks.delete(rocks.values().next().value); // (the oldest)
+        v = false;
+      }
+    }
+  } else if (c.dry && sim.getTerrainAt(i, j) === "water") {
+    const wet = c.m.wet;
+    if (wet.has(key)) v = false;
+    else if (groundKnown(c, i, j)) {
+      wet.add(key);
+      if (wet.size > wetKept) wet.delete(wet.values().next().value); // (the oldest)
+      v = false;
+    }
+  }
+  c.open.set(key, v);
+  return v;
+}
+
+// Whether it can step from tile (i, j) to the tile beside it (ni, nj) (not diagonal), as
+// far as it knows: the ground either side of their shared edge, at its middle, within a
+// step.
+function stepOK(c, i, j, ni, nj) {
+  if (!groundKnown(c, i, j) || !groundKnown(c, ni, nj)) return true;
+  const p = cornersOf(c, i, j), q = cornersOf(c, ni, nj); // [nw, ne, sw, se]
+  let mine, theirs;
+  if (ni > i) { mine = p[1] + p[3]; theirs = q[0] + q[2]; }
+  else if (ni < i) { mine = p[0] + p[2]; theirs = q[1] + q[3]; }
+  else if (nj > j) { mine = p[2] + p[3]; theirs = q[0] + q[1]; }
+  else { mine = p[0] + p[1]; theirs = q[2] + q[3]; }
+  return Math.abs(mine - theirs) / 2 <= sim.maxStepLevels;
+}
+
+// Whether it can go straight from where it is to (x, y), as far as it knows: in steps of a
+// fifth of a tile, its box over the whole way over no tile it may not go onto, nor (within
+// crowdTiles) over a critter about it (but one it is already against and drawing away
+// from), no ledge it can't step (between tiles, or from step to step, as the simulation
+// checks).
+function wayClear(c, x, y) {
+  const a = c.a, r = a.boxRad, n = Math.max(1, Math.ceil(Math.max(Math.abs(x - a.gx), Math.abs(y - a.gy)) * 5));
+  let px = a.gx, py = a.gy, pi = Math.floor(px), pj = Math.floor(py), ph = sim.heightAt(px, py);
+  const bi0 = Math.floor(a.gx - r), bi1 = Math.floor(a.gx + r), bj0 = Math.floor(a.gy - r), bj1 = Math.floor(a.gy + r);
+  for (let s = 1; s <= n; s++) {
+    const sx = a.gx + (x - a.gx) * s / n, sy = a.gy + (y - a.gy) * s / n;
+    // (its box over the whole step: from where it stands, it may touch nothing it is against;
+    // but water its box is over already, keeping dry, it may stay over on its way out)
+    const i0 = Math.floor(Math.min(px, sx) - r), i1 = Math.floor(Math.max(px, sx) + r);
+    const j0 = Math.floor(Math.min(py, sy) - r), j1 = Math.floor(Math.max(py, sy) + r);
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+      if (i === Math.floor(a.gx) && j === Math.floor(a.gy)) continue; // (where it stands)
+      if (tileOpen(c, i, j, false)) continue;
+      if (c.dry && i >= bi0 && i <= bi1 && j >= bj0 && j <= bj1 && sim.getTerrainAt(i, j) === "water") continue;
+      return false;
+    }
+    px = sx; py = sy;
+    const si = Math.floor(sx), sj = Math.floor(sy);
+    if (Math.abs(sx - a.gx) <= crowdTiles && Math.abs(sy - a.gy) <= crowdTiles && !crowdClear(c, sx, sy)) return false;
+    if (si !== pi || sj !== pj) {
+      // into the next tile: across an edge (or a corner: both ways round)
+      if (si !== pi && sj !== pj) {
+        if (!(stepOK(c, pi, pj, si, pj) && stepOK(c, si, pj, si, sj)) && !(stepOK(c, pi, pj, pi, sj) && stepOK(c, pi, sj, si, sj))) return false;
+      } else if (!stepOK(c, pi, pj, si, sj)) return false;
+      pi = si; pj = sj;
+    }
+    if (groundKnown(c, si, sj)) {
+      const sh = sim.heightAt(sx, sy);
+      if (Math.abs(sh - ph) > sim.maxStepLevels) return false;
+      ph = sh;
+    }
+  }
+  return true;
+}
+
+// A path from the critter's tile toward (tx, ty): A* over the tiles within pathReachTiles of
+// it, 8 ways (a diagonal step only where both tiles beside it are open), swimming costing
+// waterCostFactor. To the spot's tile, or failing that the tile it reached nearest the spot.
+// [[i, j], ...], the critter's own tile left out; [] if it can get no nearer.
+function findPath(c, tx, ty) {
+  const a = c.a, R = pathReachTiles, W = 2 * R + 1;
+  const si = Math.floor(a.gx), sj = Math.floor(a.gy);
+  const gi = Math.floor(tx), gj = Math.floor(ty);
+  const g = new Float32Array(W * W).fill(Infinity), from = new Int32Array(W * W).fill(-1), shut = new Uint8Array(W * W);
+  const idx = (i, j) => (i - si + R) * W + (j - sj + R);
+  const h = (i, j) => { const dx = Math.abs(i - gi), dy = Math.abs(j - gj); return dx + dy + (SQ2 - 2) * Math.min(dx, dy); };
+  const water = (i, j) => sim.getTerrainAt(i, j) === "water";
+  // a binary heap of [f, node]
+  const heap = [];
+  const push = (f, k) => {
+    heap.push([f, k]);
+    for (let n = heap.length - 1; n > 0;) { const p = (n - 1) >> 1; if (heap[p][0] <= heap[n][0]) break; [heap[p], heap[n]] = [heap[n], heap[p]]; n = p; }
   };
-  const curBin = moving ? bin(a.hx, a.hy) : -1;
-  const vec = d => sim.moveVecByDir[d];
-  const open8 = d => d === curBin ? clear(...vec(d), 1) : clear(...vec(d), 1) && clear(...vec(d), 2);
-  const near8 = d => clear(...vec(d), 1);
-  if (m.detour && m.detour.until <= now) m.detour = null;
-
-  if (m.detour && m.detour.reversed && moving) {
-    if (clear(a.hx, a.hy, 1)) return KEEP;
-    for (const ok of [open8, near8]) {
-      for (let k = 1; k < 8; k++) {
-        const d = (curBin + 8 + m.detour.side * k) % 8;
-        if (ok(d)) return vec(d);
+  const pop = () => {
+    const top = heap[0], last = heap.pop();
+    if (heap.length) {
+      heap[0] = last;
+      for (let n = 0; ;) {
+        const l = 2 * n + 1, r = l + 1;
+        let s = n;
+        if (l < heap.length && heap[l][0] < heap[s][0]) s = l;
+        if (r < heap.length && heap[r][0] < heap[s][0]) s = r;
+        if (s === n) break;
+        [heap[s], heap[n]] = [heap[n], heap[s]]; n = s;
       }
     }
-    return null;
-  }
-
-  if (moving && !m.detour) {
-    const along = a.hx * dx + a.hy * dy;
-    if (along > 0 && along * along >= keepHeadingCos2 * (dx * dx + dy * dy) && clear(a.hx, a.hy, 1)) return KEEP;
-  }
-  const far = goal ? Math.min(2, Math.max(Math.abs(dx), Math.abs(dy))) : 2;
-  if (clear(dx, dy, Math.min(1, far)) && clear(dx, dy, far)) { m.detour = null; return [dx, dy]; }
-
-  const want = bin(dx, dy);
-  const turned = k => (want + 8 + m.detour.side * k) % 8;
-  if (!m.detour) {
-    let side = 0;
-    for (const ok of [open8, near8]) {
-      for (let k = 1; k <= 4 && !side; k++) {
-        const right = ok((want + k) % 8), left = ok((want + 8 - k) % 8);
-        if (right && left) side = Math.random() < 0.5 ? 1 : -1;
-        else if (right) side = 1;
-        else if (left) side = -1;
-      }
-      if (side) break;
+    return top;
+  };
+  const start = idx(si, sj);
+  g[start] = 0; push(h(si, sj), start);
+  let best = start, bestH = h(si, sj), expanded = 0;
+  while (heap.length && expanded < pathMaxNodes) {
+    const [, k] = pop();
+    if (shut[k]) continue;
+    shut[k] = 1; expanded++;
+    const i = Math.floor(k / W) - R + si, j = (k % W) - R + sj;
+    const hk = h(i, j);
+    if (hk < bestH) { best = k; bestH = hk; }
+    if (i === gi && j === gj) break;
+    for (const [di, dj] of dirSteps) {
+      const ni = i + di, nj = j + dj;
+      if (Math.abs(ni - si) > R || Math.abs(nj - sj) > R) continue;
+      const nk = idx(ni, nj);
+      if (shut[nk] || !tileOpen(c, ni, nj)) continue;
+      if (di && dj) {
+        if (!tileOpen(c, ni, j) || !tileOpen(c, i, nj)) continue;
+        if (!(stepOK(c, i, j, ni, j) && stepOK(c, ni, j, ni, nj)) && !(stepOK(c, i, j, i, nj) && stepOK(c, i, nj, ni, nj))) continue;
+      } else if (!stepOK(c, i, j, ni, nj)) continue;
+      const cost = (di && dj ? SQ2 : 1) * (water(ni, nj) && groundKnown(c, ni, nj) ? waterCostFactor : 1);
+      const ng = g[k] + cost;
+      if (ng < g[nk]) { g[nk] = ng; from[nk] = k; push(ng + h(ni, nj), nk); }
     }
-    if (!side) return null;
-    m.detour = { side, until: now + ticks(detourS), reversed: false };
   }
-  for (const ok of [open8, near8]) {
-    for (let k = 1; k < 8; k++) {
-      if (!ok(turned(k))) continue;
-      if (k >= 3 && k <= 5) m.detour.reversed = true;
-      return turned(k) === curBin ? KEEP : vec(turned(k));
+  const path = [];
+  for (let k = best; k !== start && k >= 0; k = from[k]) path.push([Math.floor(k / W) - R + si, (k % W) - R + sj]);
+  return path.reverse();
+}
+
+// The intent to go to spot (tx, ty) at a gait (WAYFINDING). opts: dry (keep out of the
+// water), through (the uid of the critter it is going to: not in its way).
+function goTo(a, m, tx, ty, gait, now, opts = {}) {
+  const dx = tx - a.gx, dy = ty - a.gy;
+  if (dx * dx + dy * dy < 0.0025) return IDLE;
+  let p = m.path;
+  const far2 = Math.max(4, 0.04 * (dx * dx + dy * dy));
+  const wetOpts = opts.dry === "rather" ? { ...opts, dry: false } : null;
+  // (rather dry, it goes on the wet way it took, finding no dry one, while going there)
+  const w0 = m.wetTo, wet = wetOpts && w0 && now - w0.tick <= ticks(replanS) && (w0.tx - tx) ** 2 + (w0.ty - ty) ** 2 <= far2;
+  if (wet) w0.tick = now;
+  let c = wayContext(a, m, now, wet ? wetOpts : opts);
+  // standing in the shallows, keeping dry (too tired to swim, say): out onto the land its
+  // box is over first
+  if (c.dry && a.pose !== "swim" && sim.getTerrainAt(Math.floor(a.gx), Math.floor(a.gy)) === "water") {
+    const out = landBeside(c);
+    if (out) { m.path = null; return toward(a, m, out[0] - a.gx, out[1] - a.gy, "walk", now, c); }
+  }
+  const k = Math.min(1, straightTiles / Math.max(Math.abs(dx), Math.abs(dy)));
+  // (coming to where it will stop, it walks, so as to stop short of what is beyond: but not
+  // closing on another critter)
+  const arrive = (x, y) => opts.through === undefined && Math.max(Math.abs(x - a.gx), Math.abs(y - a.gy)) < arriveTiles ? "walk" : gait;
+  if (wayClear(c, a.gx + dx * k, a.gy + dy * k)) { m.path = null; return toward(a, m, dx, dy, arrive(tx, ty), now, c); }
+  const valid = p && p.dry === c.dry && !(a.blockedTick > m.lastTurn) && (p.tx - tx) ** 2 + (p.ty - ty) ** 2 <= far2;
+  let way = valid ? nextWaypoint(c, p) : null;
+  const planIn = w => {
+    const tiles = findPath(w, tx, ty), end = tiles.at(-1);
+    return { tx, ty, dry: w.dry, made: now, tiles, failed: tiles.length === 0,
+      whole: !!end && end[0] === Math.floor(tx) && end[1] === Math.floor(ty) };
+  };
+  const plan = () => {
+    const q = planIn(c);
+    if (q.whole || !wetOpts || !c.dry) return q;
+    const w = wayContext(a, m, now, wetOpts);
+    if (w.dry) return q; // (too tired to swim)
+    const q2 = planIn(w);
+    if (!q2.whole) return q;
+    c = w; m.wetTo = { tx, ty, tick: now };
+    return q2;
+  };
+  if (way && now - p.made > ticks(replanS)) { // a better way? (else it keeps to this one)
+    const q = plan();
+    if ((q.whole && !p.whole) || (q.whole === p.whole && q.tiles.length + pathSwitchTiles < p.tiles.length)) {
+      p = m.path = q;
+      way = nextWaypoint(c, p);
+    } else p.made = now;
+  }
+  // at the end of a way that doesn't reach the spot: as near as it knows how to get, for now
+  if (!way && valid && !p.whole && !p.tiles.length && now - p.made <= ticks(replanS)) return IDLE;
+  if (!way) {
+    p = m.path = plan();
+    way = nextWaypoint(c, p);
+    // none it can go straight to (its box against a corner, say): to the middle of its own
+    // tile first, then on; from there, it takes the path's first tile for closed (a ledge or
+    // corner it can't manage: as if it had bumped into it; but not for others in the way)
+    // and plans again; else a step off
+    // what it is against, as near the path's way as it can; knowing no way nearer at all,
+    // it stands
+    const ci = Math.floor(a.gx) + 0.5, cj = Math.floor(a.gy) + 0.5, middle = (a.gx - ci) ** 2 + (a.gy - cj) ** 2 <= 0.02;
+    const bare = { ...c, others: [] }; // (others aside: they move)
+    for (let tries = 0; !way && middle && p.tiles.length && tries < 3; tries++) {
+      const [i, j] = p.tiles[0], key = i * 100000 + j;
+      if (wayClear(bare, i + 0.5, j + 0.5)) break; // (others in the way, not the ground)
+      m.bumps.set(key, now + ticks(bumpKeepS)); c.open.delete(key);
+      p = m.path = plan();
+      way = nextWaypoint(c, p);
     }
+    if (!way) {
+      if (!p.tiles.length) return IDLE;
+      way = !middle && wayClear(c, ci, cj) ? [ci, cj] : stepOff(c, p.tiles[0][0] + 0.5, p.tiles[0][1] + 0.5);
+    }
+  }
+  const end = p && !p.whole && p.tiles.length ? p.tiles.at(-1) : null;
+  return toward(a, m, way[0] - a.gx, way[1] - a.gy, end ? arrive(end[0] + 0.5, end[1] + 0.5) : arrive(tx, ty), now, c);
+}
+
+// Whether the critter's box at (x, y) is clear of the others about it it knows of (their
+// boxes, as far as it can tell: an adult's, or an infant's a newborn's), with
+// crowdMarginTiles to spare: going no nearer
+// one it is already that near, it may come within the margin, and (as the simulation lets
+// it) overlap one it already overlaps.
+function crowdClear(c, x, y) {
+  const a = c.a, adult = a.boxRad + sim.adultBoxRad, newborn = a.boxRad + sim.adultBoxRad * sim.youngScales[0];
+  for (const k of c.others) {
+    const touch = k.infant ? newborn : adult, span = touch + crowdMarginTiles;
+    const nx = Math.abs(x - k.gx), ny = Math.abs(y - k.gy);
+    if (nx >= span || ny >= span) continue;
+    const ox = Math.abs(a.gx - k.gx), oy = Math.abs(a.gy - k.gy);
+    const apart = nx * nx + ny * ny > ox * ox + oy * oy;
+    if (apart && ((ox < touch && oy < touch) || !(nx < touch && ny < touch))) continue;
+    return false;
+  }
+  return true;
+}
+
+// The middle of the nearest open land tile beside the critter (or under its box), for one
+// standing in the water; null if none.
+function landBeside(c) {
+  const a = c.a, ci = Math.floor(a.gx), cj = Math.floor(a.gy);
+  let best = null, bestD2 = Infinity;
+  for (let i = ci - 1; i <= ci + 1; i++) for (let j = cj - 1; j <= cj + 1; j++) {
+    if ((i === ci && j === cj) || sim.getTerrainAt(i, j) === "water" || !tileOpen(c, i, j, false)) continue;
+    const d2 = (Math.max(i - a.gx, 0, a.gx - i - 1)) ** 2 + (Math.max(j - a.gy, 0, a.gy - j - 1)) ** 2;
+    if (d2 < bestD2) { best = [i + 0.5, j + 0.5]; bestD2 = d2; }
+  }
+  return best;
+}
+
+// A spot stepOffTiles off, in one of the 8 directions, where the critter's box is over no
+// tile it may not go onto (or its own) and clear of others (crowdClear), the nearest the way
+// to (x, y); else (x, y).
+const stepOffTiles = 0.2;
+function stepOff(c, x, y) {
+  const a = c.a, r = a.boxRad, ci = Math.floor(a.gx), cj = Math.floor(a.gy);
+  let best = null, bestDot = -Infinity;
+  for (const [ux, uy] of dirSteps) {
+    const k = stepOffTiles / (ux && uy ? SQ2 : 1), sx = a.gx + ux * k, sy = a.gy + uy * k;
+    let ok = true;
+    for (let i = Math.floor(sx - r); i <= Math.floor(sx + r) && ok; i++) for (let j = Math.floor(sy - r); j <= Math.floor(sy + r) && ok; j++)
+      ok = (i === ci && j === cj) || tileOpen(c, i, j, false);
+    if (!ok || !crowdClear(c, sx, sy)) continue;
+    const dot = (ux * (x - a.gx) + uy * (y - a.gy)) / (ux && uy ? SQ2 : 1);
+    if (dot > bestDot) { best = [sx, sy]; bestDot = dot; }
+  }
+  return best || [x, y];
+}
+
+// Where to head along path p: the center of the farthest of its next pathLookTiles tiles
+// (past the one the critter is on) it can go straight to; null if none.
+function nextWaypoint(c, p) {
+  const a = c.a, ci = Math.floor(a.gx), cj = Math.floor(a.gy);
+  const on = p.tiles.findIndex(([i, j]) => i === ci && j === cj);
+  if (on >= 0) p.tiles = p.tiles.slice(on + 1);
+  const n = Math.min(pathLookTiles, p.tiles.length);
+  for (let k = n - 1; k >= 0; k--) {
+    const [i, j] = p.tiles[k];
+    if (wayClear(c, i + 0.5, j + 0.5)) return [i + 0.5, j + 0.5];
   }
   return null;
 }
 
-// The intent to go along (dx, dy) at a gait, steering round what's in the way. Rather
-// than turn right round twice within reverseAgainS, it stands still.
-function move(a, m, dx, dy, gait, now, dry = false, goal = false) {
-  const way = steer(a, m, dx, dy, now, dry, goal);
-  if (way === null) return IDLE;
-  if (way === KEEP) {
-    // the same vector as before, so the simulation keeps its heading
-    const prev = m.intent && m.intent.dx !== undefined ? m.intent : { dx: a.hx, dy: a.hy };
-    return prev.gait === gait ? prev : { dx: prev.dx, dy: prev.dy, gait };
+// The intent to head one way (dx, dy): to a spot headTiles off that way (kept while it
+// heads within headSameCos2 of that way and is still far from it). Knowing no way at least
+// halfway there, it heads as near that way as it can: turned 45 degrees either side, then
+// 90, then 135.
+const headTurns = [0, 1, -1, 2, -2, 3, -3];
+const headSameCos2 = 0.85; // about 23 degrees
+function head(a, m, dx, dy, gait, now, opts = {}) {
+  let h = m.heading;
+  const dot = h ? h.dx * dx + h.dy * dy : 0;
+  const same = dot > 0 && dot * dot >= headSameCos2 * (h.dx * h.dx + h.dy * h.dy) * (dx * dx + dy * dy);
+  if (!same || (h.tx - a.gx) ** 2 + (h.ty - a.gy) ** 2 < (headTiles / 2) ** 2) {
+    h = m.heading = { dx, dy, turn: 0 };
+    for (const turn of headTurns) {
+      let [vx, vy] = [dx, dy];
+      for (let k = 0; k < Math.abs(turn); k++) [vx, vy] = turn > 0 ? [(vx - vy) * Math.SQRT1_2, (vx + vy) * Math.SQRT1_2] : [(vx + vy) * Math.SQRT1_2, (vy - vx) * Math.SQRT1_2];
+      const k = headTiles / Math.max(Math.abs(vx), Math.abs(vy), 1e-9);
+      h.tx = a.gx + vx * k; h.ty = a.gy + vy * k;
+      const c = wayContext(a, m, now, opts);
+      if (wayClear(c, a.gx + vx * k * straightTiles / headTiles, a.gy + vy * k * straightTiles / headTiles)) break;
+      // (a way that gets it at least half as far that way)
+      const end = findPath(c, h.tx, h.ty).at(-1);
+      const along = end ? (end[0] + 0.5 - a.gx) * vx + (end[1] + 0.5 - a.gy) * vy : 0;
+      if (along > 0 && along * along >= (headTiles / 2) ** 2 * (vx * vx + vy * vy)) break;
+    }
   }
-  const [vx, vy] = way;
-  if (a.hx !== undefined) {
-    const along = vx * a.hx + vy * a.hy;
-    if (along < 0 && along * along >= 0.5 * (vx * vx + vy * vy)) { // 135 degrees or more
-      if (now - m.reversedTick < ticks(reverseAgainS)) return IDLE;
+  return goTo(a, m, h.tx, h.ty, gait, now, opts);
+}
+
+// The intent to go along (dx, dy) as it goes now: keeping its heading if near enough and
+// clear for a couple of tiles (the same vector as before, so the simulation keeps its
+// heading); rather than turn right round twice within reverseAgainS, it stands still. Its
+// gait no faster than the way ahead is clear for (as far as it would go before its next
+// turn, with room to spare): coming to a turn of its path, it slows for it, and going
+// faster than a walk with the way not clear even for that, it stops first.
+function toward(a, m, dx, dy, gait, now, c) {
+  let vx = dx, vy = dy;
+  const k = 2 / Math.max(Math.abs(a.hx), Math.abs(a.hy), 1e-9);
+  let keep = false;
+  if (a.targetSpeed > 0) {
+    const along = a.hx * dx + a.hy * dy;
+    keep = along > 0 && along * along >= keepHeadingCos2 * (dx * dx + dy * dy) && wayClear(c, a.gx + a.hx * k, a.gy + a.hy * k);
+  }
+  const prev = m.intent && m.intent.dx !== undefined ? m.intent : { dx: a.hx, dy: a.hy };
+  if (keep) { vx = prev.dx; vy = prev.dy; }
+  else if (a.hx !== undefined) {
+    const along = dx * a.hx + dy * a.hy;
+    if (along < 0 && along * along >= 0.5 * (dx * dx + dy * dy)) { // 135 degrees or more
+      if (now - m.reversedTick < ticks(reverseAgainS) && m.reversedTick !== now) return IDLE; // (this turn's, asked again: fine)
       m.reversedTick = now;
     }
   }
+  if (a.pose !== "swim") {
+    const span = Math.max(Math.abs(vx), Math.abs(vy), 1e-9);
+    let clear = false;
+    for (const g of gait === "gallop" ? ["gallop", "trot", "walk"] : gait === "trot" ? ["trot", "walk"] : gait === "stalk" ? ["stalk", "walk"] : [gait]) {
+      gait = g;
+      const reach = Math.max(a.speed, sim.gaitSpeed(a.species, g)) * turnTicks * 1.5 + 0.3;
+      if ((clear = wayClear(c, a.gx + vx / span * reach, a.gy + vy / span * reach))) break;
+    }
+    // (too fast to stop short of what is ahead: it stops first)
+    if (!clear && a.speed > 1.2 * sim.gaitSpeed(a.species, "walk")) return IDLE;
+  }
+  if (keep) return prev.gait === gait ? prev : { dx: prev.dx, dy: prev.dy, gait };
   return { dx: vx, dy: vy, gait };
+}
+
+// TRAPPED: every trapLookS a critter notes where it is (the last trapSamples places) and
+// how far it has gone since; having gone at least trapPathTiles over them while staying
+// within trapBoxTiles across, it is trapped: m.trapped grows by trapStep (to 1), and
+// otherwise falls back by it. It keeps a rough map of where it has been (m.visits: time
+// spent in each square visitCellTiles a side, fading by half every visitHalfLifeS). A
+// trapped critter that is at ease, searching, going somewhere or fleeing (not chasing prey
+// it perceives, eating or drinking, nursing or mating) ESCAPES, with chance m.trapped
+// each turn: of spots trapEscapeTiles off it in 16 ways that it knows it can go to, to the
+// least visited (none at all, best), by path, rather dry, until there or trapEscapeS has
+// passed. Fleeing, it escapes only to a spot no nearer what it flees (not more than 90
+// degrees off the way it flees), at its gait; it gives that up once it is no longer
+// fleeing, or the spot comes to be that way (and likewise an escape begun at ease once it
+// flees).
+const trapLookS = 1, trapSamples = 30, trapPathTiles = 30, trapBoxTiles = 8, trapStep = 0.1;
+const visitCellTiles = 4, visitHalfLifeS = 600, visitsKept = 4000;
+const trapEscapeTiles = 20, trapEscapeS = 20;
+const escapeWays = Array.from({ length: 16 }, (_, k) => [Math.cos(k * Math.PI / 8), Math.sin(k * Math.PI / 8)]);
+const escapableModes = new Set(["calm", "track", "seek", "family", "court", "drink", "graze", "feed", "flee", "prowl"]);
+
+function visitKey(x, y) { return Math.floor(x / visitCellTiles) * 100000 + Math.floor(y / visitCellTiles); }
+
+// How long (s, faded) the critter has spent in the square containing (x, y).
+function visitsAt(m, x, y) {
+  const v = m.visits.get(visitKey(x, y));
+  return v ? v.s * Math.pow(0.5, (sim.now - v.at) / visitHalfLifeS) : 0;
+}
+
+// Notes where the critter is (each turn), and whether it is trapped (every trapLookS).
+function noteWhere(a, m, now) {
+  const key = visitKey(a.gx, a.gy), dt = turnTicks * sim.tempo;
+  const v = m.visits.get(key);
+  if (v) { v.s = v.s * Math.pow(0.5, (sim.now - v.at) / visitHalfLifeS) + dt; v.at = sim.now; }
+  else {
+    m.visits.set(key, { s: dt, at: sim.now });
+    if (m.visits.size > visitsKept) for (const [k2, w] of m.visits) { if (w.s * Math.pow(0.5, (sim.now - w.at) / visitHalfLifeS) < 1) m.visits.delete(k2); }
+  }
+  m.trapPath += a.speed * turnTicks;
+  if (now - m.trapLook < ticks(trapLookS)) return;
+  m.trapLook = now;
+  const s = m.trapSeen;
+  s.push([a.gx, a.gy, m.trapPath]);
+  if (s.length > trapSamples) s.shift();
+  if (s.length < trapSamples) return;
+  let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+  for (const [x, y] of s) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y); }
+  const trapped = s[s.length - 1][2] - s[0][2] >= trapPathTiles && x1 - x0 < trapBoxTiles && y1 - y0 < trapBoxTiles;
+  m.trapped = Math.max(0, Math.min(1, m.trapped + (trapped ? trapStep : -trapStep)));
+}
+
+// A trapped critter's escape (TRAPPED): an intent, or null to do as it decided.
+function escape(a, m, now, intent) {
+  const e = m.escape;
+  if (e && (now > e.until || (e.tx - a.gx) ** 2 + (e.ty - a.gy) ** 2 < 4)) { m.escape = null; m.trapped /= 2; }
+  if (!escapableModes.has(m.mode) || intent === EAT || (intent && (intent.gait === "eat" || intent.gait === "mate"))) {
+    m.escape = null;
+    return null;
+  }
+  const f = m.mode === "flee" ? m.flee : null;
+  if (!m.escape) {
+    if (!(Math.random() < m.trapped)) return null;
+    const c = wayContext(a, m, now, { dry: true });
+    let best = null, bestV = Infinity;
+    for (const [ux, uy] of escapeWays) {
+      if (f && ux * f.dx + uy * f.dy < 0) continue; // (not back toward what it flees)
+      const x = a.gx + ux * trapEscapeTiles, y = a.gy + uy * trapEscapeTiles;
+      if (!tileOpen(c, Math.floor(x), Math.floor(y))) continue;
+      const v = visitsAt(m, x, y) + Math.random() * 0.01;
+      if (v < bestV) { best = [x, y]; bestV = v; }
+    }
+    if (!best) return null;
+    m.escape = { tx: best[0], ty: best[1], until: now + ticks(trapEscapeS), flee: !!f };
+  }
+  const e2 = m.escape;
+  if (e2.flee !== !!f || (f && (e2.tx - a.gx) * f.dx + (e2.ty - a.gy) * f.dy < 0)) { m.escape = null; return null; }
+  m.mode = "escape";
+  return goTo(a, m, m.escape.tx, m.escape.ty, intent && intent.gait === "gallop" ? "gallop" : "trot", now, { dry: "rather" });
 }
 
 // DEER flee every wolf perceived (seen, heard or smelled) within deerAlarmS, however far
@@ -424,7 +901,7 @@ function decideDeer(a, m, now) {
     m.flee = { dx: hx, dy: hy, until: now + ticks(deerCommitS), since: now };
   }
   const close = inSight || nearest2 < deerGallopWithinTiles * deerGallopWithinTiles;
-  return move(a, m, m.flee.dx, m.flee.dy, close ? "gallop" : "trot", now);
+  return head(a, m, m.flee.dx, m.flee.dy, close ? "gallop" : "trot", now);
 }
 
 // DEER graze from when the food meter falls below deerGrazeBelow (with its stomach below
@@ -435,7 +912,7 @@ function decideDeer(a, m, now) {
 // sight around, or as far as it sees when nothing there is worth it. Grass under a
 // boulder (less of it: sim.grassMostAt) it eats from the open tile beside the boulder
 // nearest it. Grass it gets no nearer to in grazeGiveUpS, or meets a dead end on the way
-// to, it leaves be for grazeAvoidS.
+// to, it leaves be for grazeAvoidS. Grass where another critter stands it leaves for now.
 // An intent, or null if not grazing or no grass worth it is in sight.
 function graze(a, m, now) {
   if (a.pose === "swim" || !sim.can(a, "eat")) return null;
@@ -467,19 +944,23 @@ function graze(a, m, now) {
     // no nearer after grazeGiveUpS: it can't get there (a cliff, water in the way)
     const d2 = (at.i + 0.5 - a.gx) ** 2 + (at.j + 0.5 - a.gy) ** 2;
     if (d2 < m.grazeBestD2 - 0.25) { m.grazeBestD2 = d2; m.grazeSince = now; }
-    // (or a dead end turned it right round on the way)
-    if (now - m.grazeSince > ticks(grazeGiveUpS) || (m.detour && m.detour.reversed && m.detour.until > now)) {
+    // (or it knows no way there)
+    if (now - m.grazeSince > ticks(grazeGiveUpS) || (m.path && m.path.failed)) {
       m.grazeAvoid.set(at.i * 100000 + at.j, now + ticks(grazeAvoidS));
       at = null;
     }
   }
+  // (not where another critter stands)
+  const taken = new Set();
+  for (const k of m.known.values()) if (k.alive && k.seenTick === now) taken.add(Math.floor(k.gx) * 100000 + Math.floor(k.gy));
+  if (at && taken.has(at.i * 100000 + at.j)) at = null;
   if (!at) {
     for (const [key, until] of m.grazeAvoid) if (until <= now) m.grazeAvoid.delete(key);
     // the best it can see (in line of sight: checked for the best few, nearest first)
     const options = [];
     for (const g of grass) {
-      // (not where it couldn't get to)
-      if (g.kg < worth || m.grazeAvoid.has(g.i * 100000 + g.j)) continue;
+      // (not where it couldn't get to, nor where another stands)
+      if (g.kg < worth || m.grazeAvoid.has(g.i * 100000 + g.j) || taken.has(g.i * 100000 + g.j)) continue;
       const d2 = (g.i + 0.5 - a.gx) ** 2 + (g.j + 0.5 - a.gy) ** 2;
       options.push({ g, score: d2 + (g.kg >= sim.plantMostAt(g.i, g.j) / 2 ? 0 : 1e6) });
     }
@@ -490,7 +971,7 @@ function graze(a, m, now) {
     m.grazeSince = now; m.grazeBestD2 = Infinity;
   }
   const [gi, gj] = m.grazeTo;
-  if (!sim.isBlockedTile(gi, gj)) return move(a, m, gi + 0.5 - a.gx, gj + 0.5 - a.gy, "walk", now);
+  if (!sim.isBlockedTile(gi, gj)) return goTo(a, m, gi + 0.5, gj + 0.5, "walk", now);
   if (sim.inGrassReach(a, gi, gj)) { m.grazeTo = null; m.cropping = [gi, gj]; return { gait: "eat", at: m.cropping }; }
   // under a boulder: it goes to the open tile beside the boulder nearest it
   let via = null, viaD2 = Infinity;
@@ -501,7 +982,7 @@ function graze(a, m, now) {
     if (d2 < viaD2) { via = [vi, vj]; viaD2 = d2; }
   }
   if (!via) { m.grazeAvoid.set(gi * 100000 + gj, now + ticks(grazeAvoidS)); m.grazeTo = null; return null; }
-  return move(a, m, via[0] + 0.5 - a.gx, via[1] + 0.5 - a.gy, "walk", now);
+  return goTo(a, m, via[0] + 0.5, via[1] + 0.5, "walk", now);
 }
 
 // THIRST: from when its water meter falls below drinkBelow (seekBelow, knowing of no fresh
@@ -585,7 +1066,7 @@ function thirst(a, m, now) {
     m.waterSince = now; m.waterBestD2 = Infinity;
   }
   m.mode = "drink"; m.plan = null;
-  if (to) { m.search = m.lookFrom = null; return move(a, m, to.i + 0.5 - a.gx, to.j + 0.5 - a.gy, "trot", now, true, true); }
+  if (to) { m.search = m.lookFrom = null; return goTo(a, m, to.i + 0.5, to.j + 0.5, "trot", now, { dry: true }); }
   return search(a, m, now);
 }
 
@@ -605,29 +1086,42 @@ function search(a, m, now) {
     const [dx, dy] = sim.moveVecByDir[dir];
     m.search = { dx, dy, until: now + ticks(searchLegS) };
   }
-  return move(a, m, m.search.dx, m.search.dy, "trot", now, true);
+  return head(a, m, m.search.dx, m.search.dy, "trot", now, { dry: true });
 }
 
 // WOLVES eat first: from below wolfFeedBelow (with its stomach below wolfFeedGutBelow)
 // until full (or its stomach is), and once old enough to eat, the nearest carcass with
-// meat (blocked near it, it waits its turn: feedWaitS) it perceived within
-// wolfForgetPreyS (seen, or smelled on the wind); knowing of none, it follows death scent
-// (TRACKING). Otherwise they hunt while hungry (below wolfHuntBelow, with its stomach
-// below wolfHuntGutBelow), once weaned (pups stay with their family and eat what it
-// kills).
+// meat (near it, with others in its way and no way round them, or blocked, it waits its
+// turn: feedWaitS) it knows of (perceived within carcassKeepS: it comes back to its kills),
+// but one it knew no way to lately (outOfReachS); knowing of none, it follows death scent
+// (TRACKING).
+// Otherwise they hunt while hungry (below wolfHuntBelow, with its stomach below
+// wolfHuntGutBelow), once weaned (pups stay with their family and eat what it kills).
 // FAMISHED: hungrier than wolfFamishedHungerAbove (hunger: 1 - its food meter) with its
 // stomach below wolfFamishedGutBelow, a weaned wolf eats or else hunts before anything
 // else (drinking, family, mating).
 // HUNTING: of the deer it knows, a wolf picks the nearest, or among those about as near,
 // the one most straight ahead; then keeps to it for wolfCommitS (unless a deer in sight
 // is much nearer) and after that changes only for one clearly nearer. Seeing or hearing
-// its prey now, it goes straight for it; otherwise it follows the freshest deer trail
-// about (TRACKING), and with none, goes for where its prey should be by now, then on
-// the way it went, searching. A deer searched for and not found is lost until seen
-// again. With no deer in mind, it follows deer trails.
-// DASHING: after prey (in sight, on a trail, or where it should be), it gallops while its
-// stamina meter is above its food meter and its wind above wolfDashWindAbove, and trots
-// otherwise.
+// its prey now, it goes straight for it; otherwise it follows its prey's own trail
+// (TRACKING), keeping to that prey while it smells its trail, however long since it last
+// perceived it; and with none, goes for where its prey should be by now, then on the way
+// it went, searching. A deer searched for and not found is lost until seen again. With no
+// deer in mind, it follows the freshest deer trail about; smelling none, it PROWLS (but a
+// mother with infants stays by them).
+// PACE after prey (pace): it runs prey down, galloping, once it perceives it within
+// wolfRushTiles, or fleeing it (perceived within wolfPursueS, moving at wolfFleeingShare
+// of a deer's trot or faster); and keeps at it, in or out of sight and hearing, until it
+// hasn't perceived that deer for wolfPursueS. At prey farther off, unaware of it, it STALKS
+// (all but silent: see MOVING in sim.js; keeping its wind for the rush). Along a trail
+// fresher than wolfStalkTrailS (the deer is near) it stalks likewise, if the deer laid it
+// slower than a wolf stalks (from the marks underfoot and ahead: so stalking gains on it);
+// along an older one, or a deer's going faster (fleeing it, say, unseen), it strides:
+// gallops from wolfStrideWindFrom of its wind down to wolfStrideWindTo, then walks (getting
+// its wind back three times as fast as trotting) until it has wolfStrideWindFrom again, so
+// it closes on a far-off deer fast but comes up with wind enough to run it down (a deer's
+// gallop is faster but lasts a quarter as long: see EXERTION in sim.js). It gallops only
+// while its wind lasts.
 function decideWolf(a, m, now) {
   // an infant suckles rather than goes to a carcass
   const suckling = sim.isInfant(a) && nurseOrSuckle(a, m, now);
@@ -649,7 +1143,9 @@ function decideWolf(a, m, now) {
     m.target = null; m.searching = false; m.watch = null;
     return settle(a, m, now);
   }
-  return hunt(a, m, now) || settle(a, m, now);
+  // (a mother with infants stays by them rather than prowl)
+  const mothering = !a.isMale && a.youngUids.some(uid => m.known.get(uid)?.infant);
+  return hunt(a, m, now) || (mothering ? settle(a, m, now) : prowl(a, m, now));
 }
 
 // Going to eat (see WOLVES): to the nearest carcass with meat it knows of, or, knowing of
@@ -660,7 +1156,8 @@ function feed(a, m, now, famished) {
   if (!feeding || !sim.can(a, "eat")) return null;
   let carcass = null, bestD2 = Infinity;
   for (const k of m.known.values()) {
-    if (k.species !== "deer" || k.alive || !(k.meat > 0) || now - k.seenTick > ticks(wolfForgetPreyS)) continue;
+    if (k.species !== "deer" || k.alive || !(k.meat > 0) || now - k.seenTick > ticks(carcassKeepS)) continue;
+    if (m.outOfReach.get(k.uid) > now) continue;
     const d2 = (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2;
     if (d2 < bestD2) { carcass = k; bestD2 = d2; }
   }
@@ -674,16 +1171,48 @@ function feed(a, m, now, famished) {
   // crowded out near it (others eating): waits its turn rather than circling
   if (bestD2 <= feedQueueTiles * feedQueueTiles && a.blockedTick > m.lastTurn) m.feedWaitUntil = now + ticks(feedWaitS);
   if (now < (m.feedWaitUntil ?? -Infinity)) return IDLE;
-  return move(a, m, carcass.gx - a.gx, carcass.gy - a.gy, "trot", now, false, true);
+  // near it, with others in the way and no way round them to its side: waits its turn
+  if (bestD2 <= feedQueueTiles * feedQueueTiles) {
+    const c = wayContext(a, m, now, {});
+    if (!wayClear(c, carcass.gx, carcass.gy)) {
+      const end = findPath(c, carcass.gx, carcass.gy).at(-1);
+      if (!end || (end[0] + 0.5 - carcass.gx) ** 2 + (end[1] + 0.5 - carcass.gy) ** 2 > sim.eatReachTiles * sim.eatReachTiles) return IDLE;
+    }
+  }
+  const go = goTo(a, m, carcass.gx, carcass.gy, "trot", now);
+  // knowing no way nearer it (across water, too tired to swim, say): leaves it be a while
+  for (const [uid, until] of m.outOfReach) if (until <= now) m.outOfReach.delete(uid);
+  if (m.path && m.path.failed) { m.outOfReach.set(carcass.uid, now + ticks(outOfReachS)); return null; }
+  return go;
+}
+
+// The gait after prey k (null: none in mind), along a deer trail (null: off any): to its
+// mark `to`, from the mark `here` underfoot (null: none) (PACE).
+function pace(a, m, k, now, to = null, here = null) {
+  const p = k && m.pursuit && m.pursuit.uid === k.uid ? m.pursuit : null;
+  if (p && k.seenTick === now) p.tick = now; // (still at it)
+  if (p && now - p.tick <= ticks(wolfPursueS)) return "gallop";
+  if (k && now - k.seenTick <= ticks(wolfPursueS)) {
+    const v = wolfFleeingShare * sim.gaitSpeed("deer", "trot");
+    const rush = k.seenTick === now && k.by !== "smell" && (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2 <= wolfRushTiles * wolfRushTiles;
+    if (rush || k.vx * k.vx + k.vy * k.vy >= v * v) { m.pursuit = { uid: k.uid, tick: now }; return "gallop"; }
+    if (k.seenTick === now && k.by !== "smell") { m.striding = false; return "stalk"; }
+  }
+  if (to && to.ageS < wolfStalkTrailS) {
+    // the deer laid it slower than a wolf stalks, so stalking it gains on it
+    const dt = here ? (here.ageS - to.ageS) / sim.tempo : 0, v = sim.gaitSpeed("wolf", "stalk");
+    if (!here || (to.i - here.i) ** 2 + (to.j - here.j) ** 2 < (v * dt) ** 2) { m.striding = false; return "stalk"; }
+  }
+  m.striding = a.wind >= (m.striding ? wolfStrideWindTo : wolfStrideWindFrom);
+  return m.striding ? "gallop" : "walk";
 }
 
 // Hunting (see WOLVES): an intent, or null with no deer in mind and no trail about.
 function hunt(a, m, now) {
-  // its gait after prey: a gallop while it has the stamina and wind for one (DASHING)
-  const gait = a.stamina > a.food && a.wind > wolfDashWindAbove ? "gallop" : "trot";
   let target = m.target !== null ? m.known.get(m.target) : undefined;
   if (target && !target.alive) { m.target = null; target = undefined; }
-  if (target && (target.lost || now - target.seenTick > ticks(wolfForgetPreyS))) target = undefined;
+  const smelt = m.preyTrail && m.preyTrail.uid === m.target ? m.preyTrail.tick : -Infinity;
+  if (target && (target.lost || now - Math.max(target.seenTick, smelt) > ticks(wolfForgetPreyS))) target = undefined;
 
   // each deer it could go after, with its squared distance (to where it should be by
   // now) and how straight ahead it is (cos^2, signed: no square root)
@@ -721,7 +1250,7 @@ function hunt(a, m, now) {
   target = m.target !== null ? m.known.get(m.target) : undefined;
   if (!target) {
     m.searching = false;
-    return track(a, m, now, "deer", gait);
+    return track(a, m, now, "deer", (t, here) => pace(a, m, null, now, t, here));
   }
 
   m.plan = null;
@@ -735,12 +1264,14 @@ function hunt(a, m, now) {
   }
   m.watch = null;
   const age = now - target.seenTick;
-  // seen or heard now, straight at it; else along the freshest deer trail about, if any
+  // seen or heard now, straight at it; else along its trail, if it smells it
   const present = age === 0 && (target.by === "sight" || target.by === "hearing");
   if (!present) {
-    const trail = track(a, m, now, "deer", gait);
-    if (trail) { m.searching = false; return trail; }
+    const uid = m.target;
+    const trail = track(a, m, now, "deer", (t, here) => pace(a, m, target, now, t, here), t => t.uid === uid, m.trailEnds);
+    if (trail) { m.searching = false; m.preyTrail = { uid, tick: now }; return trail; }
   }
+  const gait = pace(a, m, target, now);
   m.mode = "chase";
   if (age === 0) m.searching = false;
   const [tx, ty] = expectedAt(target, now);
@@ -748,24 +1279,59 @@ function hunt(a, m, now) {
   if (age > 0 && dx * dx + dy * dy < 4) m.searching = true;
   if (m.searching) {
     if (target.vx === 0 && target.vy === 0) { // it was standing still, and isn't here
-      target.lost = true; m.target = null; m.searching = false; m.mode = "calm"; return track(a, m, now, "deer", gait) || calm(a, m, now);
+      target.lost = true; m.target = null; m.searching = false; return track(a, m, now, "deer", gait) || prowl(a, m, now);
     }
-    dx = target.vx; dy = target.vy;
+    return head(a, m, target.vx, target.vy, gait, now, { through: m.target });
   }
-  return move(a, m, dx, dy, gait, now);
+  return goTo(a, m, tx, ty, gait, now, { through: m.target });
+}
+
+// PROWLING: a hungry wolf that knows of no deer and smells no trail doesn't idle about
+// (nor keep to its family): it goes looking, covering ground it hasn't been over lately.
+// (Prowling is searching for prey, at a trot or walk; stalking, the quiet gait it closes
+// on prey in: see PACE.)
+// It goes in legs of prowlLegTiles (or prowlLegS at most), each one of 16 ways: the way
+// over the ground it has spent least time on lately (m.visits: see TRAPPED, at
+// prowlLookTiles along it), not back the way it came (more than 90 degrees from its last
+// leg), and of ways as good, the straightest on. It trots while it has the stamina for a
+// long search (above prowlTrotStamina; else walks), keeping dry where it can. Knowing no
+// way at all the way it goes, it picks another.
+const prowlLegTiles = 60, prowlLegS = 60, prowlLookTiles = [15, 30, 45, 60], prowlTrotStamina = 0.3;
+function prowl(a, m, now) {
+  let p = m.prowl;
+  if (!p || (p.x - a.gx) ** 2 + (p.y - a.gy) ** 2 >= prowlLegTiles * prowlLegTiles || now > p.until) {
+    const [px, py] = p ? [p.dx, p.dy] : [a.hx || 1, a.hy || 0];
+    let best = null, bestV = Infinity;
+    for (const [ux, uy] of escapeWays) {
+      const along = ux * px + uy * py;
+      if (p && along < 0) continue;
+      let v = 0;
+      for (const d of prowlLookTiles) v += visitsAt(m, a.gx + ux * d, a.gy + uy * d);
+      v += (1 - along) * 0.5 + Math.random() * 0.1; // (straight on, of ways as good)
+      if (v < bestV) { bestV = v; best = [ux, uy]; }
+    }
+    m.prowl = p = { dx: best[0], dy: best[1], x: a.gx, y: a.gy, until: now + ticks(prowlLegS) };
+  }
+  m.mode = "prowl"; m.plan = null;
+  const go = head(a, m, p.dx, p.dy, a.stamina > prowlTrotStamina ? "trot" : "walk", now, { dry: "rather" });
+  if (go === IDLE) m.prowl = null;
+  return go;
 }
 
 // TRACKING: a hunting wolf follows deer trails (senses.trailsAround) whenever it has no
 // deer in sight or hearing; a wolf going to eat, knowing of no carcass, follows death
 // scent (see DEATH SCENT in sim.js) the same way: it goes to the freshest scent about that
 // is fresher than the scent underfoot, so along a trail it goes the way the deer went (and
-// up death scent, to the carcass), never back. Where a trail ends (nothing fresher about:
-// the deer was killed there, say, or went into the water; the carcass is gone), it gives
-// up that one (by its maker: m.trailEnds, m.deathEnds) as far as that end, and looks for
-// another; death scent of a carcass it knows is bare it leaves be. Deer trails it follows
-// at the hunt's gait (DASHING), death scent at a trot. null if it smells none worth
-// following. (Also for a prospective mate's trail: those `suits` accepts, its own ends;
-// see social.)
+// up death scent, to the carcass), never back; a mark it set off for it keeps in mind until
+// there (or a fresher one turns up), though out of its sniffing patch (so it doesn't turn
+// back and forth as marks come and go at the patch's edge). Where a trail ends (nothing
+// fresher about: the deer was killed there, say, or went into the water; the carcass is
+// gone), it gives up that one (by its maker: m.trailEnds, m.deathEnds) as far as that end,
+// and looks for another, and likewise one it knows no way nearer to; death scent of a
+// carcass it knows is bare it leaves be. Deer trails it follows at its PACE (gait: a
+// function of the mark it goes to and the one underfoot; see HUNTING), death scent at a
+// trot. null if it smells none worth following. (Also for its prey's trail, keeping dry,
+// or a prospective mate's, rather dry: those `suits` accepts; see hunt, social.)
 function track(a, m, now, species = "deer", gait = "trot", suits = null, ends = species === "deer" ? m.trailEnds : m.deathEnds) {
   const i = Math.floor(a.gx), j = Math.floor(a.gy), t0 = sim.now;
   for (const [uid, at] of ends) if (t0 - at > trailEndKeepS) ends.delete(uid);
@@ -778,12 +1344,23 @@ function track(a, m, now, species = "deer", gait = "trot", suits = null, ends = 
     if (t === here || (here && t.ageS >= here.ageS)) continue;
     if (!best || t.ageS < best.ageS) best = t;
   }
+  // the mark it was going to at its last turn, kept in mind once out of its sniffing patch
+  const r = m.trackMark;
+  if (r && r.species === species && now - r.tick <= 2 * turnTicks && !(r.t.i === i && r.t.j === j)) {
+    const t = { ...r.t, ageS: t0 - r.laid };
+    if (worth(t) && (!here || t.ageS < here.ageS) && (!best || t.ageS < best.ageS)) best = t;
+  }
   if (!best) {
+    m.trackMark = null;
     if (here) ends.set(here.uid, t0 - here.ageS); // a dead end
     return null;
   }
+  m.trackMark = { species, t: best, laid: t0 - best.ageS, tick: now };
   m.mode = "track"; m.plan = null;
-  return move(a, m, best.i + 0.5 - a.gx, best.j + 0.5 - a.gy, gait, now);
+  const dry = suits ? (species === "deer" && a.species === "wolf" ? true : "rather") : false; // (a wolf won't follow prey into the water)
+  const go = goTo(a, m, best.i + 0.5, best.j + 0.5, typeof gait === "function" ? gait(best, here) : gait, now, { dry });
+  if (m.path && m.path.failed) { ends.set(best.uid, t0 - best.ageS); return null; } // no way nearer it knows of
+  return go;
 }
 
 // A wolf doesn't follow prey k into the water (nor can it kill it there): it trots,
@@ -808,7 +1385,7 @@ function waitAshore(a, m, k, now) {
   if (!m.watch) return calm(a, m, now);
   const dx = m.watch.spot[0] - a.gx, dy = m.watch.spot[1] - a.gy;
   if (dx * dx + dy * dy < shoreWaitTiles * shoreWaitTiles) return IDLE;
-  return move(a, m, dx, dy, "trot", now, true);
+  return goTo(a, m, m.watch.spot[0], m.watch.spot[1], "trot", now, { dry: true });
 }
 
 // Where swimmer k would come ashore if it carried on, as far as critter a can see: the
@@ -841,6 +1418,7 @@ function landingAhead(a, k) {
 function nurseOrSuckle(a, m, now) {
   if (!a.isMale && a.youngUids.some(uid => { const k = m.known.get(uid); return k && k.nursingOnMe && k.seenTick === now; })) {
     m.mode = "nurse"; m.plan = null;
+    for (const uid of a.youngUids) if (m.known.get(uid)?.nursingOnMe) m.tended.set(uid, now);
     return m.intent === EAT ? EAT : IDLE;
   }
   if (!sim.isInfant(a) || a.pose === "swim") { m.suckle = null; return null; }
@@ -866,7 +1444,7 @@ function nurseOrSuckle(a, m, now) {
   m.suckle.since = null;
   if (k.seenTick !== now && d2 <= kinLostTiles * kinLostTiles) { k.lost = true; return null; }
   m.mode = "nurse"; m.plan = null;
-  return move(a, m, dx, dy, d2 > 9 ? "trot" : "walk", now);
+  return goTo(a, m, k.gx, k.gy, d2 > 9 ? "trot" : "walk", now, { through: a.parentUids[0] });
 }
 
 function settle(a, m, now) {
@@ -881,7 +1459,10 @@ function settle(a, m, now) {
 //   The young (not grown) keep near a parent (the mother first): an infant within
 //     followParentTiles, a weaned youngster within followWeanedTiles (it hunts or grazes
 //     for itself, and roams around the family).
-//   A female keeps within motherStayTiles of her nearest infant.
+//   TENDING: a mother goes the round of her infants (those too young to walk can't come
+//     to her to suckle): to each in turn, right up to it (her box within tendTouchTiles of
+//     its middle, at the nearest of the 8 spots about it with room for her), standing by
+//     it tendStayS (or while it suckles).
 //   A paired critter mates with its partner while she is in heat (she while she is); a
 //     paired male otherwise keeps within pairStayTiles of her, and she within twice that
 //     of him (so one trotting off at the other's speed can't leave the other behind).
@@ -891,7 +1472,7 @@ function settle(a, m, now) {
 //   An unpaired grown critter courts the nearest unpaired grown critter of its species
 //     and the other sex, if not kin or familiar (WESTERMARCK): goes to it and stands
 //     ready to mate within mateCloseTiles. It gives up on one that hasn't mated with it in
-//     courtGiveUpS. Knowing of none, it follows the freshest trail about of one that would
+//     courtGiveUpS. (Not in the water: none courts or mates swimming.) Knowing of none, it follows the freshest trail about of one that would
 //     do (its scent tells: see SMELL in senses.js), the way it was laid (as TRACKING, at a
 //     trot: mode "seek"), until it meets the maker.
 // Kin out of sight are looked for where last seen; not there, they are lost until seen
@@ -905,19 +1486,25 @@ function social(a, m, now, romanceOnly = false) {
   // the intent to go to k (uid) until within `within` (in sight), or null when there. To
   // keep near its kin (keep: "parent", "young" or "mate", whichever of them is nearest),
   // once it sets off it goes on to within keepCloseShare of that, then wanders afresh.
-  const goTo = (uid, k, within, keep = null) => {
+  // To one it courts it keeps dry (round the water, or as near as it can); to its mate,
+  // rather dry. Knowing no way nearer it at all, it gives that one up for kinRetryS (null).
+  const goToKin = (uid, k, within, keep = null) => {
+    if (m.kinOut && m.kinOut.uid === uid && now < m.kinOut.until) return null;
     const d2 = d2Of(k), going = keep !== null && m.closing === keep;
     const stop = going ? Math.max(within * keepCloseShare, kinSpacingTiles) : within;
     if (k.seenTick === now) {
       if (d2 <= stop * stop) { if (going) m.closing = null; return null; }
     } else if (d2 <= kinLostTiles * kinLostTiles) { k.lost = true; m.closing = null; return null; }
     if (keep !== null && !going) { m.closing = keep; m.plan = null; }
-    return move(a, m, k.gx - a.gx, k.gy - a.gy, d2 > within * within + 4 ? "trot" : "walk", now);
+    const go = goTo(a, m, k.gx, k.gy, d2 > within * within + 4 ? "trot" : "walk", now,
+      { through: uid, dry: keep === null ? true : keep === "mate" ? "rather" : false });
+    if (m.path && m.path.failed) { m.kinOut = { uid, until: now + ticks(kinRetryS) }; m.closing = null; return null; }
+    return go;
   };
   const mateWith = (uid, k) => {
-    const go = goTo(uid, k, mateCloseTiles);
+    const go = goToKin(uid, k, mateCloseTiles);
     if (go) return go;
-    return k.lost ? null : { gait: "mate", with: uid };
+    return k.lost || (m.kinOut && m.kinOut.uid === uid && now < m.kinOut.until) ? null : { gait: "mate", with: uid };
   };
 
   if (!sim.isGrown(a)) {
@@ -926,19 +1513,40 @@ function social(a, m, now, romanceOnly = false) {
     const uid = a.parentUids.find(live);
     if (uid === undefined) return null;
     m.mode = "family";
-    return goTo(uid, live(uid), sim.isInfant(a) ? followParentTiles : followWeanedTiles, "parent");
+    return goToKin(uid, live(uid), sim.isInfant(a) ? followParentTiles : followWeanedTiles, "parent");
   }
 
   if (!a.isMale && !romanceOnly) {
-    let infant = null, infantD2 = Infinity;
+    // TENDING: to the infant she has gone to (or nursed) least lately, nearest of those as
+    // long, right up to it; she stands there tendStayS (it suckles, if hungry), then goes
+    // on to the next
+    let infant = null, best = null;
     for (const uid of a.youngUids) {
       const k = live(uid);
-      if (k && k.infant && d2Of(k) < infantD2) { infant = uid; infantD2 = d2Of(k); }
+      if (!k || !k.infant) continue;
+      const key = [m.tended.get(uid) ?? -Infinity, d2Of(k)];
+      if (!best || key[0] < best[0] || (key[0] === best[0] && key[1] < best[1])) { infant = uid; best = key; }
     }
     if (infant !== null) {
-      m.mode = "family";
-      const go = goTo(infant, live(infant), motherStayTiles, "young");
-      if (go) return go;
+      m.mode = "family"; m.closing = null;
+      const k = live(infant), reach = a.boxRad + tendTouchTiles;
+      if (Math.abs(k.gx - a.gx) > reach || Math.abs(k.gy - a.gy) > reach) {
+        m.tend = null;
+        // to the nearest of the 8 spots right by it with room for her (others clear of it)
+        const c = wayContext(a, m, now, { through: a.youngUids }), d = reach - 0.02; // (she steps among them)
+        let spot = null, spotD2 = Infinity;
+        for (const [ux, uy] of dirSteps) {
+          const sx = k.gx + ux * d, sy = k.gy + uy * d, s2 = (sx - a.gx) ** 2 + (sy - a.gy) ** 2;
+          if (s2 < spotD2 && tileOpen(c, Math.floor(sx), Math.floor(sy), false) && crowdClear(c, sx, sy)) { spot = [sx, sy]; spotD2 = s2; }
+        }
+        const go = spot ? goTo(a, m, spot[0], spot[1], d2Of(k) > 9 ? "trot" : "walk", now, { through: a.youngUids }) : null;
+        if (go && !(m.path && m.path.failed)) return go;
+        m.tended.set(infant, now); // (no way it knows of: the next)
+      } else {
+        if (!m.tend || m.tend.uid !== infant) m.tend = { uid: infant, since: now };
+        if (now - m.tend.since <= ticks(tendStayS)) return IDLE;
+        m.tended.set(infant, now); m.tend = null;
+      }
     }
   }
 
@@ -947,22 +1555,23 @@ function social(a, m, now, romanceOnly = false) {
     const p = live(a.mateUid);
     if (!p) return null;
     const inHeat = a.isMale ? p.inHeat : sim.inHeat(a);
-    if (inHeat && p.seenTick === now) { m.mode = "mate"; return mateWith(a.mateUid, p); }
+    if (inHeat && p.seenTick === now && !p.swimming && a.pose !== "swim") { m.mode = "mate"; return mateWith(a.mateUid, p); }
     if (romanceOnly) return null;
     m.mode = "family";
-    return goTo(a.mateUid, p, a.isMale ? pairStayTiles : 2 * pairStayTiles, "mate");
+    return goToKin(a.mateUid, p, a.isMale ? pairStayTiles : 2 * pairStayTiles, "mate");
   }
 
   let best = null, bestD2 = Infinity;
   for (const [uid, k] of m.known) {
     if (k.species !== a.species || !k.alive || k.lost || k.isMale === a.isMale || !k.grown) continue;
-    if (k.mateUid !== null || now - k.seenTick > ticks(wolfForgetPreyS)) continue;
+    if (k.mateUid !== null || k.swimming || now - k.seenTick > ticks(wolfForgetPreyS)) continue;
     if (m.familiar.has(uid) || isKin(a, uid) || (m.refused.get(uid) ?? -Infinity) > now) continue;
     const d2 = d2Of(k);
     if (d2 < bestD2) { best = uid; bestD2 = d2; }
   }
-  if (best === null) {
+  if (best === null || a.pose === "swim") {
     m.court = null;
+    if (a.pose === "swim") return null;
     const suits = t => t.isMale !== a.isMale && t.grown && !t.paired && t.uid !== a.uid
       && !m.familiar.has(t.uid) && !isKin(a, t.uid) && !((m.refused.get(t.uid) ?? -Infinity) > now);
     const seek = track(a, m, now, a.species, "trot", suits, m.mateTrailEnds);
@@ -981,8 +1590,8 @@ function social(a, m, now, romanceOnly = false) {
 
 // TIRED SWIMMERS: entering the water, a critter remembers where (the shore nearest its
 // last footing on land: entryNearTiles) and its stamina then; swimming, it keeps looking
-// for land it could climb out onto (a land tile beside water, its bank within a step of
-// it: climbable), every landLookEveryS, and remembers the nearest it has seen (by where it
+// for land it could climb out onto (an open land tile beside water, its bank within a step
+// of it, with room about it: climbable), every landLookEveryS, and remembers the nearest it has seen (by where it
 // is now); it forgets all this back on land. Once it has burned swimTurnBackShare of the
 // stamina it went in with, it makes for the nearer of the two (looking about afresh then),
 // whatever else it would do: going back the way it came takes no more than it has burned,
@@ -990,7 +1599,25 @@ function social(a, m, now, romanceOnly = false) {
 // that shore and makes for the other; knowing of none, it swims on the way it was going.
 // (The player's wolf decides for itself while the player steers it.)
 function climbable(i, j) {
-  return sim.isLandTile(i, j) && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([di, dj]) => sim.getTerrainAt(i + di, j + dj) === "water");
+  return sim.isLandTile(i, j)
+    && [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([di, dj]) => sim.getTerrainAt(i + di, j + dj) === "water") && roomy(i, j);
+}
+
+// Whether land tile (i, j) has room about it: at least roomyTiles of open land joined to it
+// over land, a level up or down at a time (not a nook among boulders and water, where a
+// critter too tired to swim on would be stuck).
+const roomyTiles = 12;
+function roomy(i, j) {
+  const seen = new Set([i * 100000 + j]), todo = [[i, j]];
+  while (todo.length && seen.size < roomyTiles) {
+    const [ci, cj] = todo.pop(), lv = Math.min(...sim.tileCorners(ci, cj));
+    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const ni = ci + di, nj = cj + dj, key = ni * 100000 + nj;
+      if (seen.has(key) || sim.getTerrainAt(ni, nj) === "water" || sim.isBlockedTile(ni, nj) || Math.abs(Math.min(...sim.tileCorners(ni, nj)) - lv) > 1) continue;
+      seen.add(key); todo.push([ni, nj]);
+    }
+  }
+  return seen.size >= roomyTiles;
 }
 
 // Notes where a critter stands for TIRED SWIMMERS: on land, its footing; swimming, where it
@@ -1036,23 +1663,36 @@ function toShore(a, m, now) {
   if (!t) { m.shore = null; return calm(a, m, now); } // swims on as it was going
   if (!m.shore || m.shore.tile[0] !== t[0] || m.shore.tile[1] !== t[1]) m.shore = { tile: t, gx: t[0] + 0.5, gy: t[1] + 0.5, blockedTurns: 0 };
   m.plan = null;
-  return move(a, m, m.shore.gx - a.gx, m.shore.gy - a.gy, "walk", now);
+  return goTo(a, m, m.shore.gx, m.shore.gy, "walk", now);
 }
 
-// CALM: wander for a random while (a random heading at a walk or trot, or a pause;
-// galloping is only for chasing and fleeing). An unpaired grown critter ROAMS instead,
-// to meet others: one heading at a trot for roamS / 2 to roamS (as young wolves disperse
-// to find mates). A swimmer may head for land instead, the more surely the farther away
-// it is.
+// CALM: wander for a random while (a random heading at a walk), or RESTS (stands still,
+// mode "rest"; not in the water, nor on a water tile): at full stamina calmRestShare of the time, and the more the
+// more tired it is (all the time spent), so at ease it gets back the stamina its trotting
+// cost (see EXERTION in sim.js). An unpaired grown critter with stamina to spare (above
+// calmRoamStamina) ROAMS instead, to meet others: one heading at a trot for roamS / 2 to
+// roamS (as young wolves disperse to find mates). A swimmer may head for land instead,
+// the more surely the farther away it is. Knowing no way at all the way it heads, it picks
+// another.
 function calm(a, m, now) {
   const p = m.plan;
   const blocked = a.blockedTick > m.lastTurn;
   if (p && p.kind === "toLand") {
     if (a.pose !== "swim") { m.plan = null; return calm(a, m, now); }
     if (blocked && ++p.blockedTicks > ticks(returnToLandGiveUpS)) m.plan = null;
-    else return move(a, m, p.gx - a.gx, p.gy - a.gy, "walk", now);
+    else return goTo(a, m, p.gx, p.gy, "walk", now);
   }
-  if (p && p.kind === "wander" && now < p.until && !blocked) return p.intent;
+  // (knowing no way at all that way, it picks another next turn)
+  const wander = intent => {
+    if (intent === IDLE) return IDLE;
+    const go = head(a, m, intent.dx, intent.dy, intent.gait, now);
+    if (go === IDLE) m.plan = null;
+    return go;
+  };
+  if (p && p.kind === "wander" && now < p.until && !blocked) {
+    if (p.intent === IDLE) m.mode = "rest";
+    return wander(p.intent);
+  }
 
   const until = now + 120 + Math.floor(Math.random() * 500 + Math.random() * 500);
   if (a.pose === "swim") {
@@ -1061,25 +1701,27 @@ function calm(a, m, now) {
     const roll = Math.random() * returnToLandSureTiles;
     if (land && roll * roll < land.distL2) {
       m.plan = { kind: "toLand", gx: land.tile[0] + 0.5, gy: land.tile[1] + 0.5, blockedTicks: 0 };
-      return move(a, m, m.plan.gx - a.gx, m.plan.gy - a.gy, "walk", now);
+      return goTo(a, m, m.plan.gx, m.plan.gy, "walk", now);
     }
   }
-  const roam = sim.isGrown(a) && a.mateUid === null;
-  if (!roam && Math.random() < 0.1) {
+  const roam = sim.isGrown(a) && a.mateUid === null && a.stamina > calmRoamStamina;
+  const wet = a.pose === "swim" || sim.getTerrainAt(Math.floor(a.gx), Math.floor(a.gy)) === "water";
+  if (!roam && !wet && Math.random() < calmRestShare + (1 - calmRestShare) * (1 - a.stamina)) {
     m.plan = { kind: "wander", until, intent: IDLE };
+    m.mode = "rest";
   } else {
-    // the same intent all plan long, so the simulation works out its heading once
+    // one way all plan long
     let dx = 1, dy = 0;
     for (let tries = 0; tries < 4; tries++) {
       dx = Math.random() * 2 - 1; dy = Math.random() * 2 - 1;
       const k = 1 / Math.max(Math.abs(dx), Math.abs(dy), 0.01); // about a tile ahead
       if (sim.canStepTo(a, a.gx + dx * k, a.gy + dy * k)) break;
     }
-    const gait = roam || Math.random() < 0.5 ? "trot" : "walk";
+    const gait = roam ? "trot" : "walk";
     m.plan = { kind: "wander", until: roam ? now + ticks(roamS * (0.5 + Math.random() / 2)) : until,
       intent: { dx, dy, gait } };
   }
-  return m.plan.intent;
+  return wander(m.plan.intent);
 }
 
 // The nearest land tile to (gx, gy) a swimmer can climb onto that critter a can see,
@@ -1112,7 +1754,7 @@ function findNearestLand(a, gx, gy, maxR = Infinity) {
 // never pens it in. Then it carries on.
 function giveWay(a, m, intent, now) {
   const atEase = intent === IDLE || (intent && intent.gait === "idle")
-    || m.mode === "calm" || m.mode === "family" || m.mode === "yield";
+    || m.mode === "calm" || m.mode === "rest" || m.mode === "family" || m.mode === "yield";
   if (m.yield && now < m.yield.until && atEase) return m.yield.intent;
   m.yield = null;
   if (!atEase || a.pose === "swim" || !(sim.tickCount - a.bumpedTick <= turnTicks)) return intent;
@@ -1146,6 +1788,7 @@ function think() {
     }
     if (now % turnTicks !== m.slot) continue;
     remember(a, m, now);
+    noteBump(a, m, now);
     noteShores(a, m, now);
     noteLand(a, m, now);
     let intent;
@@ -1153,6 +1796,8 @@ function think() {
     if (now - m.playerTick < ticks(playerHandoverS)) intent = IDLE;
     else if (a.pose === "swim" && a.stamina <= m.entryStamina * (1 - swimTurnBackShare)) intent = toShore(a, m, now);
     else intent = a.species === "wolf" ? decideWolf(a, m, now) : decideDeer(a, m, now);
+    noteWhere(a, m, now);
+    if (a.pose !== "swim") intent = escape(a, m, now, intent) || intent;
     intent = giveWay(a, m, intent, now);
     m.intent = intent;
     m.lastTurn = now;
@@ -1206,7 +1851,7 @@ function watchPacing(now) {
     const entry = { tick: now, uid: a.uid, species: a.species, grown: sim.isGrown(a), distinct,
       seconds: +((now - steps[0].tick) * sim.tempo).toFixed(1), modes, steps: steps.slice(),
       state: { target: m.target, searching: m.searching, flee: m.flee && { ...m.flee }, grazeTo: m.grazeTo,
-        court: m.court && { ...m.court }, plan: m.plan && { kind: m.plan.kind }, detour: m.detour && { ...m.detour },
+        court: m.court && { ...m.court }, plan: m.plan && { kind: m.plan.kind }, path: m.path && m.path.tiles.length, trapped: m.trapped,
         mateUid: a.mateUid, parents: a.parentUids.slice(), young: a.youngUids.length,
         watch: m.watch && { ...m.watch }, shore: m.shore && { ...m.shore } },
       at: [+a.gx.toFixed(2), +a.gy.toFixed(2)], patch: pacingPatch(i, j, 4),
@@ -1249,11 +1894,12 @@ function forget(a) {
 function stateOf(a) {
   const m = memories.get(a);
   if (!m) return null;
-  return { mode: m.mode, target: m.target, searching: m.searching, flee: m.flee, detour: m.detour, watch: m.watch,
+  return { mode: m.mode, target: m.target, searching: m.searching, flee: m.flee, watch: m.watch,
+    path: m.path && { tx: m.path.tx, ty: m.path.ty, tiles: m.path.tiles.slice(), failed: m.path.failed }, rocks: m.rocks.size, wet: m.wet.size, bumps: m.bumps.size,
+    trapped: m.trapped, escape: m.escape && { ...m.escape }, intent: m.intent, heading: m.heading && { ...m.heading },
     grazeTo: m.grazeTo, closing: m.closing, entry: m.entry, landSeen: m.landSeen, entryStamina: m.entryStamina, drinking: m.drinking, waterTo: m.waterTo !== null ? m.waters.get(m.waterTo) : null,
     waters: [...m.waters.values()].map(s => ({ ...s })),
     slot: m.slot, lastTurn: m.lastTurn, court: m.court, familiar: [...m.familiar],
-    avoid: m.avoid.map(t => t > sim.tickCount ? 1 : 0).join(""),
     known: [...m.known].map(([uid, k]) => ({ uid, ...k })) };
 }
 

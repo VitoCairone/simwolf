@@ -3,8 +3,11 @@
 //    half full, hunts before it drinks, thirsty as it is; less hungry, it drinks first
 //  - a hunting wolf that can't see or hear a deer follows the freshest deer trail about,
 //    the way the deer went
-//  - DASHING: after prey it gallops while its stamina meter is above its food meter and
-//    its wind above half, else trots
+//  - PROWLING: hungry, knowing of no deer and smelling no trail, it goes looking far and
+//    wide, not idling about
+//  - PACE along a trail: stalking along a fresh one (the deer near), striding along an
+//    older one (galloping with wind to spare, walking to get it back), whatever its
+//    stamina (see pursuit.test.js for whole chases)
 //  - a carcass spreads death scent over the land around it, out to 20 tiles, the circle
 //    growing over 20 s from the death, renewed every 5 minutes, always stronger toward
 //    the carcass; never on water
@@ -77,24 +80,47 @@ async function main(browser, r) {
   r.check(famished && famished["0.4"].includes("track") && !famished["0.4"].includes("drink") && famished["0.6"].includes("drink"),
     `famished (hunger 60%, stomach empty), a thirsty wolf hunts first (${famished && famished["0.4"]}); less hungry (40%), it drinks first (${famished && famished["0.6"]})`);
 
-  // TRACKING and DASHING: along a trail, the way the deer went, galloping or trotting
+  // TRACKING and PACE: along a trail, the way the deer went
   // (thirst aside from here: see helpers.js)
   vm.runInContext("S.holdWater(true)", c);
   const dash = vm.runInContext(`(() => {
     const t = openAt(14); if (!t) return null;
     const out = [];
-    for (const [stamina, wind] of [[1, 1], [1, 0.4], [0.3, 1]]) {
-      clearScent(); put(wolf, t[0] - 4.5, t[1] + 0.5); S.setFood(wolf, 0.6); wolf.stamina = stamina; wolf.wind = wind;
-      trail(t[0] - 5, t[1], 12);
+    for (const [age, wind] of [[5, 1], [60, 1], [60, 0.7]]) {
+      clearScent(); put(wolf, t[0] - 4.5, t[1] + 0.5); S.setFood(wolf, 0.6); wolf.stamina = 0.3; wolf.wind = wind;
+      trail(t[0] - 5, t[1], 12, age);
       const x0 = wolf.gx, r = think(wolf, 1.5);
-      out.push({ stamina, wind, food: 0.6, moved: +(wolf.gx - x0).toFixed(1), modes: r.modes, gallop: r.poses.includes("gallop"), trot: r.poses.includes("trot") });
+      out.push({ age, wind, moved: +(wolf.gx - x0).toFixed(1), modes: r.modes, poses: r.poses.filter(p => p !== "idle") });
     }
     return out;
   })()`, c);
   r.check(dash && dash.every(d => d.modes.includes("track") && d.moved > 1),
     `a hunting wolf with no deer in sight follows a deer trail the way the deer went (${dash && dash.map(d => d.moved + " tiles").join(", ")} along it in 1.5 s)`);
-  r.check(dash && dash[0].gallop && !dash[1].gallop && dash[1].trot && !dash[2].gallop && dash[2].trot,
-    `...galloping with stamina above its food meter and wind above half (${dash && dash[0].gallop}), trotting with wind at 40% (${dash && !dash[1].gallop}) or stamina below its food meter (${dash && !dash[2].gallop})`);
+  const [fresh, old, puffed] = dash || [];
+  r.check(dash && fresh.poses.includes("stalk") && !fresh.poses.some(p => p === "gallop" || p === "trot") && old.poses.includes("gallop")
+    && puffed.poses.includes("walk") && !puffed.poses.some(p => p === "gallop" || p === "trot"),
+    `...stalking along a trail 5 s old, the deer near (${fresh && fresh.poses}); along one a minute old striding: galloping with its wind full, ` +
+    `stamina low as it is (${old && old.poses}), walking to get its wind back at 70% (${puffed && puffed.poses})`);
+
+  // PROWLING: hungry, knowing of no deer and smelling no trail, it goes looking
+  const prowl = vm.runInContext(`(() => {
+    const t = openAt(6); if (!t) return null;
+    clearScent(); put(wolf, t[0] + 0.5, t[1] + 0.5); S.setFood(wolf, 0.4); wolf.stamina = 1;
+    mind.forget(wolf); mind.ignore(wolf, false);
+    const cells = new Set(), modes = new Set(), x0 = wolf.gx, y0 = wolf.gy;
+    let far = 0, still = 0, longest = 0;
+    for (let n = 0; n < 40 / sim.tempo; n++) {
+      S.tick(); S.setFood(wolf, 0.4); modes.add(mind.stateOf(wolf)?.mode);
+      cells.add(Math.floor(wolf.gx / 4) * 100000 + Math.floor(wolf.gy / 4));
+      far = Math.max(far, Math.hypot(wolf.gx - x0, wolf.gy - y0));
+      still = wolf.speed === 0 ? still + 1 : 0; longest = Math.max(longest, still);
+    }
+    mind.ignore(wolf);
+    return { cells: cells.size, far: +far.toFixed(0), longestS: +(longest * sim.tempo).toFixed(1), modes: [...modes].filter(Boolean) };
+  })()`, c);
+  r.check(prowl && prowl.modes.includes("prowl") && prowl.cells >= 17 && prowl.far >= 35 && prowl.longestS < 3,
+    `a hungry wolf knowing of no deer and smelling no trail prowls: in 40 s it goes ${prowl && prowl.far} tiles off, over ` +
+    `${prowl && prowl.cells} squares of 4 x 4 tiles, standing still ${prowl && prowl.longestS} s at most (${prowl && prowl.modes})`);
 
   // DEATH SCENT: the circle growing, stronger toward the carcass, renewed
   const death = vm.runInContext(`(() => {
@@ -121,11 +147,10 @@ async function main(browser, r) {
   r.check(death && death.wet === 0 && death.renewed < 1 && death.before > 0,
     `...none on water (${death && death.wet} wet tiles marked); renewed after 5 minutes (age at the carcass ${death && death.renewed} s)`);
 
-  // a hungry wolf, the carcass out of sight and not on the wind, follows death scent to it
+  // a hungry wolf, the carcass out of sight and too far to smell, follows death scent to it
   const scavenge = vm.runInContext(`(() => {
     const [ci, cj, dir] = ${JSON.stringify(death && death.carcass)};
     put(wolf, ci + 0.5 - dir * 14, cj + 0.5, -dir, 0); S.setFood(wolf, 0.6); // facing away
-    S.setWind(dir > 0 ? 0 : Math.PI); // from the wolf toward the carcass: it can't smell the carcass on the wind
     mind.forget(wolf); mind.ignore(wolf, false);
     const modes = new Set(); let ate = false, n = 0;
     for (; n < 20 / sim.tempo && !ate; n++) { S.tick(); modes.add(mind.stateOf(wolf)?.mode); if (wolf.eating && wolf.gut > 0) ate = true; }
@@ -133,7 +158,7 @@ async function main(browser, r) {
     return { ate, s: +(n * sim.tempo).toFixed(1), modes: [...modes] };
   })()`, c);
   r.check(scavenge && scavenge.ate && scavenge.modes.includes("track"),
-    `a hungry wolf 14 tiles off, facing away, the carcass not on the wind, follows its death scent to it and eats (${scavenge && scavenge.s} s; ${scavenge && scavenge.modes})`);
+    `a hungry wolf 14 tiles off, facing away, too far to smell the carcass, follows its death scent to it and eats (${scavenge && scavenge.s} s; ${scavenge && scavenge.modes})`);
 }
 
 module.exports = { name: "hunting by scent", main };

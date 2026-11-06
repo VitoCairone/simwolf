@@ -68,6 +68,10 @@ art from them.
 - **Wolf sleep.** The wolf's sleeping frames (columns 48-49 of `wolf-land.png` and the
   young sheets) are the artist's corpse frame, edited (mouth and eye closed, a breathing
   frame): `extract_wolf_sheet.py`. A stopgap until real lying-down frames are drawn.
+- **Wolf stalking.** `images/wolf-stalk.png` (and `young/wolf-stalk-stage*.png`) is the
+  wolf's land sheet shaded 20% toward dark purple (`spritecraft/make_stalk_sheets.py`),
+  its run frames played slowly. A stopgap until real stalking frames (crouched, head low)
+  are drawn.
 
 - **Shore corners.** `images/shore-outer.png` (outer corners, water off a corner of land)
   and `images/shore-inner.png` (interior corners, water in a notch of land) are made from

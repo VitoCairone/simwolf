@@ -26,7 +26,7 @@ async function main(browser, r) {
   })); };
 
   // each ring gives its pose
-  for (const [f, pose] of [[0.05, "idle"], [0.3, "walk"], [0.6, "trot"], [0.9, "gallop"]]) {
+  for (const [f, pose] of [[0.05, "idle"], [0.25, "walk"], [0.47, "stalk"], [0.68, "trot"], [0.9, "gallop"]]) {
     await p.evaluate(() => { sim.pcWolf.wind = 1; sim.pcWolf.stamina = 1; });
     await p.mouse.move(pad.x + f * pad.R, pad.y, { steps: 2 });
     const s = await state();

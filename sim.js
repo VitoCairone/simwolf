@@ -263,6 +263,7 @@ const REALISTIC = {
   travelKph: {
     wolf: {
       walk: 5,        // estimate; no direct figure found
+      stalk: 7,       // creeping up on prey, all but silent (a game gait: see EXERTION)
       trot: 9,        // the travel gait, kept up for hours (Mech & Boitani: 8-9 km/h)
       gallop: 55,     // chasing prey: 50-64 km/h for 1-8 km
       swim: 3.5,      // ~3 mph; reported figures are sparse
@@ -289,7 +290,7 @@ const REALISTIC = {
     },
   },
   // Wind: half of what's missing comes back every this many seconds, by pose.
-  windRefillHalfLifeSByPose: { idle: 45, walk: 60, trot: 180 },
+  windRefillHalfLifeSByPose: { idle: 45, walk: 60, stalk: 180, trot: 180 },
   // Stamina: seconds from empty to full, by pose.
   staminaFullRefillSByPose: { idle: 30000, walk: 120000 },
   gallopStaminaCostFactor: 2, // galloping uses stamina twice as fast as trotting
@@ -343,7 +344,7 @@ const scaledTimes = (table, k) => Array.isArray(table) ? table.map(v => v * k)
 const GAMIFIED = {
   name: "gamified",
   travelKph: {
-    wolf: { walk: 5, trot: 9, gallop: 55, swim: 3.5, swimBurst: 6 },
+    wolf: { walk: 5, stalk: 7, trot: 9, gallop: 55, swim: 3.5, swimBurst: 6 },
     deer: { walk: 5, trot: 15, gallop: 65, swim: 5, swimBurst: 10 },
   },
   exertion: (() => {
@@ -780,6 +781,12 @@ function isBoulderSite(x, y) {
 }
 
 // Whether no critter can enter the tile containing (gx, gy).
+// For tests: put a boulder on tile (i, j), or take it away.
+function setBoulder(i, j, on = true) {
+  const b = terrainBlock(i, j);
+  b.boulder[(i - b.i0) * terrainBlockTiles + j - b.j0] = on ? 1 : 0;
+}
+
 function isBlockedTile(gx, gy) {
   return obstacleAt(gx, gy) !== null;
 }
@@ -1068,6 +1075,7 @@ function initCritter(a, species, tissues = null) {
   a.stamina = 1;
   a.nursingOn = null;      // the mother it is suckling from (see BREEDING)
   a.bumpedTick = -Infinity; // (see COLLISIONS)
+  a.touchedTick = -Infinity;
   a.womb = biomass();
   if (isNewborn) {
     a.frameKg = biomassKg(tissues); // (a well-fed body's weight: its mother's womb is made so)
@@ -2011,8 +2019,8 @@ function updateClock() {
 // made older by deathScentAgeSPerTile for each tile from the carcass, so the scent is
 // always stronger toward it (a fresher mark is never replaced by an older one).
 // WIND: one breeze over the whole map, blowing toward the unit vector (windX, windY); every
-// SPEEDS.windChangeEveryS it turns by up to windTurnMaxRad either way. It carries critters'
-// scent downwind (see senses.js).
+// SPEEDS.windChangeEveryS it turns by up to windTurnMaxRad either way. (No scent rides
+// it for now: see SMELL in senses.js.)
 const scentSpecies = ["wolf", "deer", "death"];
 const deathScentTiles = 20;
 const deathScentGrowS = 20;
@@ -2388,7 +2396,7 @@ function giveBirth(f) {
 //   { gait: "eat", at }    a deer: the same, the grass under the boulder on tile at, [i, j],
 //                          when right beside it (see GRASS)
 //   { gait: "mate", with } stand still, ready to mate with critter uid `with` (see BREEDING)
-//   { dx, dy, gait }       move along grid vector (dx, dy), any length, at walk, trot or
+//   { dx, dy, gait }       move along grid vector (dx, dy), any length, at walk, stalk, trot or
 //                          gallop, or the best gait wind and stamina allow
 //   { dir, gait }          the same along one of the 8 directions
 // HEADINGS: a moving critter goes along (a.hx, a.hy), a unit vector. An intent's vector
@@ -2470,8 +2478,11 @@ function stun(a) {
 }
 
 // MOVING
-// Gaits: walk, trot and gallop on land, swim in water. A gait (a.pose) changes at once;
-// the speed follows it (SPEED CHANGES).
+// Gaits: walk, trot and gallop on land, swim in water; and for a wolf, STALKING: between a
+// walk and a trot, all but silent (see HEARING in senses.js), and costing stamina as a
+// trot does, so going a little less far on it (its use is stealth, not saving strength).
+// A deer can't stalk (it walks). A gait (a.pose) changes at once; the speed follows it
+// (SPEED CHANGES).
 
 // Move along one of the 8 directions (for tests and debugging; intents use
 // setCritterHeading).
@@ -2507,7 +2518,7 @@ function setCritterHeading(a, hx, hy, newPose = "walk", facing = undefined) {
   } else {
     if (newPose === "gallop" && !canUseGait(a, "gallop", a.pose === "gallop"))
       newPose = "trot";
-    if (newPose === "trot" && !canUseGait(a, "trot", a.pose === "trot"))
+    if ((newPose === "trot" || newPose === "stalk") && !canUseGait(a, newPose, a.pose === newPose))
       newPose = "walk";
     a.landPose = newPose;
     if (a.climbingUntil > g_tick && newPose !== "idle") newPose = "walk"; // still scrambling up a bank
@@ -2560,8 +2571,8 @@ function changeSpeed(a) {
 // EXERTION: two reserves, 0 (empty) to 1 (full).
 //   wind     limits galloping: drains while galloping (or sprinting in water) and refills
 //            otherwise, quickly at first, faster the more restful the gait
-//   stamina  limits trotting: drains while trotting, galloping and swimming, and refills
-//            slowly while idle or walking
+//   stamina  limits trotting: drains while trotting (or stalking, as fast), galloping and
+//            swimming, and refills slowly while idle or walking
 // A gait can only be started with some reserve in hand (windStartFrac,
 // staminaStartFrac), so critters don't flicker in and out of it near empty; once in it,
 // they keep going until the reserve runs out.
@@ -2571,7 +2582,8 @@ function canUseGait(a, gait, isAlready = false) {
     return isAlready ? (a.wind > 0 && a.stamina > 0)
                      : (a.wind >= windStartFrac && a.stamina >= staminaStartFrac);
   }
-  if (gait === "trot") return isAlready ? a.stamina > 0 : a.stamina >= staminaStartFrac;
+  if (gait === "stalk" && !travelSpeedBySpeciesAndPose[a.species].stalk) return false;
+  if (gait === "trot" || gait === "stalk") return isAlready ? a.stamina > 0 : a.stamina >= staminaStartFrac;
   return true;
 }
 
@@ -2581,7 +2593,7 @@ function applyExertion(a) {
   if (a.pose === "gallop") {
     a.wind = Math.max(0, a.wind - dt / ex.gallopFullWindS);
     a.stamina = Math.max(0, a.stamina - gallopStaminaCostFactor * dt / ex.trotFullStaminaS);
-  } else if (a.pose === "trot") {
+  } else if (a.pose === "trot" || a.pose === "stalk") {
     a.stamina = Math.max(0, a.stamina - dt / ex.trotFullStaminaS);
   } else if (a.pose === "swim") {
     if (a.swimBurst) a.wind = Math.max(0, a.wind - dt / ex.gallopFullWindS);
@@ -2599,7 +2611,7 @@ function applyExertion(a) {
   // out of a reserve: the next gait down
   if (a.pose === "gallop" && (a.wind <= 0 || a.stamina <= 0)) {
     setCritterHeading(a, a.hx, a.hy, "trot");
-  } else if (a.pose === "trot" && a.stamina <= 0) {
+  } else if ((a.pose === "trot" || a.pose === "stalk") && a.stamina <= 0) {
     setCritterHeading(a, a.hx, a.hy, "walk");
   } else if (a.pose === "swim" && a.targetSpeed > 0) {
     if (a.swimBurst && (a.wind <= 0 || a.stamina <= 0)) a.swimBurst = false;
@@ -2802,20 +2814,27 @@ function updateAllCritters() {
 // every other live critter at once (the dying and corpses are walked over like ground).
 // BUMPED: a critter that another moves into feels it: a.bumpedTick, a.bumpedBy (its uid)
 // the way it was moving, (a.bumpedDx, a.bumpedDy), and where it was, (a.bumpedX,
-// a.bumpedY). A wolf touching a live deer on land kills it; any other collider is
+// a.bumpedY). TOUCHED: each of two colliding critters feels the other there, whoever
+// moved: a.touchedTick, a.touchedBy (its uid), and where it stands, (a.touchedX,
+// a.touchedY). A mother and her young too young to walk pass through each other (she
+// steps among them). A wolf touching a live deer on land kills it; any other collider is
 // stunned where it is, but of two critters, one whose own move would be clear of the
 // other where it stands goes on (a critter bumped from behind, or stepping away from the
 // one that bumped it) while the other is stunned. This is the only place positions change.
 // TODO: kill only when the wolf bites, front-on.
 function moveAllTogether(movers) {
   const allColliders = movers;
-  const collidePairs = findCollidingPairs(allColliders);
+  // (a mother and her young too young to walk don't collide: she steps among them)
+  const litter = (p, q) => q.parentUids[0] === p.uid && !_can(q, "walk");
+  const collidePairs = findCollidingPairs(allColliders).filter(([i, j]) => i === -1
+    || !(litter(allColliders[i], allColliders[j]) || litter(allColliders[j], allColliders[i])));
   const didCollide = {};
   const clearOf = (a, b) => !(a.nextGX === a.gx && a.nextGY === a.gy)
     && !doNextMovesCollide(a, { gx: b.gx, gy: b.gy, nextGX: b.gx, nextGY: b.gy, boxRad: b.boxRad });
   collidePairs.forEach(pair => {
     if (pair[0] !== -1) {
       const [c0, c1] = [allColliders[pair[0]], allColliders[pair[1]]];
+      for (const [p, q] of [[c0, c1], [c1, c0]]) { p.touchedTick = g_tick; p.touchedBy = q.uid; p.touchedX = q.gx; p.touchedY = q.gy; }
       const ok0 = clearOf(c0, c1), ok1 = clearOf(c1, c0);
       if (ok0 !== ok1) { didCollide[pair[ok0 ? 1 : 0]] = true; return; }
     }
@@ -3135,7 +3154,7 @@ function start({ consoleOnly = false } = {}) {
 // eating, carcass, carcassFullKg, uid, blockedTick, stunnedUntil, isMale, birthTime,
 // deathTime, weightKg, adultKg, frameKg, boxRad, mateUid, matingWith, parentUids,
 // youngUids, pregnancy, nursingOn, bumpedTick, bumpedBy, bumpedDx, bumpedDy, bumpedX,
-// bumpedY)
+// bumpedY, touchedTick, touchedBy, touchedX, touchedY)
 // but change the world only through these functions.
 return {
   // lifecycle and time
@@ -3148,11 +3167,12 @@ return {
 
   // the world
   gridWidthN, gridHeightN, getTerrainAt, obstacleAt, undergrowthAt,
-  tileCorners, heightAt, levelRangeIn, waterKindAt, waterLevelAt, waterLevelNear,
+  tileCorners, heightAt, levelRangeIn, waterKindAt, waterLevelAt, waterLevelNear, maxStepLevels,
   get startArea() { return startArea; }, // where the critters started (THE START)
   // the square startNearTiles a side about it (for tests: where to look for features)
   get startNear() { const m = (startNearTiles - startTiles) / 2; return startArea && { i0: startArea.i0 - m, j0: startArea.j0 - m, i1: startArea.i1 + m, j1: startArea.j1 + m }; },
-  isBlockedTile, isLandTile, isWaterAt, canStepTo, obstacleHeightAt, sightHeightAt, centerHeightAt, isLiveCritter,
+  gaitSpeed: (species, gait) => travelSpeedBySpeciesAndPose[species][gait] || 0, // tiles a tick
+  isBlockedTile, isLandTile, isWaterAt, canStepTo, mayEnterWater, obstacleHeightAt, sightHeightAt, centerHeightAt, isLiveCritter,
   boulderRockAt, obstacleAcross, boulderRocks,
   // scent and wind
   scentAt, get wind() { return { x: windX, y: windY }; },
@@ -3181,7 +3201,7 @@ return {
 
   // For tests and debugging only; views and controllers must not use these.
   internals: {
-    tick, wolves, deer, allLandTiles, terrainMap, terrainBlocks, terrainBlocksKept, grassTouched, setTileCorners,
+    tick, wolves, deer, allLandTiles, terrainMap, terrainBlocks, terrainBlocksKept, grassTouched, setTileCorners, setBoulder,
     get scentMarks() { return scentMarks; },
     setCritterIdle, setCritterMoving, setCritterHeading, isInWater, getOccupiedTiles,
     forbidOverlapsOnStart, critterBoxRad, travelSpeedBySpeciesAndPose,

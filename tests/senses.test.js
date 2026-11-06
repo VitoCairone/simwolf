@@ -7,8 +7,8 @@
 //  - HEARING: a critter moving on land is heard within a range set by its gait and the
 //    ground under it (galloping farther than trotting, trotting than walking); standing
 //    still it is silent; swimming it splashes
-//  - SMELL: on the wind, a critter downwind smells another far beyond sight, not upwind or
-//    across the wind; any within a few tiles, whatever the wind; carcasses with meat too
+//  - SMELL: a critter smells another within a few tiles, unseen, whatever the wind; none
+//    farther off (no scent rides the wind)
 //  - TRAILS: critters on land leave scent that fades with time; a hungry wolf that knows of
 //    no deer follows a deer's trail the way the deer went, never back, and gives it up
 //    where it ends (at a kill, say)
@@ -116,7 +116,8 @@ async function main(browser, r) {
   const hearing = await p.evaluate(() => {
     senses.use.smell = false;
     const [hx, hy] = home, out = {};
-    const terrain = sim.getTerrainAt(hx, hy), R = senses.hearingRangeTiles[terrain];
+    const terrain = sim.getTerrainAt(hx, hy), R = {};
+    for (const g of ["stalk", "walk", "trot", "gallop"]) R[g] = +senses.hearingRangeOf("wolf", terrain, g).toFixed(1);
     // the wolf behind the deer's back is out of its sight only if far: test by hearing alone
     senses.use.lineOfSight = true;
     // (on the side, -i or +i, with open ground where the wolf runs on the spot)
@@ -148,35 +149,26 @@ async function main(browser, r) {
     `hearing on ${hearing.terrain} (ranges ${JSON.stringify(hearing.R)} tiles): a wolf just out of sight is heard galloping (${hearing.gallop}), ` +
     `not walking (${hearing.walkFar}), trotting ${hearing.trotNear}; standing still it is silent (${hearing.still})`);
 
-  // SMELL on the wind
+  // SMELL up close only
   const smell = await p.evaluate(() => {
     senses.use.hearing = false;
     const [hx, hy] = home, out = {};
-    put(deerA, hx, hy); put(wolfA, hx + 2000, hy); // 2000 tiles along +i: far beyond sight
-    S.setWind(0);            // blowing toward +i: from the deer to the wolf
-    out.downwind = by(wolfA, deerA);
-    S.setWind(Math.PI);      // toward -i: the wolf is upwind
-    out.upwind = by(wolfA, deerA);
-    S.setWind(Math.PI / 2);  // across
-    out.across = by(wolfA, deerA);
-    put(wolfA, hx + 2600, hy); S.setWind(0); // beyond its nose's reach
-    out.wolfTooFar = by(wolfA, deerA);
-    put(wolfA, hx + 2, hy);  // up close, whatever the wind
-    S.setWind(Math.PI / 2);
-    out.close = by(wolfA, deerA);
-    // a deer smells a wolf downwind of it, less far
-    put(wolfA, hx - 350, hy); S.setWind(0);
-    out.deerSmellsWolf = by(deerA, wolfA);
-    put(wolfA, hx - 450, hy);
-    out.deerTooFar = by(deerA, wolfA);
+    put(deerA, hx, hy); put(wolfA, hx - 2.5, hy); wolfA.hx = -1; wolfA.hy = 0; // the deer behind it: unseen
+    for (const [k, angle] of [["toward", Math.PI], ["away", 0], ["across", Math.PI / 2]]) { S.setWind(angle); out[k] = by(wolfA, deerA); }
+    put(wolfA, hx - 10, hy); wolfA.hx = -1; wolfA.hy = 0;
+    S.setWind(Math.PI); out.ten = by(wolfA, deerA);   // downwind of the deer, 10 tiles off
+    put(wolfA, hx - 2000, hy); out.far = by(wolfA, deerA);
+    put(deerA, hx, hy); deerA.hx = 1; deerA.hy = 0; put(wolfA, hx - 2.5, hy);
+    out.deerClose = by(deerA, wolfA);
+    put(wolfA, hx - 400, hy); S.setWind(0); out.deerFar = by(deerA, wolfA);
     senses.use.hearing = true;
     return out;
   });
-  r.check(smell.downwind === "smell" && smell.upwind === null && smell.across === null && smell.wolfTooFar === null && smell.close !== null,
-    `a wolf smells a deer 2000 tiles upwind of it (${smell.downwind}), not downwind (${smell.upwind}), across the wind (${smell.across}) ` +
-    `or 2600 tiles upwind (${smell.wolfTooFar}); up close, any (${smell.close})`);
-  r.check(smell.deerSmellsWolf === "smell" && smell.deerTooFar === null,
-    `a deer smells a wolf 350 tiles upwind (${smell.deerSmellsWolf}), not 450 (${smell.deerTooFar})`);
+  r.check(smell.toward === "smell" && smell.away === "smell" && smell.across === "smell" && smell.ten === null && smell.far === null,
+    `a wolf smells a deer 2.5 tiles off, unseen, whatever the wind (${smell.toward}, ${smell.away}, ${smell.across}); ` +
+    `not 10 tiles off (${smell.ten}) nor 2000 (${smell.far}), downwind as it is: no scent rides the wind`);
+  r.check(smell.deerClose === "smell" && smell.deerFar === null,
+    `a deer likewise smells a wolf just behind it (${smell.deerClose}), not one 400 tiles upwind (${smell.deerFar})`);
 
   // TRAILS, and a wolf tracking
   const trail = await p.evaluate(() => {
@@ -227,10 +219,11 @@ async function main(browser, r) {
     mind.forget(wolfA); mind.ignore(wolfA, false); sim.internals.setFood(wolfA, 1);
     S.tick(); for (let k = 0; k < 10; k++) S.tick();
     const seen = mind.stateOf(wolfA).known.find(k => k.uid === deerA.uid);
-    // now only smelled: far off, the wolf downwind, and not looked for since it was seen
-    // (else it would keep it in sight: see KEEPING SIGHT in senses.js)
-    mind.ignore(wolfA); put(deerA, hx + 60, hy); S.setWind(Math.PI);
+    // now only smelled: just behind the wolf, and not looked for since it was seen (else
+    // it would keep it in sight: see KEEPING SIGHT in senses.js)
+    mind.ignore(wolfA); mind.ignore(deerA); sim.setIntent(wolfA, null); put(wolfA, hx, hy); put(deerA, hx - 2.5, hy);
     for (let k = 0; k < (senses.keepSightS + 1) / sim.tempo; k++) S.tick();
+    wolfA.hx = 1; wolfA.hy = 0; mind.rest(wolfA, 5); // (standing, facing away from it)
     mind.ignore(wolfA, false);
     for (let k = 0; k < 10; k++) S.tick();
     const smelled = mind.stateOf(wolfA).known.find(k => k.uid === deerA.uid);

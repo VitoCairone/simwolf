@@ -30,14 +30,12 @@
 // AT NIGHT the rectangle shrinks (sightShare), from the whole of it in daylight
 // (sim.clock.light 1) to nightSightShare of its area in the dark, through the twilight.
 // HEARING, once old enough to "hear": a creature moving on land, heard within a range set
-// by its gait and the ground under it (hearingRangeTiles: loudest galloping on stone), or
-// swimming. Standing still is silent. It tells its species, and where and how it moves.
+// by its species, its gait and the ground under it, farther in the quiet of night
+// (hearingRangeTiles: a deer galloping on stone loudest; a wolf stalking all but silent),
+// or swimming. Standing still is silent. It tells its species, and where and how it moves.
 // SMELL, from birth:
-//   carried on the wind (sim.wind): every live creature, and a carcass with meat, gives off
-//   scent that drifts downwind. A critter smells one within airScentRangeTiles (by its
-//   species) that lies within airScentHalfAngle of straight upwind of it, and any within
-//   sniffTiles whatever the wind. It tells species, whether alive, and a carcass's meat;
-//   a carcass with no meat left is smelled only within sniffTiles.
+//   up close: a critter smells any creature or carcass within sniffTiles (not on the wind:
+//   no scent carries farther). It tells species, whether alive, and a carcass's meat.
 //   on the ground: trails (sim.scentAt), which trailsAround lists for the mind to follow,
 //   as faint as the critter's nose can still smell (trailMinStrength). A critter's trail
 //   tells who laid it, and (as scent marks do) its sex, whether grown and whether paired.
@@ -202,6 +200,9 @@ function obstacleInWay(a, gx, gy, gz = sim.heightAt(gx, gy)) {
     obstacleBlocks);
 }
 
+// For tests: critter a forgets what it has seen lately (sees afresh: KEEPING SIGHT).
+function forgetSight(a) { lastSeen.delete(a); }
+
 // Whether critter a sees creature b (alive or a corpse) now: in its field of view, in its
 // sight rectangle or seen within keepSightS (see KEEPING SIGHT), and in line of sight.
 function seesNow(a, b) {
@@ -222,15 +223,37 @@ function seesNow(a, b) {
 const seesCreature = seesNow;
 
 // HEARING: how far a creature moving on each ground, at each gait, can be heard, in tiles
-// (estimates). Swimming splashes are heard as far on any water.
+// (1 m), as [by day, by night]: its footfalls standing out of a breezy day's background
+// (30 dBA) or a calm night's (20 dBA), blended through the twilight by daylight
+// (sim.clock.light). Worked out from each footfall's loudness at 1 m (estimates, in dBA:
+// a wolf's padded feet walking on grass 30, on dirt 33, on stone 37; a deer's hooves 4 to
+// 9 dB louder; a trot some 9 dB over a walk, a gallop some 20; a wolf stalking 10 dB under
+// a walk), fading 6 dB as the distance doubles, and 5 dB more each 100 m over the ground
+// (admin/hearing.md). Splashing, swimming, is heard as far on any water.
 const hearingRangeTiles = {
-  grass: { walk: 3, trot: 11, gallop: 30 },
-  dirt:  { walk: 4, trot: 15, gallop: 40 },
-  stone: { walk: 8, trot: 30, gallop: 80 },
+  wolf: {
+    grass: { stalk: [0.5, 1],   walk: [1, 3],     trot: [2.5, 8], gallop: [9, 27] },
+    dirt:  { stalk: [0.5, 1.5], walk: [1.5, 4.5], trot: [4, 12],  gallop: [16, 44] },
+    stone: { stalk: [0.5, 2],   walk: [2, 7],     trot: [6, 18],  gallop: [27, 68] },
+  },
+  deer: {
+    grass: { walk: [1.5, 5],    trot: [5, 15],    gallop: [18, 48] },
+    dirt:  { walk: [2.5, 8],    trot: [8, 22],    gallop: [30, 73] },
+    stone: { walk: [6, 18],     trot: [18, 48],   gallop: [57, 123] },
+  },
 };
-const swimHeardTiles = 12;
+const swimHeardTiles = [16, 44];
 
-const loudestTiles = Math.max(swimHeardTiles, ...Object.values(hearingRangeTiles).flatMap(Object.values));
+// The range now (by daylight) of [by day, by night].
+const nowHeard = ([day, night]) => night + (day - night) * sim.clock.light;
+// How far a creature of a species moving at a gait on a ground is heard now, in tiles.
+function hearingRangeOf(species, ground, gait) {
+  const r = gait === "swim" ? swimHeardTiles : hearingRangeTiles[species]?.[ground]?.[gait];
+  return r ? nowHeard(r) : 0;
+}
+
+const loudestTiles = Math.max(swimHeardTiles[1],
+  ...Object.values(hearingRangeTiles).flatMap(byGround => Object.values(byGround).flatMap(byGait => Object.values(byGait).map(r => r[1]))));
 
 // How far critter b can be heard now: worked out once a tick per critter (the terrain
 // lookup is costly), kept in heardRangeOf.
@@ -241,24 +264,14 @@ function hearingRange(b) {
   let r = heardRangeOf.get(b);
   if (r === undefined) {
     if (!(b.speed > 0) || !sim.isLiveCritter(b)) r = 0;
-    else if (b.pose === "swim") r = swimHeardTiles;
-    else {
-      const byGait = hearingRangeTiles[sim.getTerrainAt(b.gx, b.gy)];
-      r = (byGait && byGait[b.pose]) || 0;
-    }
+    else r = hearingRangeOf(b.species, b.pose === "swim" ? null : sim.getTerrainAt(b.gx, b.gy), b.pose);
     heardRangeOf.set(b, r);
   }
   return r;
 }
 
 // SMELL
-// Airborne: how far downwind a critter smells another, in tiles (wolves about 2.4 km,
-// deer about 400 m); within what angle of straight upwind (estimate; as its cosine,
-// squared, for comparing without a square root); and how near it smells anything, wind
-// or not (estimate).
-const airScentRangeTiles = { wolf: 2400, deer: 400 };
-const airScentHalfAngle = 20 * Math.PI / 180;
-const airScentCos2 = Math.cos(airScentHalfAngle) ** 2;
+// How near a critter smells another creature or a carcass, in tiles (estimate).
 const sniffTiles = 3;
 // Trails: how far around itself a critter smells the ground, in tiles (r: a nearly round
 // patch, the square r tiles out each way, plus on each of its sides a row of 2r - 1 tiles
@@ -267,16 +280,6 @@ const sniffTiles = 3;
 // many half-lives, sim.scentHalfLifeS, it can't). Wolves track; deer don't follow trails (yet).
 const trailSniffTiles = { wolf: 3, deer: 2 };
 const trailMinStrength = { wolf: 1 / 8, deer: 1 / 2 };
-
-// Whether a smells b on the wind (or up close).
-function smellsOnWind(a, dx, dy, d2, wind) {
-  if (d2 <= sniffTiles * sniffTiles) return true;
-  const range = airScentRangeTiles[a.species];
-  if (d2 > range * range) return false;
-  // a must be downwind of b: from b to a (-dx, -dy) along the wind, within the angle
-  const along = -dx * wind.x - dy * wind.y;
-  return along > 0 && along * along >= airScentCos2 * d2;
-}
 
 // Whether tile offset (di, dj) is in a sniffing patch of reach r (see Trails).
 function inSniffPatch(di, dj, r) {
@@ -320,7 +323,7 @@ function trailsAround(a, species) {
 //   mateUid: its partner's uid, or null
 function perceive(a) {
   const out = [];
-  const hears = use.hearing && sim.can(a, "hear"), smells = use.smell, wind = sim.wind;
+  const hears = use.hearing && sim.can(a, "hear"), smells = use.smell;
   for (const list of [sim.allCritters, sim.allCorpses]) {
     for (const b of list) {
       if (b === a) continue;
@@ -334,9 +337,7 @@ function perceive(a) {
           const heard = hearingRange(b);
           if (heard && d2 <= heard * heard) by = "hearing";
         }
-        // a bare carcass gives off no scent on the wind, but up close smells of no meat
-        if (!by && smells && (alive || b.carcass) && smellsOnWind(a, dx, dy, d2, wind)
-          && (alive || d2 <= sniffTiles * sniffTiles || sim.carcassMeatKg(b) > 0)) by = "smell";
+        if (!by && smells && (alive || b.carcass) && d2 <= sniffTiles * sniffTiles) by = "smell";
       }
       const suckling = b.nursingOn === a.uid; // touching it
       if (!by && suckling) by = "touch";
@@ -405,7 +406,7 @@ function attach(theSim) {
 
 return {
   attach, perceive, plantsAround, shoresAround, trailsAround, inSight, inView, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
-  sightHalfWidthTiles, sightHalfHeightTiles, fovDegBySpecies, keepSightS, trailMinStrength, hearingRangeTiles, airScentRangeTiles, eyeLevelsBySpecies, sniffTiles,
+  sightHalfWidthTiles, sightHalfHeightTiles, fovDegBySpecies, keepSightS, trailMinStrength, hearingRangeTiles, hearingRangeOf, forgetSight, eyeLevelsBySpecies, sniffTiles,
 };
 
 })();
