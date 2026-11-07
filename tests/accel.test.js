@@ -1,6 +1,8 @@
-// Speed changes (see SPEED CHANGES in sim.js): a critter's speed changes at a steady rate,
-// the same up as down, reaching a full gallop from standing in SPEEDS.accelToGallopS
-// (wolf 2.5 s, deer 1.5 s) and stopping from one in as long. Its gait (pose) changes at
+// Speed changes (see SPEED CHANGES in sim.js): a critter's speed changes at most by
+// SPEEDS.accelMaxMps2 a second at low speed, and faster by no more than its power allows
+// (SPEEDS.powerWPerKg), the same up as down: from standing it reaches a full gallop (and
+// stops from one) in the time that works out to (a wolf about 2.3 s, a deer 1.9), quick off
+// the mark and slow near the top. Its gait (pose) changes at
 // once; told to stop, it keeps its moving pose until it has stopped, then idles. A stun
 // stops it dead.
 
@@ -26,14 +28,21 @@ async function main(browser, r) {
       a.hx = a.wantHx; a.hy = a.wantHy; // (already facing that way)
       const pose0 = a.pose;
       let up = 0;
-      for (; up < 600 && a.speed < full; up++) { S.tick(); back(); }
+      const speeds = [];
+      for (; up < 600 && a.speed < full; up++) { S.tick(); back(); speeds.push(a.speed / sim.tempo); }
+      // (gained in the first quarter second, and in the last)
+      const q = Math.round(0.25 / sim.tempo), first = speeds[q - 1], last = speeds.at(-1) - speeds.at(-1 - q);
       S.setCritterIdle(a);
       const poses = new Set();
       let down = 0;
       for (; down < 600 && a.speed > 0; down++) { poses.add(a.pose); S.tick(); back(); }
       S.tick();
       out[a.species] = { pose0, upS: up * sim.tempo, downS: down * sim.tempo, posesWhileStopping: [...poses],
-        poseAfter: a.pose, wantS: S.SPEEDS.accelToGallopS[a.species] };
+        poseAfter: a.pose, first: +first.toFixed(2), last: +last.toFixed(2), wantFirst: S.SPEEDS.accelMaxMps2[a.species] * 0.25 };
+      // the time worked out: at accelMaxMps2 up to the speed where the power runs short, then
+      // power-limited (dv/dt = P / v: t = (v2^2 - v1^2) / 2P)
+      const A = S.SPEEDS.accelMaxMps2[a.species], P = S.SPEEDS.powerWPerKg[a.species], vg = full / sim.tempo, v1 = Math.min(vg, P / A);
+      out[a.species].wantS = +(v1 / A + (vg * vg - v1 * v1) / (2 * P)).toFixed(2);
       // a stun stops it dead
       S.setCritterMoving(a, sim.DIR_E, "gallop");
       for (let k = 0; k < 30; k++) { S.tick(); back(); }
@@ -47,6 +56,8 @@ async function main(browser, r) {
     const x = res[sp];
     r.check(x.pose0 === "gallop" && Math.abs(x.upS - x.wantS) < 0.05,
       `a ${sp} reaches a full gallop from standing in ${x.upS.toFixed(2)} s (${x.wantS} s), galloping from the start`);
+    r.check(Math.abs(x.first - x.wantFirst) < 0.01 && x.last < 0.6 * x.first,
+      `...quick off the mark, ${x.first} m/s in the first quarter second (${x.wantFirst}), slow near the top (${x.last} m/s in the last)`);
     r.check(Math.abs(x.downS - x.wantS) < 0.05 && x.posesWhileStopping.join() === "gallop" && x.poseAfter === "idle",
       `...stops from one in ${x.downS.toFixed(2)} s, galloping until stopped, then idle (${x.posesWhileStopping}, then ${x.poseAfter})`);
     r.check(x.stun.before > 0 && x.stun.after === 0 && x.stun.pose === "idle",

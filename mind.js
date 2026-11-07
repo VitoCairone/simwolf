@@ -21,12 +21,15 @@
 // DECISIONS, in order of priority:
 //   a tired swimmer heads for land (toShore)
 //   a deer flees wolves it remembers (decideDeer)
-//   a famished wolf (not an infant) eats, or else hunts (decideWolf: FAMISHED)
+//   a wolf howling howls on (HOWLING in sim.js); a wolf carrying a leg takes it to whom it
+//     is for (SUPPORT FEEDING)
+//   a famished wolf (not an infant) eats, or else hunts (decideWolf: FAMISHED); but a
+//     parent stays with its young while its mate is away hunting (FAMILY ROLES)
 //   a thirsty critter drinks, or goes to water (thirst); but an infant suckles first, a
 //     deer stands still for her young suckling first (nursing), and a hungry deer not
 //     badly thirsty grazes first (graze)
 //   a wolf eats a carcass it knows of while not full (decideWolf), but an infant suckles
-//     first
+//     first; then, fed, it may tear off a leg to carry home (SUPPORT FEEDING)
 //   a mother stands still while young suckle from her; an infant suckles while hungry
 //     (nursing)
 //   while its meter is above romanceAbove, a grown critter courts and mates, or mates
@@ -150,6 +153,14 @@ const searchLegS = 15;            // searching for water, it keeps to a way this
 const searchNearTiles = 10;       // ...any way this near where it began, else away from there...
 const searchFarTiles = 150;       // ...and beyond this, back toward it
 const decideEveryS = 0.1;
+// FAMILY ROLES, DENS, SUPPORT FEEDING
+const denSearchTiles = 12;        // a female looks for her den among the spots in sight this near...
+const denStepTiles = 2;           // ...every this many tiles
+const denTiles = 1.5;             // at the den: within this of it
+const guardTiles = 3;             // a parent staying with its young keeps within this of them (or the den)
+const homeTiles = 5;              // back home: within this of its young (or the den)
+const guardStarveBelow = 0.15;    // ...a parent staying with its young goes off to eat below this food meter
+const dropTiles = 1.2;            // a leg carried home is put down this near whom it is for
 
 // Whether a's stomach can take no more: full to the brim, or its meter full (see HUNGER).
 // (A stomach full of poorer food than its usual reads less than full.)
@@ -191,7 +202,7 @@ function memoryOf(a) {
       familiar: new Set(),    // uids of its species met while it or they were infants
       court: null,            // the critter it is courting: { uid, since }
       refused: new Map(),     // uid -> courting it again only after this tick
-      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | drink | ashore | court | seek | mate | family | nurse | yield | escape | prowl | rest
+      mode: "calm",           // calm | flee | chase | wait | track | feed | graze | drink | ashore | court | seek | mate | family | nurse | yield | escape | prowl | rest | brood | den | guard | signal | provide | carry
       yield: null,            // giving way: { until, intent } (see giveWay)
       target: null,           // a wolf's prey (uid)
       targetUntil: -Infinity, // ...kept until this tick at least
@@ -244,6 +255,10 @@ function memoryOf(a) {
       trapLook: -Infinity,    // ...the tick it last looked
       trapped: 0,             // ...how trapped it is, 0..1
       escape: null,           // ...escaping: { tx, ty, until }
+      den: null,              // a paired wolf's den, [gx, gy] (DENS)
+      kinTrailEnds: new Map(), // a young wolf's parents' trails given up (FINDING ITS PARENTS)
+      fedSince: false,        // ate at a carcass since it last carried a leg off (SUPPORT FEEDING)
+      given: new Set(),       // ...the legs it put down for others (by the uid they lie as)
       reversedTick: -Infinity,
       lastTurn: -Infinity,
       intent: null,           // its last decision
@@ -276,7 +291,8 @@ function remember(a, m, now) {
       isMale: seen ? o.isMale : old.isMale, infant: seen ? o.infant : old.infant,
       grown: seen ? o.grown : old.grown, mateUid: seen ? o.mateUid : old.mateUid,
       inHeat: seen ? o.inHeat : old.inHeat, walks: seen ? o.walks : old.walks, nursingOnMe: !!o.nursingOnMe,
-      littermate: !!o.littermate,
+      littermate: !!o.littermate, signal: o.signal ?? old.signal, leg: o.leg ?? old.leg,
+      eats: seen ? o.eats : old.eats, carrying: seen ? o.carrying : old.carrying,
       // perceived since now, unless it was at its last turn too
       sightedTick: before && before.seenTick === m.lastTurn ? before.sightedTick : now });
     if (seen && o.species === a.species && (selfInfant || o.infant)) m.familiar.add(o.uid);
@@ -344,7 +360,7 @@ const arriveTiles = 1.5;         // this near where it will stop, it walks
 const feelTiles = 2;
 const headTiles = 16;
 const crowdTiles = 3;
-const firstStepTiles = 0.05;
+const firstStepTiles = 0.001;    // (a first tick's step from standing, about)
 const touchKeepS = 1;
 const bumpKeepS = 20;
 const crowdMarginTiles = 0.05;  // room it leaves past another's box
@@ -472,7 +488,7 @@ function wayClear(c, x, y) {
   const a = c.a, r = a.boxRad, n = Math.max(1, Math.ceil(Math.max(Math.abs(x - a.gx), Math.abs(y - a.gy)) * 5));
   let px = a.gx, py = a.gy, pi = Math.floor(px), pj = Math.floor(py), ph = sim.heightAt(px, py);
   const bi0 = Math.floor(a.gx - r), bi1 = Math.floor(a.gx + r), bj0 = Math.floor(a.gy - r), bj1 = Math.floor(a.gy + r);
-  // (its first step, a tick's at a gallop, as the simulation checks it: grazing another's box)
+  // (its first step, as the simulation checks it: grazing another's box)
   const f = firstStepTiles / Math.max(Math.abs(x - a.gx), Math.abs(y - a.gy), firstStepTiles);
   if (!crowdClear(c, a.gx + (x - a.gx) * f, a.gy + (y - a.gy) * f)) return false;
   for (let s = 1; s <= n; s++) {
@@ -808,7 +824,7 @@ function toward(a, m, dx, dy, gait, now, c) {
 const sweepTicks = 90, sweepTailTicks = 40, sweepStepTicks = 2, sweepMarginTiles = 0.3;
 function sweepClear(c, pts, g) {
   const a = c.a, r = a.boxRad, rm = r + sweepMarginTiles, cos2 = sim.pivotCos * sim.pivotCos;
-  const acc = sim.accelStep(a.species) * sweepStepTicks, vg = sim.gaitSpeed(a.species, g);
+  const vg = sim.gaitSpeed(a.species, g);
   const walk = sim.gaitSpeed(a.species, "walk"), trot = sim.gaitSpeed(a.species, "trot");
   const bi0 = Math.floor(a.gx - r), bi1 = Math.floor(a.gx + r), bj0 = Math.floor(a.gy - r), bj1 = Math.floor(a.gy + r);
   let x = a.gx, y = a.gy, hx = a.hx, hy = a.hy, v = a.speed, t = 0, tail = 0;
@@ -818,6 +834,7 @@ function sweepClear(c, pts, g) {
     const [px, py] = t < pts.length ? pts[t] : [x + hx, y + hy]; // (past the last: straight on)
     const dx = px - x, dy = py - y, d2 = dx * dx + dy * dy, dot = hx * dx + hy * dy;
     const target = dot < 0 || (dot * dot < cos2 * d2 && v <= walk) ? 0 : vg;
+    const acc = sim.speedStep(a.species, v) * sweepStepTicks;
     v = v < target ? Math.min(target, v + acc) : Math.max(target, v - acc);
     const s = sim.turnStep(v) * sweepStepTicks, c1 = 1 - s * s / 2;
     let nx, ny;
@@ -1191,29 +1208,194 @@ function search(a, m, now) {
 // gallop is faster but lasts a quarter as long: see EXERTION in sim.js). It gallops only
 // while its wind lasts.
 function decideWolf(a, m, now) {
+  // howling: on to the howl's end (HOWLING in sim.js)
+  if (a.pose === "howl" && sim.tickCount < a.howlUntil) { m.mode = "signal"; return { gait: "howl", signal: a.signal.kind }; }
   // an infant suckles rather than goes to a carcass
   const suckling = sim.isInfant(a) && nurseOrSuckle(a, m, now);
   if (suckling) return suckling;
-  // FAMISHED: eating, then hunting, before all else
-  if (!sim.isInfant(a) && 1 - a.food > wolfFamishedHungerAbove && a.gut < wolfFamishedGutBelow) {
-    const eating = feed(a, m, now, true) || hunt(a, m, now);
+  chooseDen(a, m, now);
+  const famished = !sim.isInfant(a) && 1 - a.food > wolfFamishedHungerAbove && a.gut < wolfFamishedGutBelow;
+  // a leg in its mouth: eaten if famished, else taken home (SUPPORT FEEDING)
+  if (a.carrying) {
+    if (famished) { m.mode = "feed"; return EAT; }
+    const home = carryHome(a, m, now);
+    if (home) return home;
+  }
+  // FAMISHED: eating, then hunting, before all else (but see FAMILY ROLES)
+  if (famished) {
+    const eating = forFood(a, m, now, feed(a, m, now, true)) || stayWithYoung(a, m, now) || goingHunting(a, m, now) || hunt(a, m, now);
     if (eating) return eating;
   }
   const drinking = thirst(a, m, now);
   if (drinking) { m.target = null; m.searching = false; m.watch = null; return drinking; }
-  const eating = feed(a, m, now, false);
-  if (eating) return eating;
+  const eating = forFood(a, m, now, feed(a, m, now, false));
+  if (eating) { if (eating === EAT) m.fedSince = true; return eating; }
+  const taking = takeLegHome(a, m, now);
+  if (taking) return taking;
   const nursing = nurseOrSuckle(a, m, now);
   if (nursing) { m.target = null; m.searching = false; m.watch = null; return nursing; }
   const romance = a.food > romanceAbove && social(a, m, now, true);
   if (romance) { m.target = null; m.searching = false; m.watch = null; return romance; }
   if (a.food >= wolfHuntBelow || a.gut >= wolfHuntGutBelow || sim.isInfant(a)) {
     m.target = null; m.searching = false; m.watch = null;
-    return settle(a, m, now);
+    return backHome(a, m, now) || settle(a, m, now);
   }
+  // FAMILY ROLES: staying with its young while its mate hunts; else telling it so
+  const staying = stayWithYoung(a, m, now) || goingHunting(a, m, now);
+  if (staying) return staying;
   // (a mother with infants stays by them rather than prowl)
   const mothering = !a.isMale && a.youngUids.some(uid => m.known.get(uid)?.infant);
   return hunt(a, m, now) || (mothering ? settle(a, m, now) : prowl(a, m, now));
+}
+
+// FAMILY ROLES: a paired wolf with young of its own still dependent (infants it knows of,
+// alive: dependants) shares the work with its mate: one hunts, the other stays with the
+// young. Going off to hunt, it howls "hunt" (HOWLING in sim.js) unless that was the last
+// thing it howled; back home (within homeTiles of its young, or the den), done hunting,
+// it howls "stay". While the last it heard or saw its mate signal was "hunt", it stays
+// with the young (within guardTiles of them, or the den: mode "guard"), however hungry,
+// until famished below guardStarveBelow.
+function dependants(a, m) {
+  const out = [];
+  for (const uid of a.youngUids) {
+    const k = m.known.get(uid);
+    if (k && k.alive && k.infant !== false) out.push(k);
+  }
+  return out;
+}
+
+// Where its young are, as near as it knows (the nearest of them), else its den: [gx, gy], or null.
+function homeOf(a, m) {
+  let best = null, bestD2 = Infinity;
+  for (const k of dependants(a, m)) {
+    if (k.lost) continue;
+    const d2 = (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2;
+    if (d2 < bestD2) { best = [k.gx, k.gy]; bestD2 = d2; }
+  }
+  return best || m.den;
+}
+
+function stayWithYoung(a, m, now) {
+  if (a.mateUid === null || !dependants(a, m).length || a.food < guardStarveBelow) return null;
+  const mk = m.known.get(a.mateUid);
+  if (!(mk && mk.signal && mk.signal.kind === "hunt")) return null;
+  const home = homeOf(a, m);
+  if (!home) return null;
+  m.mode = "guard"; m.target = null; m.searching = false; m.watch = null;
+  if (!a.isMale) { const s = social(a, m, now); if (s && m.mode === "brood") return s; m.mode = "guard"; }
+  const d2 = (home[0] - a.gx) ** 2 + (home[1] - a.gy) ** 2;
+  if (d2 <= guardTiles * guardTiles) return IDLE;
+  const go = goTo(a, m, home[0], home[1], "trot", now, { through: a.youngUids });
+  return go && !(m.path && m.path.failed) ? go : IDLE;
+}
+
+// Going for food it knows of (intent go: to the carcass at m.feedAt), as FAMILY ROLES
+// would have it: a parent with dependants going beyond homeTiles of home stays with them
+// while its mate is away hunting, and tells it it is going.
+function forFood(a, m, now, go) {
+  if (!go || go === EAT || !go.gait || a.mateUid === null || !dependants(a, m).length) return go;
+  const home = homeOf(a, m), f = m.feedAt;
+  if (!home || !f || (f[0] - home[0]) ** 2 + (f[1] - home[1]) ** 2 <= homeTiles * homeTiles) return go;
+  return stayWithYoung(a, m, now) || goingHunting(a, m, now) || go;
+}
+
+function goingHunting(a, m, now) {
+  if (a.mateUid === null || !dependants(a, m).length || a.signal?.kind === "hunt") return null;
+  m.mode = "signal";
+  return { gait: "howl", signal: "hunt" };
+}
+
+function backHome(a, m, now) {
+  if (a.mateUid === null || a.signal?.kind !== "hunt" || !dependants(a, m).length) return null;
+  const home = homeOf(a, m);
+  if (!home || (home[0] - a.gx) ** 2 + (home[1] - a.gy) ** 2 > homeTiles * homeTiles) return null;
+  m.mode = "signal";
+  return { gait: "howl", signal: "stay" };
+}
+
+// DENS: a paired female, pregnant or with young, picks a den: of the spots on dry open
+// land in sight within denSearchTiles (every denStepTiles), the one most hidden from
+// creatures going by (senses.coverAt), the nearest of those as hidden. Her mate learns it
+// seeing her at it (within denTiles). Pregnant, she keeps to it (mode "den"), so the
+// litter is born there. While she is at it, her mate, at ease, stays by it too (within
+// guardTiles: mode "guard").
+function chooseDen(a, m, now) {
+  if (a.mateUid === null) { m.den = null; return; }
+  if (m.den) return;
+  if (a.isMale) {
+    const k = m.known.get(a.mateUid);
+    if (!k || k.seenTick !== now || k.by !== "sight") return;
+    for (const [c, mm] of memories) {
+      if (c.uid !== a.mateUid || !mm.den) continue;
+      if ((k.gx - mm.den[0]) ** 2 + (k.gy - mm.den[1]) ** 2 <= denTiles * denTiles) m.den = mm.den.slice();
+    }
+    return;
+  }
+  if (!a.pregnancy && !dependants(a, m).length) return;
+  if (m.denLook !== undefined && now - m.denLook < ticks(5)) return; // (none found: looks again in a while)
+  m.denLook = now;
+  let best = null, bestCover = -1, bestD2 = Infinity;
+  const ci = Math.floor(a.gx), cj = Math.floor(a.gy), r = denSearchTiles;
+  for (let di = -r; di <= r; di += denStepTiles) for (let dj = -r; dj <= r; dj += denStepTiles) {
+    const d2 = di * di + dj * dj;
+    if (d2 > r * r) continue;
+    const i = ci + di, j = cj + dj;
+    if (!sim.isLandTile(i, j) || sim.isBlockedTile(i, j) || !senses.canSeeTile(a, i, j)) continue;
+    const cover = senses.coverAt(i + 0.5, j + 0.5);
+    if (cover > bestCover || (cover === bestCover && d2 < bestD2)) { best = [i + 0.5, j + 0.5]; bestCover = cover; bestD2 = d2; }
+  }
+  if (best) m.den = best;
+}
+
+// SUPPORT FEEDING: fed at a carcass with a leg still on it, a wolf that can carry one
+// (sim.canCarry) tears it off to take home: a paired male whose mate has young still
+// dependent, for her; a mother with young that eat meat, for them. One leg each time it
+// has eaten there (m.fedSince). Carrying it, it takes it to her (where it last perceived
+// her, or the den) or to the nearest of those young, and puts it down within dropTiles of
+// them (sim.js: CARRYING), for them to eat; it leaves be a leg it put down for others
+// (m.given) unless famished.
+function legFor(a, m) {
+  if (a.isMale) {
+    if (a.mateUid === null || !dependants(a, m).length) return null;
+    const k = m.known.get(a.mateUid);
+    return k && k.alive ? { uid: a.mateUid, k } : null;
+  }
+  let best = null, bestD2 = Infinity;
+  for (const k of dependants(a, m)) {
+    if (!k.eats) continue;
+    const d2 = (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2;
+    if (d2 < bestD2) { best = { uid: k.uid, k }; bestD2 = d2; }
+  }
+  return best;
+}
+
+function takeLegHome(a, m, now) {
+  if (!m.fedSince || a.carrying || !sim.canCarry(a) || !legFor(a, m)) return null;
+  let at = null;
+  for (const k of m.known.values()) {
+    if (k.alive || k.species !== "deer" || !k.leg || k.seenTick !== now) continue;
+    if ((k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2 <= sim.eatReachTiles * sim.eatReachTiles) { at = k; break; }
+  }
+  if (!at) return null;
+  m.mode = "provide"; m.target = null; m.searching = false; m.watch = null;
+  return { gait: "take" };
+}
+
+function carryHome(a, m, now) {
+  m.fedSince = false;
+  const to = legFor(a, m);
+  if (!to) return null;
+  const k = to.k, d2 = (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2;
+  m.mode = "carry"; m.target = null; m.searching = false; m.watch = null;
+  if (k.seenTick === now && d2 <= dropTiles * dropTiles) { m.given.add(a.carrying.uid); return { gait: "drop" }; }
+  const spot = k.lost && m.den ? m.den : [k.gx, k.gy];
+  if (k.lost && !m.den) return null;
+  if (k.seenTick !== now && (spot[0] - a.gx) ** 2 + (spot[1] - a.gy) ** 2 <= kinLostTiles * kinLostTiles) {
+    if (spot === m.den) return null;
+    k.lost = true; return null;
+  }
+  const go = goTo(a, m, spot[0], spot[1], "trot", now, { through: to.uid, dry: "rather" });
+  return go && !(m.path && m.path.failed) ? go : null;
 }
 
 // Going to eat (see WOLVES): to the nearest carcass with meat it knows of, or, knowing of
@@ -1225,16 +1407,18 @@ function feed(a, m, now, famished) {
   let carcass = null, bestD2 = Infinity;
   for (const k of m.known.values()) {
     if (k.species !== "deer" || k.alive || !(k.meat > 0) || now - k.seenTick > ticks(carcassKeepS)) continue;
-    if (m.outOfReach.get(k.uid) > now) continue;
+    if (m.outOfReach.get(k.uid) > now || (m.given.has(k.uid) && !famished)) continue; // (not a leg it brought others)
     const d2 = (k.gx - a.gx) ** 2 + (k.gy - a.gy) ** 2;
     if (d2 < bestD2) { carcass = k; bestD2 = d2; }
   }
   if (!carcass) {
+    m.feedAt = [Infinity, Infinity]; // (wherever the death scent leads)
     const scent = track(a, m, now, "death", "trot");
     if (scent) { m.target = null; m.searching = false; m.watch = null; }
     return scent;
   }
   m.mode = "feed"; m.target = null; m.searching = false; m.plan = null; m.watch = null;
+  m.feedAt = [carcass.gx, carcass.gy];
   if (bestD2 <= sim.eatReachTiles * sim.eatReachTiles) return EAT;
   // crowded out near it (others eating): waits its turn rather than circling
   if (bestD2 <= feedQueueTiles * feedQueueTiles && a.blockedTick > m.lastTurn) m.feedWaitUntil = now + ticks(feedWaitS);
@@ -1519,6 +1703,13 @@ function nurseOrSuckle(a, m, now) {
 }
 
 function settle(a, m, now) {
+  // a pregnant female keeps to her den (DENS)
+  if (a.species === "wolf" && a.pregnancy && m.den) {
+    m.mode = "den";
+    if ((m.den[0] - a.gx) ** 2 + (m.den[1] - a.gy) ** 2 <= denTiles * denTiles) return IDLE;
+    const go = goTo(a, m, m.den[0], m.den[1], "walk", now, { dry: "rather" });
+    if (go && !(m.path && m.path.failed)) return go;
+  }
   const s = social(a, m, now);
   if (s) return s;
   m.mode = "calm";
@@ -1584,7 +1775,14 @@ function social(a, m, now, romanceOnly = false) {
     m.court = null;
     if (romanceOnly) return null;
     const uid = a.parentUids.find(live);
-    if (uid === undefined) return null;
+    if (uid === undefined) {
+      // FINDING ITS PARENTS: a young wolf that has lost track of them follows a parent's
+      // trail (which it never marks over: SCENT TRAILS in sim.js) the way the parent went
+      if (a.species !== "wolf") return null;
+      const back = track(a, m, now, "wolf", "trot", t => a.parentUids.includes(t.uid), m.kinTrailEnds);
+      if (back) m.mode = "family";
+      return back;
+    }
     m.mode = "family";
     return goToKin(uid, live(uid), sim.isInfant(a) ? followParentTiles : followWeanedTiles, "parent");
   }
@@ -1614,6 +1812,13 @@ function social(a, m, now, romanceOnly = false) {
     const inHeat = a.isMale ? p.inHeat : sim.inHeat(a);
     if (inHeat && p.seenTick === now && !p.swimming && a.pose !== "swim") { m.mode = "mate"; return mateWith(a.mateUid, p); }
     if (romanceOnly) return null;
+    // (his mate keeping to the den, or with young there: he stays by it, DENS)
+    if (a.isMale && m.den && (p.gx - m.den[0]) ** 2 + (p.gy - m.den[1]) ** 2 <= guardTiles * guardTiles) {
+      m.mode = "guard";
+      if ((a.gx - m.den[0]) ** 2 + (a.gy - m.den[1]) ** 2 <= guardTiles * guardTiles) return IDLE;
+      const go = goTo(a, m, m.den[0], m.den[1], "walk", now, { through: a.mateUid, dry: "rather" });
+      if (go && !(m.path && m.path.failed)) return go;
+    }
     m.mode = "family";
     return goToKin(a.mateUid, p, a.isMale ? pairStayTiles : 2 * pairStayTiles, "mate");
   }
@@ -1957,7 +2162,8 @@ function stateOf(a) {
     trapped: m.trapped, escape: m.escape && { ...m.escape }, intent: m.intent, heading: m.heading && { ...m.heading },
     grazeTo: m.grazeTo, closing: m.closing, entry: m.entry, landSeen: m.landSeen, entryStamina: m.entryStamina, drinking: m.drinking, waterTo: m.waterTo !== null ? m.waters.get(m.waterTo) : null,
     waters: [...m.waters.values()].map(s => ({ ...s })),
-    slot: m.slot, lastTurn: m.lastTurn, court: m.court, familiar: [...m.familiar],
+    slot: m.slot, lastTurn: m.lastTurn, court: m.court, familiar: [...m.familiar], den: m.den && m.den.slice(),
+    given: [...m.given],
     known: [...m.known].map(([uid, k]) => ({ uid, ...k })) };
 }
 

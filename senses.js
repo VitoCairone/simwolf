@@ -32,6 +32,7 @@
 // by its species, its gait and the ground under it, farther in the quiet of night
 // (hearingRangeTiles: a deer galloping on stone loudest; a wolf stalking all but silent),
 // or swimming. Standing still is silent. It tells its species, and where and how it moves.
+// A wolf howling is heard much farther (HOWLS), telling its signal.
 // SMELL, from birth:
 //   up close: a critter smells any creature or carcass within sniffTiles (not on the wind:
 //   no scent carries farther). It tells species, whether alive, and a carcass's meat.
@@ -201,6 +202,22 @@ function obstacleInWay(a, gx, gy, gz = sim.heightAt(gx, gy)) {
     obstacleBlocks);
 }
 
+// COVER: how hidden a wolf lying at grid point (gx, gy) would be from creatures going by:
+// the share of coverDirs ways, at coverLookTiles off, from which a deer's eye (and a
+// wolf's is no higher) would have no line of sight to it (lying, its back coverLyingLevels
+// up). For a den (mind.js: DENS).
+const coverDirs = Array.from({ length: 16 }, (_, k) => [Math.cos(k * Math.PI / 8), Math.sin(k * Math.PI / 8)]);
+const coverLookTiles = 6, coverLyingLevels = 1;
+function coverAt(gx, gy) {
+  const z = sim.heightAt(gx, gy) + coverLyingLevels;
+  let hidden = 0;
+  for (const [ux, uy] of coverDirs) {
+    const x = gx + ux * coverLookTiles, y = gy + uy * coverLookTiles;
+    if (!clearLine(x, y, sim.heightAt(x, y) + eyeLevelsBySpecies.deer, gx, gy, z)) hidden++;
+  }
+  return hidden / coverDirs.length;
+}
+
 // For tests: critter a forgets what it has seen lately (sees afresh: KEEPING SIGHT).
 function forgetSight(a) { lastSeen.delete(a); }
 
@@ -244,6 +261,10 @@ const hearingRangeTiles = {
   },
 };
 const swimHeardTiles = [16, 44];
+// HOWLS (sim.js: HOWLING): a wolf howling is heard this far, by day and by night (wolves
+// hear a howl some 6 miles off in forest, 10 on open tundra: International Wolf Center;
+// taken as by day and by night): it tells the howler's signal (o.signal).
+const howlHeardTiles = [10000, 16000];
 
 // The range now (by daylight) of [by day, by night].
 const nowHeard = ([day, night]) => night + (day - night) * sim.clock.light;
@@ -316,8 +337,10 @@ function trailsAround(a, species) {
 
 // What critter a perceives now, one snapshot per creature it perceives (the dying and the
 // dead included), by the most telling sense:
-//   { uid, species, alive, gx, gy, vx, vy, swimming, meat, by, littermate,
-//     isMale, infant, grown, walks, mateUid, inHeat }   (these last by sight only)
+//   { uid, species, alive, gx, gy, vx, vy, swimming, meat, leg, by, littermate, signal,
+//     isMale, infant, grown, walks, eats, carrying, mateUid, inHeat }   (these last by sight only)
+//   signal:  by sight or hearing, the last signal it howled, { kind, tick } (HOWLS)
+//   leg:     for a carcass seen or smelled, whether a leg is still on it with meat to carry off
 //   littermate: true for one born with it to its mother, by any sense (its scent tells)
 //   by:      "sight", "hearing" or "smell"
 //   vx, vy:  its velocity, tiles a tick (0 by smell)
@@ -335,7 +358,8 @@ function perceive(a) {
       else {
         // the cheap tests first: distance, then what it costs to find out more
         const d2 = dx * dx + dy * dy;
-        if (hears && b.speed > 0 && d2 <= loudestTiles * loudestTiles) {
+        if (hears && b.pose === "howl" && d2 <= nowHeard(howlHeardTiles) ** 2) by = "hearing";
+        else if (hears && b.speed > 0 && d2 <= loudestTiles * loudestTiles) {
           const heard = hearingRange(b);
           if (heard && d2 <= heard * heard) by = "hearing";
         }
@@ -351,10 +375,13 @@ function perceive(a) {
         swimming: by !== "smell" ? b.pose === "swim" : undefined,
         meat: b.carcass ? sim.carcassMeatKg(b) / b.carcassFullKg : undefined, by,
       };
+      if (b.carcass && (by === "sight" || by === "smell")) o.leg = !!sim.legToTake(b); // (a leg to carry off on it: CARRYING)
       if (suckling) o.nursingOnMe = true;
+      if (b.signal && (by === "sight" || by === "hearing")) o.signal = b.signal; // (its last howl: HOWLS)
       if (a.parentUids.length && b.parentUids && b.parentUids[0] === a.parentUids[0] && b.birthTime === a.birthTime) o.littermate = true;
       if (by === "sight") {
         o.isMale = b.isMale; o.infant = sim.isInfant(b); o.grown = sim.isGrown(b); o.walks = sim.can(b, "walk");
+        o.eats = sim.can(b, "eat"); o.carrying = !!b.carrying;
         o.mateUid = b.mateUid; o.inHeat = alive && sim.inHeat(b);
       }
       out.push(o);
@@ -408,7 +435,7 @@ function attach(theSim) {
 }
 
 return {
-  attach, perceive, plantsAround, shoresAround, trailsAround, inSight, inView, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
+  attach, perceive, coverAt, plantsAround, shoresAround, trailsAround, inSight, inView, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
   sightRadiusTiles, fovDegBySpecies, keepSightS, trailMinStrength, hearingRangeTiles, hearingRangeOf, forgetSight, eyeLevelsBySpecies, sniffTiles,
 };
 

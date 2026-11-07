@@ -72,6 +72,12 @@ art from them.
   wolf's land sheet shaded 20% toward dark purple (`spritecraft/make_stalk_sheets.py`),
   its run frames played slowly. A stopgap until real stalking frames (crouched, head low)
   are drawn.
+- **Carried deer leg.** A wolf carrying a leg is drawn with an overlay sheet per wolf
+  sheet (`images/wolf-land-leg.png`, `wolf-stalk-leg.png`, `wolf-swim-leg.png` and the
+  last young stage's), made by `spritecraft/make_carried_leg.py`: a small leg in the deer's
+  colours held across the mouth, which is found in each frame from the wolf's own pixels.
+  A stopgap until real carrying frames are drawn. A howling wolf (the howl columns) is
+  drawn without it.
 - **Crawling.** A newborn too young to walk crawls on its walk frames played at 30% of
   their pace (`crawl` in animat.js, wolf and deer alike). A stopgap until real crawling
   frames (belly low, legs splayed) are drawn.

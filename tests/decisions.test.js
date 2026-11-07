@@ -160,7 +160,7 @@ async function main(browser, r) {
   // 5. a wolf remembers a deer it can no longer see, and where it was going
   await fresh();
   const wolfMem = await p.evaluate(`(() => {
-    if (!setup({ deerAt: [3, -3], deerThinks: false })) return null;
+    if (!setup({ deerAt: [6, -6], deerThinks: false })) return null; // (far enough not to get there in 1 s)
     const [w, d] = [__w, __d];
     sim.internals.setCritterMoving(d, sim.DIR_E, "trot");    // the deer heads east...
     for (let n = 0; n < mind.turnTicks; n++) sim.internals.tick(); // ...the wolf sees it

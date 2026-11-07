@@ -291,14 +291,17 @@ async function main(browser, r) {
       const runs = [];
       for (const q of poses) { if (runs.length && runs.at(-1)[0] === q) runs.at(-1)[1]++; else runs.push([q, 1]); }
       const gallop = S.travelSpeedBySpeciesAndPose[c.species].gallop;
-      const step = gallop / (S.SPEEDS.accelToGallopS[c.species] / sim.tempo);
+      const step = sim.speedStep(c.species, 0); // (the most, at low speed)
       const rises = speeds.map((v, k) => v - (k ? speeds[k - 1] : swimSpeed));
       const reachedAt = speeds.findIndex(v => v >= gallop - 1e-9);
       c.gx = c.nextGX = c.gy = c.nextGY = -50 - c.uid * 3;
       return { runs, smooth: Math.max(...rises) <= step + 1e-9, fromSwim: swimSpeed, reachedS: reachedAt * sim.tempo };
     };
     return { deer: { bank: run(d, spots.bank), flat: run(d, spots.flat) }, wolf: { bank: run(w, spots.bank), flat: run(w, spots.flat) },
-      accelS: S.SPEEDS.accelToGallopS };
+      accelS: Object.fromEntries(["deer", "wolf"].map(sp => { // (from standing: see accel.test.js)
+        const A = S.SPEEDS.accelMaxMps2[sp], P = S.SPEEDS.powerWPerKg[sp], vg = S.travelSpeedBySpeciesAndPose[sp].gallop / sim.tempo, v1 = Math.min(vg, P / A);
+        return [sp, +(v1 / A + (vg * vg - v1 * v1) / (2 * P)).toFixed(2)];
+      })) };
   });
   const slowTicks = Math.round(1.5 * 60);
   for (const sp of ["deer", "wolf"]) {

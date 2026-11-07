@@ -137,7 +137,7 @@ const frameDataBySpeciesAndPose = {
     // TODO: placeholder art, not canonical (admin/design_notes.md): real sleeping frames
     sleep: {sheet: "wolf", cols: [48, 49], holds: holdsFromMs([1400, 1000]), frameW: 64, frameH: 64,
       topToShadow: 39, ...wolfDiagonalFacing},
-    // not used yet
+    // signalling (sim.js: HOWLING): plays exactly once in sim's howl (attach checks this)
     howl: {sheet: "wolf", cols: colsFrom(12, 9), holds: holdsFromMs([100, 100, 100, 100, 100, 150, 500, 100, 100]),
       frameW: 64, frameH: 64, topToShadow: 39, ...wolfDiagonalFacing},
     bite: {sheet: "wolf", cols: colsFrom(33, 15),
@@ -334,6 +334,19 @@ const sheetImages = {
   "deer-death":   { adult: "stag-death.png",   hind: "hind-death.png",   young: "young/hind-death-stage" },
   "deer-carcass": { adult: "deer-carcass.png", hind: "hind-carcass.png", young: "young/hind-carcass-stage" },
 };
+// CARRYING: a wolf carrying a deer leg (sim's a.carrying) is drawn with its sheet's leg
+// overlay (made by spritecraft/make_carried_leg.py: the leg in its mouth, frame by frame,
+// for the run, idle and swim columns) over its frame; only grown wolves and the last young
+// stage carry. TODO: placeholder art (admin/design_notes.md).
+const legOverlays = {
+  "wolf":       { adult: "wolf-land-leg.png",  young: "young/wolf-land-leg-stage" },
+  "wolf-stalk": { adult: "wolf-stalk-leg.png", young: "young/wolf-stalk-leg-stage" },
+  "wolf-swim":  { adult: "wolf-swim-leg.png",  young: "young/wolf-swim-leg-stage" },
+};
+function legOverlay(sheet, stage) {
+  const s = legOverlays[sheet];
+  return s ? IMG + (stage ? `${s.young}${stage}.png` : s.adult) : null;
+}
 function sheetImage(sheet, stage, hind) {
   const s = sheetImages[sheet];
   return IMG + (stage ? `${s.young}${stage}.png` : hind && s.hind ? s.hind : s.adult);
@@ -1373,11 +1386,13 @@ function describeCritter(a, s) {
   return { uid: a.uid, critter: a, sheet: fd.sheet, stage, hind, image: sheetImage(fd.sheet, stage, hind),
     cls: "critter " + fd.sheet + (stage ? " stage" + stage : hind ? " hind" : ""),
     col, row, w: fd.frameW, h: fd.frameH, left: isoX - fd.frameW / 2, top: isoY - topOffset, mirror,
-    z: spriteZIndex(a), swim: a.pose === "swim", layers: null };
+    z: spriteZIndex(a), swim: a.pose === "swim", layers: null,
+    overlay: a.carrying ? legOverlay(fd.sheet, stage) : null };
 }
 
 // CARCASSES: 9 layers: the shadow, then each of the 8 pieces as meat while any is left,
-// else as bones. images/deer-carcass.png (made by spritecraft/make_deer_carcass.py) has
+// else as bones; a leg torn off (sim's c.carcass.torn: CARRYING) not at all. A morsel (a
+// leg put down: c.morsel) is just that leg. images/deer-carcass.png (made by spritecraft/make_deer_carcass.py) has
 // the shadow in column 0, then each piece's meat and bones, bottom layer to top in
 // carcassSheetPieces order.
 const carcassSheetPieces = ["groundHind", "groundFore", "hips", "midback", "chest", "head", "skyHind", "skyFore"];
@@ -1386,9 +1401,11 @@ const carcassFrame = 48, carcassTopToShadow = 40;
 function describeCarcass(a) {
   const layers = []; // top first
   for (let k = carcassSheetPieces.length - 1; k >= 0; k--) {
-    layers.push(1 + 2 * k + (sim.carcassPieceKg(a, carcassSheetPieces[k]) > 0 ? 0 : 1));
+    const name = carcassSheetPieces[k];
+    if (a.morsel ? name !== a.morsel : a.carcass.torn?.has(name)) continue;
+    layers.push(1 + 2 * k + (sim.carcassPieceKg(a, name) > 0 ? 0 : 1));
   }
-  layers.push(0); // the shadow, at the bottom
+  if (!a.morsel) layers.push(0); // the shadow, at the bottom
   const stage = sim.youngStage(a), hind = !hasAntlers(a);
   const [isoX, isoY] = groundProject(a.gx, a.gy);
   return { uid: a.uid, critter: a, sheet: "deer-carcass", stage, hind, image: sheetImage("deer-carcass", stage, hind),
@@ -1402,6 +1419,7 @@ function paintSprite(target, r) {
   const img = image(r.image);
   for (const col of r.layers ? [...r.layers].reverse() : [r.col])
     drawCell(target, img, col * r.w, r.row * r.h, r.w, r.h, r.left, r.top, r.mirror);
+  if (r.overlay) drawCell(target, image(r.overlay), r.col * r.w, r.row * r.h, r.w, r.h, r.left, r.top, r.mirror);
 }
 
 // This frame's sprites, for every critter and corpse.
@@ -1845,6 +1863,11 @@ function attach(theSim, theSenses = null) {
     const ticks = d.cols ? d.holds.reduce((x, y) => x + y, 0) : d.nFrames * d.holdTks;
     if (Math.abs(ticks * sim.tempo - deathS) > 1e-9)
       return alert(`animat: ${species} death animation doesn't last sim's ${deathS} s`);
+  }
+  { // the howl plays exactly once in sim's howl (HOWLING)
+    const h = frameDataBySpeciesAndPose.wolf.howl, ticks = h.holds.reduce((x, y) => x + y, 0);
+    if (Math.abs(ticks - Math.round(sim.howlS / sim.tempo)) > 0)
+      return alert(`animat: the wolf's howl doesn't last sim's ${sim.howlS} s`);
   }
   // load every image now, so none is missing when first drawn
   [...terrainImages, heartImage, debugTileImage].forEach(image);

@@ -38,7 +38,9 @@ const terrainSeed = 1;
 //   windRefillHalfLifeSByPose, staminaFullRefillSByPose, gallopStaminaCostFactor,
 //   windStartFrac, staminaStartFrac   refilling the reserves, and starting a gait
 //   swimMinStaminaFrac     stamina needed to go into the water (see SWIMMING)
-//   accelToGallopS         from standing to a full gallop, and back (see SPEED CHANGES)
+//   accelMaxMps2, powerWPerKg   speeding up and slowing down: the most m/s each second,
+//                          and the power a kilogram of it puts in or takes out (see SPEED
+//                          CHANGES)
 //   climbOutSlowS          how long a critter climbing out of the water up a bank is held
 //                          to a walk (see SWIMMING); real time in both, like travel
 //   stunMinS, stunMaxS     how long a blocked move stuns a critter (see INTENTS)
@@ -299,7 +301,14 @@ const REALISTIC = {
   windStartFrac: 0.25,        // wind needed to start a gallop
   staminaStartFrac: 0.1,      // stamina needed to start a trot or gallop
   swimMinStaminaFrac: 0.25,
-  accelToGallopS: { wolf: 2.5, deer: 1.5 },
+  // speeding up and slowing down (SPEED CHANGES): at low speed no more than accelMaxMps2
+  // (it would pitch over: a greyhound about 10 m/s2, a pony 6), faster held to its power,
+  // powerWPerKg (greyhound about 60 W/kg, pony 30), braking the same (a pony's braking
+  // "largely mirrors" its speeding up): Williams et al. 2009, "Pitch then power", J Exp
+  // Biol. A wolf put a little under a greyhound; a deer (no figures) quicker off the mark.
+  // From standing to a full gallop: a wolf about 2.3 s, a deer 1.9.
+  accelMaxMps2: { wolf: 9, deer: 12 },
+  powerWPerKg: { wolf: 60, deer: 110 },
   climbOutSlowS: { wolf: 1.5, deer: 1.5 }, // estimate: scrambling up a bank
   stunMinS: 0.1,
   stunMaxS: 0.5,
@@ -360,7 +369,8 @@ const GAMIFIED = {
   windStartFrac: 0.25,
   staminaStartFrac: 0.1,
   swimMinStaminaFrac: 0.25,
-  accelToGallopS: { wolf: 2.5, deer: 1.5 },
+  accelMaxMps2: { wolf: 9, deer: 12 },
+  powerWPerKg: { wolf: 60, deer: 110 },
   climbOutSlowS: { wolf: 1.5, deer: 1.5 }, // estimate: scrambling up a bank
   stunMinS: 0.1,
   stunMaxS: 0.5,
@@ -422,9 +432,18 @@ const canAtAgeBySpecies = Object.fromEntries(Object.entries(SPEEDS.lifeStageAges
 const kphToTpTk = 0.277777 * tempo;
 const travelSpeedBySpeciesAndPose = Object.fromEntries(Object.entries(SPEEDS.travelKph).map(([sp, kph]) =>
   [sp, { ...Object.fromEntries(Object.entries(kph).map(([pose, v]) => [pose, v * kphToTpTk])), idle: 0, death: 0 }]));
-// How much a critter's speed may change in one tick (see SPEED CHANGES).
+// How much a critter's speed (tiles a tick) may change in one tick at most, and its power
+// in the same units (speed change a tick, times speed), by species (see SPEED CHANGES).
 const accelBySpecies = Object.fromEntries(Object.keys(travelSpeedBySpeciesAndPose).map(sp =>
-  [sp, travelSpeedBySpeciesAndPose[sp].gallop / (SPEEDS.accelToGallopS[sp] / tempo)]));
+  [sp, SPEEDS.accelMaxMps2[sp] * tempo * tempo]));
+const powerBySpecies = Object.fromEntries(Object.keys(travelSpeedBySpeciesAndPose).map(sp =>
+  [sp, SPEEDS.powerWPerKg[sp] * tempo * tempo * tempo]));
+// How much the speed of a critter of a species going at speed v may change in one tick,
+// up or down alike.
+function speedStep(species, v) {
+  const p = powerBySpecies[species];
+  return v * accelBySpecies[species] > p ? p / v : accelBySpecies[species];
+}
 
 function randBetween(a, b) {
   return a + Math.random() * (b - a);
@@ -1265,6 +1284,8 @@ function startCritterDeath(a, cause = "unknown") {
   a.nextGY = a.gy;
   a.eating = false;
   a.nursingOn = null;
+  a.taking = false;
+  dropLeg(a);
   if (a.species === "deer") { // (wolves aren't eaten)
     a.carcass = newCarcass(a);
     a.carcassFullKg = carcassMeatKg(a);
@@ -1691,13 +1712,20 @@ function eat(a) {
     }
     return;
   }
+  if (a.carrying) { // (the leg in its mouth: CARRYING)
+    bite = Math.min(mealBiteKg(a, "meat", SPEEDS.eatKgPerS[a.species]), stomachRoomKg(a));
+    const kg = biomassKg(a.carrying.food);
+    moveShare(a.carrying.food, a.stomach, bite >= kg - 1e-9 ? 1 : bite / kg);
+    legEaten(a); mealEaten(a);
+    return;
+  }
   const c = carcassInReach(a);
   if (!c) { a.meal = null; return; }
   bite = Math.min(mealBiteKg(a, "meat", SPEEDS.eatKgPerS[a.species]), stomachRoomKg(a));
   while (bite > 1e-12) {
     const pieces = c.carcass.pieces;
     if (!(biomassKg(pieces[c.eatingPiece] ?? biomass()) > 1e-9)) {
-      const left = carcassPieces.filter(([name]) => biomassKg(pieces[name]) > 1e-9);
+      const left = carcassPieces.filter(([name]) => pieces[name] && biomassKg(pieces[name]) > 1e-9);
       if (!left.length) break;
       c.eatingPiece = left[Math.floor(Math.random() * left.length)][0];
     }
@@ -1733,6 +1761,75 @@ function metabolize(t, mj) {
 // After a's bite: a full stomach ends its meal.
 function mealEaten(a) {
   if (!(stomachRoomKg(a) > 1e-12)) a.meal = null;
+}
+
+// CARRYING: a wolf grown, or in its last young stage (canCarry), tears a leg off a
+// carcass in its reach (intent "take": tearLegS of tugging, standing still) and carries it
+// in its mouth (a.carrying: { piece, food (the leg's meat, a biomass), from (the carcass),
+// uid (the leg's own, once put down) }), however it goes, drawing it (animat.js:
+// CARRYING). It takes the leg with the most meat left that is still on the carcass
+// (carcassLegs); torn off, that leg is drawn on the carcass neither as meat nor as bones
+// (c.carcass.torn). It puts the leg down (intent "drop"; or dying) as a morsel: a corpse
+// of its own (c.morsel: the leg's name) at its mouth, holding just that leg's meat, drawn
+// as just that leg, and spreading no death scent. A leg, carried or put down, rots away
+// with the carcass it came from. A wolf with a leg in its mouth that eats eats the leg.
+const carcassLegs = ["skyHind", "groundHind", "skyFore", "groundFore"];
+const tearLegS = 2;            // tugging a leg off (estimate)
+const mouthTiles = 0.5;        // a morsel put down lies this far ahead of the wolf's middle
+
+function canCarry(a) {
+  return a.species === "wolf" && isLiveCritter(a) && (youngStage(a) === 0 || youngStage(a) === youngScales.length);
+}
+
+// The leg corpse c would give up (the most meat, still on it), or null.
+function legToTake(c) {
+  if (!c || !c.carcass || c.morsel) return null;
+  let best = null, bestKg = 1e-9;
+  for (const name of carcassLegs) {
+    if (c.carcass.torn?.has(name)) continue;
+    const kg = carcassPieceKg(c, name);
+    if (kg > bestKg) { best = name; bestKg = kg; }
+  }
+  return best;
+}
+
+// One tick of a's tugging at a leg of the carcass in its reach: torn off after tearLegS.
+function tugLeg(a) {
+  const c = canCarry(a) && !a.carrying ? carcassInReach(a) : null, piece = legToTake(c);
+  if (!piece) { a.tugS = 0; return; }
+  a.tugS = (a.tugS || 0) + tempo;
+  if (a.tugS < tearLegS - 1e-9) return;
+  a.tugS = 0;
+  const food = biomass();
+  moveAll(c.carcass.pieces[piece], food);
+  (c.carcass.torn || (c.carcass.torn = new Set())).add(piece);
+  if (c.eatingPiece === piece) c.eatingPiece = null;
+  a.carrying = { piece, food, from: c, uid: g_next_uid++ }; // (the uid it will lie as, put down)
+  a.currentDirection = getDir(c.gx - a.gx, c.gy - a.gy, a.currentDirection);
+}
+
+// a puts down the leg it carries, as a morsel at its mouth (on land: in the water, just
+// where it is).
+function dropLeg(a) {
+  const l = a.carrying;
+  if (!l) return null;
+  a.carrying = null;
+  const [hx, hy] = a.hx !== undefined ? [a.hx, a.hy] : moveVecByDir[a.currentDirection];
+  let x = a.gx + hx * mouthTiles, y = a.gy + hy * mouthTiles;
+  if (!isInWater(a) && (isWaterAt(x, y, 0) || !canStepTo(a, x, y))) { x = a.gx; y = a.gy; }
+  const pieces = Object.fromEntries(carcassPieces.map(([name]) => [name, biomass()]));
+  pieces[l.piece] = l.food;
+  const m = { ...l.from, uid: l.uid, kind: "corpse", morsel: l.piece, gx: x, gy: y, nextGX: x, nextGY: y,
+    speed: 0, pose: "dead", poseTick: g_tick, tissues: biomass(), stomach: biomass(), womb: biomass(),
+    carcass: { pieces, bones: biomass(), torn: new Set() }, carcassFullKg: biomassKg(l.food),
+    eatingPiece: l.piece, deathScent: null, carrying: null };
+  allCorpses.push(m);
+  return m;
+}
+
+// a's leg's last bite: it has eaten the whole leg.
+function legEaten(a) {
+  if (a.carrying && !(biomassKg(a.carrying.food) > 1e-12)) a.carrying = null;
 }
 
 // BODY: a critter's biomass is in three places: its body's tissues (a.tissues), its
@@ -1923,6 +2020,7 @@ function updateFood(a) {
   if (!a.eating) a.meal = null;
   a.nursingOn = a.eating && isInfant(a) ? nurse(a) : null;
   if (a.eating && a.nursingOn === null && _can(a, "eat")) { eat(a); drink(a); }
+  if (a.taking) tugLeg(a); else a.tugS = 0;
   const kg = biomassKg(a.stomach);
   if (kg > 0) {
     const drip = biomass();
@@ -1955,6 +2053,7 @@ function worldBiomassKg() {
   for (const a of allCritters.concat(allCorpses)) {
     for (const b of [a.tissues, a.stomach, a.womb]) kg += biomassKg(b);
     if (a.carcass) kg += carcassMeatKg(a) + biomassKg(a.carcass.bones);
+    if (a.carrying) kg += biomassKg(a.carrying.food);
   }
   return kg;
 }
@@ -2010,9 +2109,11 @@ function updateClock() {
 // SCENT TRAILS: every live critter on dry land marks the tile under its middle with its
 // species' scent each tick: the tile keeps when it was last marked by each species, and by
 // whom. Scent fades: at age t its strength is 2^(-t / SPEEDS.scentHalfLifeS) (senses.js
-// decides how faint a scent each critter can still smell). Water holds no scent, the
-// shore's included (a critter half on land marks nothing over water). Only marked tiles
-// are kept, until scentKeepHalfLives half-lives old (fainter than anything can smell).
+// decides how faint a scent each critter can still smell). A young wolf (not grown) never
+// marks over a mark of a parent's, so its parents' trails stay whole for it to find them
+// by. Water holds no scent, the shore's included (a critter half on land marks nothing
+// over water). Only marked tiles are kept, until scentKeepHalfLives half-lives old
+// (fainter than anything can smell).
 // DEATH SCENT: a carcass spreads death scent (its own kind, scentMarks.death, by the
 // carcass's uid) over the land within deathScentTiles of it: out to a circle that grows
 // over deathScentGrowS from the death (each tile as the circle reaches it, once its death
@@ -2055,6 +2156,8 @@ function markScent() {
     if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) continue;
     if (getTerrainAt(i, j) === "water") continue; // (a critter on land, its middle over the shore's water)
     const k = i * gridHeightN + j, marks = scentMarks[a.species];
+    // (a young wolf never covers a parent's mark: it can always find their trail)
+    if (a.species === "wolf" && !isGrown(a) && a.parentUids.includes(marks.get(k)?.[1])) continue;
     marks.delete(k); // (so the map stays in order of marking, oldest first)
     marks.set(k, [g_now, a.uid]);
   }
@@ -2070,7 +2173,7 @@ function markScent() {
 // renewal when due. c.deathScent: { since, next (the disk's index it has reached), renewedAt }.
 function spreadDeathScent() {
   for (const c of allCorpses) {
-    if (!c.carcass) continue;
+    if (!c.carcass || c.morsel) continue;
     const ds = c.deathScent || (c.deathScent = { since: c.deathTime, next: 0, renewedAt: c.deathTime });
     const ci = Math.floor(c.gx), cj = Math.floor(c.gy);
     const lay = (di, dj, d) => {
@@ -2398,6 +2501,9 @@ function giveBirth(f) {
 //   { gait: "eat", at }    a deer: the same, the grass under the boulder on tile at, [i, j],
 //                          when right beside it (see GRASS)
 //   { gait: "mate", with } stand still, ready to mate with critter uid `with` (see BREEDING)
+//   { gait: "take" }       a wolf: stand still and tear a leg off the carcass in reach (CARRYING)
+//   { gait: "drop" }       a wolf: stand still, putting down the leg it carries (CARRYING)
+//   { gait: "howl", signal } a wolf: stand still and howl `signal` (HOWLING)
 //   { dx, dy, gait }       move along grid vector (dx, dy), any length, at walk, stalk, trot or
 //                          gallop, or the best gait wind and stamina allow (a newborn
 //                          too young to walk crawls: CRAWLING)
@@ -2416,10 +2522,11 @@ const intents = new Map(); // critter -> its prepared intent
 let playerIntent = null;
 let playerIntentApplied = false; // whether the player was in control last tick
 const facingKeepCos = 0.866;     // cos 30 degrees
+const standingGaits = new Set(["idle", "eat", "mate", "take", "drop", "howl"]);
 
 // The intent with its heading (hx, hy) at unit length, reusing prev's for the same vector.
 function prepareIntent(intent, prev) {
-  if (!intent || intent.gait === "idle" || intent.gait === "eat" || intent.gait === "mate") return intent || null;
+  if (!intent || standingGaits.has(intent.gait)) return intent || null;
   if (intent.dir !== undefined) {
     const [hx, hy] = moveVecByDir[intent.dir];
     return { dir: intent.dir, gait: intent.gait, hx, hy };
@@ -2450,8 +2557,11 @@ function applyIntent(a, intent) {
   if (a.stunnedUntil > g_tick || isMating(a)) return;
   a.eating = intent.gait === "eat";
   a.eatAt = a.eating && intent.at || null;
-  if (intent.gait === "idle" || intent.gait === "eat" || intent.gait === "mate") setCritterIdle(a);
+  a.taking = intent.gait === "take" && a.species === "wolf";
+  if (intent.gait === "drop") dropLeg(a);
+  if (standingGaits.has(intent.gait)) setCritterIdle(a);
   else setCritterHeading(a, intent.hx, intent.hy, intent.gait, intent.dir);
+  if (intent.gait === "howl") startHowl(a, intent.signal);
 }
 
 function applyIntents() {
@@ -2470,6 +2580,20 @@ function applyIntents() {
     pcWolf.eating = false;
     setCritterIdle(pcWolf);
   }
+}
+
+// HOWLING: a wolf standing still howls (pose "howl", for howlS), a signal to the others
+// (a.signal: { kind, tick }, kind "hunt": it is going hunting; "stay": it is staying put):
+// heard far (senses.js: HOWLS). Asked to howl again while howling, or the same signal
+// within howlAgainS, it doesn't (it stands).
+const howlS = 1.35;       // the artist's howl, once (images_raw/5V5aC4.gif; animat.js checks it)
+const howlAgainS = 5;
+function startHowl(a, kind) {
+  if (a.species !== "wolf" || a.pose === "howl" || isInWater(a) || a.speed > 0) return;
+  if (a.signal && a.signal.kind === kind && g_tick - a.signal.tick < howlAgainS / tempo) return;
+  a.signal = { kind, tick: g_tick };
+  a.howlUntil = g_tick + Math.round(howlS / tempo);
+  setPose(a, "howl");
 }
 
 function stun(a) {
@@ -2617,12 +2741,15 @@ function setCritterIdle(a) {
   if (a.speed > 0) return; // still slowing in its gait; changeSpeed idles it once stopped
   a.nextGX = a.gx;
   a.nextGY = a.gy;
+  if (a.pose === "howl" && g_tick < a.howlUntil) return; // (howling on: HOWLING)
   setPose(a, "idle");
 }
 
-// SPEED CHANGES: a critter's speed (a.speed) moves toward its gait's (a.targetSpeed) at a
-// steady rate, up and down alike, reaching a full gallop from standing in
-// SPEEDS.accelToGallopS. A critter told to stop keeps its moving pose until it has
+// SPEED CHANGES: a critter's speed (a.speed) moves toward its gait's (a.targetSpeed), up
+// and down alike, by speedStep: at low speed by SPEEDS.accelMaxMps2, faster by no more
+// than its power allows (SPEEDS.powerWPerKg: the change a second times the speed), so it
+// gets off the mark and comes to a stop quickly, and gains or sheds speed slowly near a
+// full gallop. A critter told to stop keeps its moving pose until it has
 // stopped. Stopping dead (a stun, death) is immediate.
 function changeSpeed(a) {
   // (turning right round, it brakes; at a walk or slower, turning more than 45 degrees, it
@@ -2631,10 +2758,11 @@ function changeSpeed(a) {
   const braking = dot < 0 || (dot < pivotCos && a.speed <= travelSpeedBySpeciesAndPose[a.species].walk);
   const target = braking ? 0 : a.targetSpeed ?? 0;
   if (a.speed !== target) {
-    const step = accelBySpecies[a.species];
+    const step = speedStep(a.species, a.speed);
     a.speed = a.speed < target ? Math.min(target, a.speed + step) : Math.max(target, a.speed - step);
   }
-  if (a.speed === 0 && !(a.targetSpeed > 0) && a.pose !== "idle" && a.pose !== "swim" && !isMating(a) && isLiveCritter(a)) {
+  if (a.pose === "howl" && !(g_tick < a.howlUntil && !(a.targetSpeed > 0))) setPose(a, "idle"); // (the howl done, or off it goes)
+  if (a.speed === 0 && !(a.targetSpeed > 0) && a.pose !== "idle" && a.pose !== "howl" && a.pose !== "swim" && !isMating(a) && isLiveCritter(a)) {
     a.nextGX = a.gx;
     a.nextGY = a.gy;
     setPose(a, "idle");
@@ -2877,6 +3005,8 @@ function updateAllCritters() {
     }
     allCorpses.splice(k, 1);
   }
+  for (const a of allCritters) // (a leg carried rots away with its carcass)
+    if (a.carrying && g_now - a.carrying.from.deathTime >= SPEEDS.corpseLastsS) { moveAll(a.carrying.food, null, "rottedKg"); a.carrying = null; }
   markScent();
   spreadDeathScent();
   if (g_tick % Math.round(SPEEDS.windChangeEveryS / tempo) === 0) shiftWind();
@@ -3233,7 +3363,8 @@ function start({ consoleOnly = false } = {}) {
 // eating, carcass, carcassFullKg, uid, blockedTick, stunnedUntil, isMale, birthTime,
 // deathTime, weightKg, adultKg, frameKg, boxRad, mateUid, matingWith, parentUids,
 // youngUids, pregnancy, nursingOn, bumpedTick, bumpedBy, bumpedDx, bumpedDy, bumpedX,
-// bumpedY, touchedTick, touchedBy, touchedX, touchedY)
+// bumpedY, touchedTick, touchedBy, touchedX, touchedY, carrying, morsel, signal,
+// howlUntil)
 // but change the world only through these functions.
 return {
   // lifecycle and time
@@ -3251,8 +3382,9 @@ return {
   // the square startNearTiles a side about it (for tests: where to look for features)
   get startNear() { const m = (startNearTiles - startTiles) / 2; return startArea && { i0: startArea.i0 - m, j0: startArea.j0 - m, i1: startArea.i1 + m, j1: startArea.j1 + m }; },
   gaitSpeed: (species, gait) => travelSpeedBySpeciesAndPose[species][gait] || 0, // tiles a tick
+  howlS, // (HOWLING)
   turnStep: v => turnMaxRadS * tempo / (1 + v / tempo / turnHalfSpeedMps), // radians a tick at v tiles a tick (TURNING)
-  accelStep: species => accelBySpecies[species], // tiles a tick, a tick (SPEED CHANGES)
+  speedStep, // (species, speed in tiles a tick): the most it changes a tick (SPEED CHANGES)
   pivotCos,
   isBlockedTile, isLandTile, isWaterAt, canStepTo, mayEnterWater, obstacleHeightAt, sightHeightAt, centerHeightAt, isLiveCritter,
   boulderRockAt, obstacleAcross, boulderRocks,
@@ -3269,6 +3401,7 @@ return {
   // food
   grassFoodAt, grassHeightAt, grassMostAt, inGrassReach, grassChangesSince,
   undergrowthFoodAt, undergrowthShownAt, plantFoodAt, plantMostAt, undergrowthKinds: undergrowthKinds.slice(1), carcassPieces, carcassPieceKg, carcassMeatKg, eatReachTiles,
+  canCarry, legToTake, carcassLegs, tearLegS, // (CARRYING)
   get grassMaxKg() { return SPEEDS.grassMaxKg; },
   bodySharesBySpecies, biomassKg, energyMJ, waterInReach,
   // ages and breeding
@@ -3296,6 +3429,7 @@ return {
     milkSharesBySpecies, grassShares, newCarcass, newbornKg, miscarryBelow, updateFood,
     toFat, makeCarbs, withdraw, burn, absorb, fullStomachMJ, carbsDigestedBySpecies, stomachTS, stomachEmptiesInT,
     get loopHandle() { return loopHandle; },
+    dropLeg, howlS,
     setUndergrowthKg, growUndergrowth, undergrowthMostKg, undergrowthShares, undergrowthTotalKg, flowersShownFrom,
     groundCoverAt, regionAt, regionsNear, coverIn, undergrowthIn, coverThemes, regionTiles, provinceTiles, vnoise, hash01,
   },
