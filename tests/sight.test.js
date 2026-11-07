@@ -206,7 +206,7 @@ async function main(browser, r) {
   const far = await p.evaluate(() => {
     animat.setZoom(1);
     const w = sim.pcWolf;
-    for (let k = 34; k >= 24; k -= 2) {
+    for (let k = 40; k >= 36; k -= 2) { // (beyond its sight circle, 23.9 tiles, and on screen)
       const i = Math.floor(w.gx) + k / 2, j = Math.floor(w.gy) - k / 2;
       if (animat.tileSight(i, j) !== "black") continue;
       const [px, py] = animat.isoProject(i + 0.5, j + 0.5);

@@ -62,10 +62,11 @@ async function main(browser, r) {
     const wolf = sim.allCritters.find(c => c.species === "wolf" && c !== sim.pcWolf && sim.isGrown(c) && sim.isLiveCritter(c));
     const deer = sim.allCritters.find(c => c.species === "deer" && sim.isGrown(c) && sim.isLiveCritter(c));
     const put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; S.setCritterIdle(c); c.pose = "idle"; };
-    // apart along the screen's vertical by dx + dy = 17 of the 25.3 half-height, facing each
-    // other; at night the wolf keeps 40% of its sight's area (its half-height 16.0), the
-    // deer 50% (17.9). Night first: once seen, they would keep each other in sight.
-    put(wolf, home[0] - 4.25, home[1] - 4.25); put(deer, home[0] + 4.25, home[1] + 4.25);
+    // 16 tiles apart (of the 23.9 of sight's radius), facing each other; at night the wolf
+    // keeps 40% of its sight's area (its radius 15.1), the deer 50% (16.9). Night first:
+    // once seen, they would keep each other in sight.
+    const h = 8 * Math.SQRT1_2;
+    put(wolf, home[0] - h, home[1] - h); put(deer, home[0] + h, home[1] + h);
     wolf.hx = wolf.hy = Math.SQRT1_2; deer.hx = deer.hy = -Math.SQRT1_2;
     const sees = (a, b) => senses.perceive(a).some(o => o.uid === b.uid && o.by === "sight");
     S.holdClock(0); const night = [sees(wolf, deer), sees(deer, wolf)];
@@ -75,7 +76,7 @@ async function main(browser, r) {
     return { day, night, area: k.map(x => +(x * x).toFixed(3)) };
   });
   r.check(sight.day.every(Boolean) && sight.night[0] === false && sight.night[1] === true && sight.area.join() === "0.4,0.5",
-    `17 tiles apart (on screen) they see each other by day; at night only the deer sees the wolf (keeping ${sight.area.join(", ")} of their sight's area)`);
+    `16 tiles apart they see each other by day; at night only the deer sees the wolf (keeping ${sight.area.join(", ")} of their sight's area)`);
 
   // sleep is off: a minute of play at dusk (when wolves woke and deer bedded down)
   const awake = await p.evaluate(() => {

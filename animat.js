@@ -913,8 +913,8 @@ function tilesInView() {
 // corpses it sees are drawn (and itself), and, greyed, the corpses and sleepers it saw
 // (REMEMBERED). What it has seen is the wolf's own: a new player's wolf starts having
 // seen nothing.
-// FIELD: whether the wolf sees the ground is sampled every sightSampleTiles over its sight
-// rectangle, worked out again at most every sightEveryS of game time while it moves or
+// FIELD: whether the wolf sees the ground is sampled every sightSampleTiles over the square
+// about its sight circle, worked out again at most every sightEveryS of game time while it moves or
 // turns (or the light changes its sight). A tile is seen if its center or the middle of an edge is.
 // A tile seen before but not all of it now is shown as seen all the same if a grown deer
 // standing on its center would be seen (eye to eye), and no obstacle stands in the way of
@@ -992,8 +992,8 @@ function updateSight() {
     || Math.abs(share - sight.share) > 0.005 || stage !== sight.stage;
   if (sight.field && (!changed || sim.tickCount - sight.tick < Math.round(sightEveryS / sim.tempo))) return;
   Object.assign(sight, { tick: sim.tickCount, gx: w.gx, gy: w.gy, hx: w.hx, hy: w.hy, share, stage });
-  // the rectangle's bounds: |dx - dy| <= a, |dx + dy| <= b, so |dx|, |dy| <= (a + b) / 2
-  const reach = Math.ceil(share * (senses.sightHalfWidthTiles + senses.sightHalfHeightTiles) / 2) + 1;
+  // the circle's bounds
+  const reach = Math.ceil(share * senses.sightRadiusTiles) + 1;
   const ox = Math.floor(w.gx) - reach, oy = Math.floor(w.gy) - reach, tiles = 2 * reach + 1;
   const per = Math.round(1 / sightSampleTiles), n = tiles * per + 1;
   const eye = { ...w };

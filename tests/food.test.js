@@ -144,8 +144,8 @@ async function main(browser, r) {
       return true;
     });
     const [i, j] = t;
-    // (bare as far as it can see: |dx|, |dy| at most (20.2 + 25.3) / 2 in its sight rectangle)
-    for (let di = -24; di <= 24; di++) for (let dj = -24; dj <= 24; dj++)
+    // (bare as far as it can see: within its sight circle, 23.9 tiles)
+    for (let di = -25; di <= 25; di++) for (let dj = -25; dj <= 25; dj++)
       if (sim.getTerrainAt(i + di, j + dj) === "grass") S.setGrassKg((i + di) * H + j + dj, 0);
     S.setGrassKg((i + 12) * H + j, 0.1 * max); // one short tile, 12 tiles east
     d.gx = d.nextGX = i + 0.5; d.gy = d.nextGY = j + 0.5; d.stunnedUntil = 0; d.speed = 0;

@@ -1,6 +1,6 @@
 // Senses and decisions (senses.js, mind.js):
 //  - a wolf gallops at prey it sees, however far off
-//  - sight: every creature within the game view's rectangle at 2x zoom and the field of
+//  - sight: every creature within the sight circle (senses.sightRadiusTiles) and the field of
 //    view, nothing further or behind
 //  - a deer flees a wolf it sees; a wolf chases a deer it sees
 //  - memory: a deer keeps fleeing a wolf it can no longer see, however far it gets, and a
@@ -75,24 +75,24 @@ async function main(browser, r) {
     await p.evaluate(`window.setup = ${setup.toString()}`);
   };
 
-  // 1. sight: within the rectangle and the field of view only (the wolf facing screen-right)
+  // 1. sight: within the circle and the field of view only (the wolf facing screen-right)
   const sight = await p.evaluate(() => {
     sim.pause();
     const w = sim.internals.wolves[1], [d1, d2, d3, d4, d5] = sim.internals.deer;
-    const W = senses.sightHalfWidthTiles, H = senses.sightHalfHeightTiles;
+    const R = senses.sightRadiusTiles;
     w.hx = Math.SQRT1_2; w.hy = -Math.SQRT1_2;
-    // offsets for a point (u across the screen, v down it): dx = (u + v) / 2, dy = (v - u) / 2
-    const put = (d, u, v) => { d.gx = w.gx + (u + v) / 2; d.gy = w.gy + (v - u) / 2; };
-    put(d1, 0.99 * W, 0); put(d2, 1.01 * W, 0); put(d3, 0, 0.99 * H); put(d4, 0, -1.01 * H); put(d5, -0.5 * W, 0);
-    // the rectangle and field of view alone (line of sight is tested in senses.test.js)
+    // offsets for a point, in meters across the screen (u) and down it (v)
+    const put = (d, u, v) => { d.gx = w.gx + (u + v) * Math.SQRT1_2; d.gy = w.gy + (v - u) * Math.SQRT1_2; };
+    put(d1, 0.99 * R, 0); put(d2, 1.01 * R, 0); put(d3, 0.7 * R, 0.7 * R); put(d4, 0.72 * R, -0.72 * R); put(d5, -0.5 * R, 0);
+    // the circle and field of view alone (line of sight is tested in senses.test.js)
     senses.use.lineOfSight = false; senses.forgetSight(w); // (nothing seen before kept in sight)
     const seen = senses.perceive(w).filter(o => o.by === "sight").map(o => o.uid);
     senses.use.lineOfSight = true;
-    return { W, H, side: seen.includes(d1.uid), pastSide: seen.includes(d2.uid),
+    return { R: +R.toFixed(2), side: seen.includes(d1.uid), pastSide: seen.includes(d2.uid),
       top: seen.includes(d3.uid), pastTop: seen.includes(d4.uid), behind: seen.includes(d5.uid) };
   });
   r.check(sight.side && !sight.pastSide && sight.top && !sight.pastTop && !sight.behind,
-    `sight is the game view's rectangle: |dx - dy| up to ${sight.W}, |dx + dy| up to ${sight.H}, within the field of view ` +
+    `sight is a circle within ${sight.R} tiles of it, and the field of view ` +
     `(just inside: ${sight.side}, ${sight.top}; just outside: ${sight.pastSide}, ${sight.pastTop}; behind it: ${sight.behind})`);
 
   // 2. a deer flees a wolf in sight

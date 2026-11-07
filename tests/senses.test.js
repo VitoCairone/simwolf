@@ -1,5 +1,5 @@
 // The senses (see senses.js), and how the mind uses them (mind.js):
-//  - SIGHT: in the sight rectangle, the field of view and in line of sight: a boulder (as tall as 3 levels)
+//  - SIGHT: in the sight circle, the field of view and in line of sight: a boulder (as tall as 3 levels)
 //    between two critters hides each from the other; on open level ground they see each
 //    other; grass and land too are seen only in line of sight
 //  - KEEPING SIGHT: a critter it has seen it still sees however far off, in its field of
@@ -67,7 +67,7 @@ async function main(browser, r) {
     `a boulder between them hides each from the other, and the ground behind it (${JSON.stringify(sight)})`);
 
   // FIELD OF VIEW AND KEEPING SIGHT: a wolf facing +i sees a deer ahead, not one behind it;
-  // once seen, deer far off ahead (beyond its sight rectangle) are still seen while in line
+  // once seen, deer far off ahead (beyond its sight circle) are still seen while in line
   // of sight, each for keepSightS after it was last seen, and seeing it again starts that
   // afresh; but not once behind it
   const keep = await p.evaluate(() => {
@@ -79,7 +79,7 @@ async function main(browser, r) {
     put(wolfA, hx - 3, hy); wolfA.hx = 1; wolfA.hy = 0;
     put(deerC, hx - 6, hy); // (one it hasn't seen yet)
     const behind = by(wolfA, deerC);
-    // ahead of it, then each far off ahead, beyond the rectangle, where nothing stands in the
+    // ahead of it, then each far off ahead, beyond the circle, where nothing stands in the
     // line of sight
     herd.forEach((c, k) => put(c, hx, hy + k - 1));
     const ahead = herd.map(c => by(wolfA, c));
@@ -109,7 +109,7 @@ async function main(browser, r) {
   r.check(!keep.none && keep.behind === null && keep.ahead.every(x => x === "sight"),
     `a wolf sees deer ahead of it (${keep.ahead}), not one close behind it (${keep.behind}), out of its field of view`);
   r.check(!keep.none && keep.at4.every(x => x === "sight") && keep.at9.every(x => x === "sight") && keep.turned === null && keep.at16.every(x => x === null),
-    `once seen, three deer far ahead of it, beyond its sight rectangle (${keep.far} tiles), are still seen in line of sight 4 s on (${keep.at4}), and ` +
+    `once seen, three deer far ahead of it, beyond its sight circle (${keep.far} tiles), are still seen in line of sight 4 s on (${keep.at4}), and ` +
     `5 s after that (${keep.at9}), each time afresh; not behind it (${keep.turned}); 7 s after it last saw them, no more (${keep.at16})`);
 
   // HEARING
@@ -123,23 +123,23 @@ async function main(browser, r) {
     // (on the side, -i or +i, with open ground where the wolf runs on the spot)
     const open = x => [-1, 0, 1].every(di => [-1, 0, 1].every(dj =>
       sim.getTerrainAt(x + di, hy + dj) !== "water" && !sim.isBlockedTile(x + di, hy + dj)));
-    const side = open(hx - 21) ? -1 : 1;
+    const side = open(hx - 25) ? -1 : 1;
     const tryAt = (gait, dist) => {
       put(deerA, hx, hy); put(wolfA, hx + side * dist, hy);
       wolfA.wind = wolfA.stamina = 1;
       mind.ignore(wolfA); sim.setIntent(wolfA, { dx: 0, dy: 1, gait });
       for (let k = 0; k < 60; k++) { wolfA.wind = wolfA.stamina = 1; wolfA.gx = wolfA.nextGX = hx + side * dist; wolfA.gy = wolfA.nextGY = hy; S.tick(); }
-      // keep it out of sight: just past the rectangle's edge, straight along i is |dx - dy| = dist
+      // keep it out of sight: just past the circle's edge
       return by(deerA, wolfA);
     };
     out.terrain = terrain; out.R = R;
-    // just beyond sight's half-width (20.2) along i: only hearing can tell
-    out.walkFar = tryAt("walk", 21);
-    out.trotNear = R.trot > 21 ? tryAt("trot", 21) : "n/a";
-    out.gallop = R.gallop > 21 ? tryAt("gallop", 21) : "n/a";
+    // just beyond sight's radius (23.9): only hearing can tell
+    out.walkFar = tryAt("walk", 25);
+    out.trotNear = R.trot > 25 ? tryAt("trot", 25) : "n/a";
+    out.gallop = R.gallop > 25 ? tryAt("gallop", 25) : "n/a";
     sim.setIntent(wolfA, { gait: "idle" });
     for (let k = 0; k < 200; k++) S.tick();
-    put(wolfA, hx + side * 21, hy);
+    put(wolfA, hx + side * 25, hy);
     S.tick();
     out.still = by(deerA, wolfA);
     senses.use.smell = true;

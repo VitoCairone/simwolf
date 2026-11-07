@@ -8,26 +8,25 @@
 // Four senses, each telling where another creature is (exactly, for now) and some of
 // what it is:
 //
-// SIGHT, once old enough to "see": every creature within a rectangle on screen around the
-// critter (the shape and size of the game view at the default 2x zoom on a full-screen
-// MacBook, about 1,290 x 810 CSS pixels; in grid terms, screen-horizontal is dx - dy and
-// screen-vertical dx + dy, so the rectangle needs no square root), in its FIELD OF VIEW
+// SIGHT, once old enough to "see": every creature within sightRadiusTiles of the critter
+// (a circle on the ground, its square of distance compared with the radius's: no square
+// root), in its FIELD OF VIEW
 // (inView: within fovDegBySpecies, centered on its heading, all of it seen alike) and in
 // its LINE OF SIGHT: the straight line from its eye to the other's (eyeLevelsBySpecies, by
 // its size) passes above the ground at the center of every tile in between, and above or
 // beside its boulder: a boulder stops it only where the rock itself stands, its width
 // across the line's direction (the nearest of the 8) as its sprite shows (sim.js: BOULDER
 // FOOTPRINTS), not across its whole tile.
-// Only creatures inside the rectangle are traced: O(n^2) in critters, for now. Sight
+// Only creatures inside the circle are traced: O(n^2) in critters, for now. Sight
 // alone tells a creature's sex, age (an infant, grown), its partner, and whether a female
 // is in heat (as smell would, up close). Grass, land and water a critter can see are
-// likewise in the rectangle and in line of sight (canSeeTile); sight doesn't tell fresh
+// likewise in the circle and in line of sight (canSeeTile); sight doesn't tell fresh
 // water from the sea (taste does: sim.waterInReach, for the mind).
 // KEEPING SIGHT: a creature it has seen it can see again however far off, in its field of
 // view and line of sight, until keepSightS after it last saw it (seesNow): one it has
-// spotted it doesn't lose for being out of the rectangle (by day, beyond the view at 2x
-// zoom; at night, beyond its shrunken sight), only behind something or behind it.
-// AT NIGHT the rectangle shrinks (sightShare), from the whole of it in daylight
+// spotted it doesn't lose for being out of the circle (by day, beyond sightRadiusTiles;
+// at night, beyond its shrunken sight), only behind something or behind it.
+// AT NIGHT the circle shrinks (sightShare), from the whole of it in daylight
 // (sim.clock.light 1) to nightSightShare of its area in the dark, through the twilight.
 // HEARING, once old enough to "hear": a creature moving on land, heard within a range set
 // by its species, its gait and the ground under it, farther in the quiet of night
@@ -57,9 +56,11 @@ let sim = null; // set by attach()
 const use = { lineOfSight: true, hearing: true, smell: true };
 
 // SIGHT
-// In grid steps; one tile across the screen is 2 of |dx - dy|, one tile down it 2 of |dx + dy|.
-const sightHalfWidthTiles = 20.2;  // |dx - dy| at most this
-const sightHalfHeightTiles = 25.3; // |dx + dy| at most this
+// How far a critter sees by day, in tiles (meters): a meter beyond the corner of the
+// rectangle it once was (the game view at the default 2x zoom on a full-screen MacBook,
+// |dx - dy| up to 20.2 and |dx + dy| up to 25.3, its corner some 22.9 m off).
+const sightRadiusTiles = Math.sqrt((20.2 * 20.2 + 25.3 * 25.3) / 2) + 1; // about 23.9
+const sightRadius2 = sightRadiusTiles * sightRadiusTiles;
 // An adult's eye above the ground under it, in levels (8 px each), from its sprite: the
 // wolf's eye is drawn about 18 px above its ground point (counting the ground's slope to
 // its head), the deer's about 20. A young critter's is lower by its size (sim.youngScales).
@@ -77,11 +78,11 @@ const fovDegBySpecies = { wolf: 250, deer: 310 };
 const fovHalfCos = Object.fromEntries(Object.entries(fovDegBySpecies).map(([sp, d]) => [sp, Math.cos(d / 2 * Math.PI / 180)]));
 
 // KEEPING SIGHT: how long after it last saw a creature a critter still sees it beyond its
-// sight rectangle; and when each critter last saw each creature (game time).
+// sight circle; and when each critter last saw each creature (game time).
 const keepSightS = 6;
 const lastSeen = new WeakMap(); // critter -> Map(uid -> sim.now)
 
-// The share of its sight rectangle's width and height critter a sees now, by the light:
+// The share of its sight circle's radius critter a sees now, by the light:
 // the square root of the share of its area (worked out again only as the light changes).
 let shareLight = NaN;
 const shareBySpecies = {};
@@ -112,9 +113,9 @@ function sky() {
   const c = sim.clock;
   return { light: c.light, sunUp: c.sunUp, midday: c.sunUp && Math.abs(c.hour - 13) < middayHours };
 }
-// Whether grid offset (dx, dy) is in the sight rectangle, or with k < 1, within that share of it.
+// Whether grid offset (dx, dy) is in the sight circle, or with k < 1, within that share of its radius.
 function inSight(dx, dy, k = 1) {
-  return Math.abs(dx - dy) <= k * sightHalfWidthTiles && Math.abs(dx + dy) <= k * sightHalfHeightTiles;
+  return dx * dx + dy * dy <= k * k * sightRadius2;
 }
 
 function eyeLevels(a) {
@@ -179,7 +180,7 @@ function canSee(a, b) {
 }
 
 // Whether critter a sees grid point (gx, gy) at height gz (by default, the ground there):
-// in its sight rectangle and line of sight.
+// in its sight circle and line of sight.
 function canSeePoint(a, gx, gy, gz = sim.heightAt(gx, gy)) {
   if (!sim.can(a, "see") || !inSight(gx - a.gx, gy - a.gy, sightShare(a)) || !inView(a, gx - a.gx, gy - a.gy)) return false;
   if (!use.lineOfSight) return true;
@@ -204,7 +205,7 @@ function obstacleInWay(a, gx, gy, gz = sim.heightAt(gx, gy)) {
 function forgetSight(a) { lastSeen.delete(a); }
 
 // Whether critter a sees creature b (alive or a corpse) now: in its field of view, in its
-// sight rectangle or seen within keepSightS (see KEEPING SIGHT), and in line of sight.
+// sight circle or seen within keepSightS (see KEEPING SIGHT), and in line of sight.
 function seesNow(a, b) {
   if (!sim.can(a, "see")) return false;
   const dx = b.gx - a.gx, dy = b.gy - a.gy;
@@ -363,13 +364,13 @@ function perceive(a) {
 }
 
 // The tiles with plant food on them (grass, undergrowth: sim.plantFoodAt) whose centers
-// are in the sight rectangle of critter a (as much of it as it sees now: sightShare), or
+// are in the sight circle of critter a (as much of it as it sees now: sightShare), or
 // within share k of that, and in its field of view: [{ i, j, kg }]. (Line of sight is left
 // to the mind to check, with canSeeTile, for the few it considers: there are thousands.)
 function plantsAround(a, k = 1) {
   k *= sightShare(a);
   const out = [], ci = Math.floor(a.gx), cj = Math.floor(a.gy);
-  const r = Math.ceil(k * (sightHalfWidthTiles + sightHalfHeightTiles) / 2) + 1;
+  const r = Math.ceil(k * sightRadiusTiles) + 1;
   for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
     if (!inSight(i + 0.5 - a.gx, j + 0.5 - a.gy, k) || !inView(a, i + 0.5 - a.gx, j + 0.5 - a.gy)) continue;
     const kg = sim.plantFoodAt(i, j);
@@ -378,12 +379,12 @@ function plantsAround(a, k = 1) {
   return out;
 }
 
-// The shores whose centers are in the sight rectangle of critter a (as much of it as it
+// The shores whose centers are in the sight circle of critter a (as much of it as it
 // sees now) and its field of view: open land tiles beside water (on one of their four sides), [{ i, j }]. Line
 // of sight is left to the mind, as for plantsAround.
 function shoresAround(a) {
   const k = sightShare(a), ci = Math.floor(a.gx), cj = Math.floor(a.gy);
-  const r = Math.ceil(k * (sightHalfWidthTiles + sightHalfHeightTiles) / 2) + 2, n = 2 * r + 1;
+  const r = Math.ceil(k * sightRadiusTiles) + 2, n = 2 * r + 1;
   const wet = new Uint8Array(n * n); // 1 water, 2 open land
   for (let x = 0; x < n; x++) for (let y = 0; y < n; y++) {
     const i = ci - r + x, j = cj - r + y;
@@ -408,7 +409,7 @@ function attach(theSim) {
 
 return {
   attach, perceive, plantsAround, shoresAround, trailsAround, inSight, inView, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
-  sightHalfWidthTiles, sightHalfHeightTiles, fovDegBySpecies, keepSightS, trailMinStrength, hearingRangeTiles, hearingRangeOf, forgetSight, eyeLevelsBySpecies, sniffTiles,
+  sightRadiusTiles, fovDegBySpecies, keepSightS, trailMinStrength, hearingRangeTiles, hearingRangeOf, forgetSight, eyeLevelsBySpecies, sniffTiles,
 };
 
 })();

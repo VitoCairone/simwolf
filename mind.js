@@ -314,7 +314,7 @@ function expectedAt(k, now) {
 //   WHAT IT KNOWS OF THE GROUND: boulders it has seen (m.rocks: their tops in its line of
 //   sight; kept, as boulders don't move) and water it has seen while keeping dry (m.wet);
 //   tiles it was stopped going into by something it didn't know of, for bumpKeepS
-//   (m.bumps: noteBump); the lie of the land (ledges, water) in its sight rectangle and
+//   (m.bumps: noteBump); the lie of the land (ledges, water) in its sight circle and
 //   field of view; and all of it within feelTiles (it feels its footing). Elsewhere it
 //   takes the ground to be open, and learns better as it goes.
 //   FOLLOWING A PATH: it heads for the farthest of the next pathLookTiles tiles of it that it
@@ -1435,6 +1435,8 @@ function track(a, m, now, species = "deer", gait = "trot", suits = null, ends = 
 // keeping dry, to where k seems to be swimming to (landingAhead), or failing that the
 // land nearest k, no farther from k than the wolf is; and waits there, while k stays in
 // sight. It keeps to a spot at least waitCommitS, so it doesn't run to and fro as k turns.
+// Its spot for a swimmer whose way is unchanged it keeps when it can no longer see the
+// shore ahead (turned away, going there).
 function waitAshore(a, m, k, now) {
   m.mode = "wait"; m.searching = false;
   const ki = Math.floor(k.gx), kj = Math.floor(k.gy);
@@ -1442,6 +1444,8 @@ function waitAshore(a, m, k, now) {
   // a new spot when its prey has moved on, but not more often than every waitCommitS
   if (!m.watch || ((m.watch.i !== ki || m.watch.j !== kj || m.watch.way !== way) && now - m.watch.since > ticks(waitCommitS))) {
     let spot = way >= 0 ? landingAhead(a, k) : null;
+    // (its way unchanged and the shore ahead out of sight now: the spot it had for it)
+    if (!spot && m.watch && way >= 0 && m.watch.way === way) spot = m.watch.spot;
     if (!spot) {
       const reach = Math.ceil(Math.max(Math.abs(a.gx - k.gx), Math.abs(a.gy - k.gy))) + 1;
       const land = findNearestLand(a, k.gx, k.gy, reach);
@@ -1781,7 +1785,7 @@ function calm(a, m, now) {
 // within maxR tiles: { tile: [i, j], distL2 (squared distance to the tile's nearest
 // point) }, or null.
 function findNearestLand(a, gx, gy, maxR = Infinity) {
-  const sightReach = Math.ceil((senses.sightHalfWidthTiles + senses.sightHalfHeightTiles) / 2) + 1;
+  const sightReach = Math.ceil(senses.sightRadiusTiles) + 1;
   maxR = Math.min(maxR, sightReach + Math.ceil(Math.max(Math.abs(gx - a.gx), Math.abs(gy - a.gy))));
   const ci = Math.floor(gx), cj = Math.floor(gy);
   const sq = v => v * v;
