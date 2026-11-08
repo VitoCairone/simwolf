@@ -17,28 +17,33 @@
 // beside its boulder: a boulder stops it only where the rock itself stands, its width
 // across the line's direction (the nearest of the 8) as its sprite shows (sim.js: BOULDER
 // FOOTPRINTS), not across its whole tile.
-// Only creatures inside the circle are traced: O(n^2) in critters, for now. Sight
+// Only creatures inside the circle are traced. Sight
 // alone tells a creature's sex, age (an infant, grown), its partner, and whether a female
 // is in heat (as smell would, up close). Grass, land and water a critter can see are
 // likewise in the circle and in line of sight (canSeeTile); sight doesn't tell fresh
 // water from the sea (taste does: sim.waterInReach, for the mind).
-// KEEPING SIGHT: a creature it has seen it can see again however far off, in its field of
-// view and line of sight, until keepSightS after it last saw it (seesNow): one it has
-// spotted it doesn't lose for being out of the circle (by day, beyond sightRadiusTiles;
-// at night, beyond its shrunken sight), only behind something or behind it.
+// KEEPING SIGHT: a creature it has seen it can see again up to detectTiles off, in its
+// field of view and line of sight, until keepSightS after it last saw it (seesNow): one it
+// has spotted it doesn't lose for being out of the circle (by day, beyond
+// sightRadiusTiles; at night, beyond its shrunken sight), only behind something, behind
+// it, or beyond detectTiles.
 // AT NIGHT the circle shrinks (sightShare), from the whole of it in daylight
 // (sim.clock.light 1) to nightSightShare of its area in the dark, through the twilight.
 // HEARING, once old enough to "hear": a creature moving on land, heard within a range set
 // by its species, its gait and the ground under it, farther in the quiet of night
 // (hearingRangeTiles: a deer galloping on stone loudest; a wolf stalking all but silent),
 // or swimming. Standing still is silent. It tells its species, and where and how it moves.
-// A wolf howling is heard much farther (HOWLS), telling its signal.
+// A wolf howling is heard much farther (HOWLS); a wolf barking softly about as far as a
+// loud footfall, telling its signal (BARKS); a pup whimpering, less far.
 // SMELL, from birth:
 //   up close: a critter smells any creature or carcass within sniffTiles (not on the wind:
 //   no scent carries farther). It tells species, whether alive, and a carcass's meat.
 //   on the ground: trails (sim.scentAt), which trailsAround lists for the mind to follow,
 //   as faint as the critter's nose can still smell (trailMinStrength). A critter's trail
 //   tells who laid it, and (as scent marks do) its sex, whether grown and whether paired.
+// NEAR (perceive): a critter perceives only creatures within detectTiles (its farthest
+// sense but for howls), found in a coarse grid (NEARBY), and those howling wherever they
+// are.
 // TOUCH: a mother feels which of her young is suckling from her (nursingOnMe), and
 // perceives it by "touch" if by nothing else.
 // The player sees what the player's wolf sees while the camera follows it (animat.js,
@@ -230,7 +235,7 @@ function seesNow(a, b) {
   const last = mine && mine.get(b.uid);
   const kept = last !== undefined && sim.now - last <= keepSightS;
   if (last !== undefined && !kept) mine.delete(b.uid);
-  if (!inView(a, dx, dy) || !kept && !inSight(dx, dy, sightShare(a))) return false;
+  if (!inView(a, dx, dy) || (kept ? dx * dx + dy * dy > detect2 : !inSight(dx, dy, sightShare(a)))) return false;
   if (!canSee(a, b)) return false;
   if (!mine) lastSeen.set(a, mine = new Map());
   mine.set(b.uid, sim.now);
@@ -261,10 +266,19 @@ const hearingRangeTiles = {
   },
 };
 const swimHeardTiles = [16, 44];
-// HOWLS (sim.js: HOWLING): a wolf howling is heard this far, by day and by night (wolves
-// hear a howl some 6 miles off in forest, 10 on open tundra: International Wolf Center;
-// taken as by day and by night): it tells the howler's signal (o.signal).
-const howlHeardTiles = [10000, 16000];
+// HOWLS (sim.js: HOWLING): a wolf howling is heard this far, by day and by night: howls
+// were identified some 3 km off by recorders (Suter et al. 2017, Bioacoustics), and are
+// heard over as much as 130 km2 (some 6.4 km round) when the air is still (as at night);
+// low and long, a howl loses far less on its way than a footfall (admin/hearing.md).
+const howlHeardTiles = [3000, 6400];
+// BARKS (sim.js: BARKING): a wolf's soft bark, its signal (o.signal) to those near: about
+// 70 dBA at 1 m (wolves bark softer than dogs, whose barks reach 80-100 dB; a soft bark
+// some 20 dB under), heard as any sound is (admin/hearing.md: by day to 68 m, by night 141,
+// held to detectTiles' 123 so that barks are found in the grid: NEARBY). A pup's whimper
+// some 10 dB softer (estimate): by day to 28 m, by night 69.
+const barkHeardTiles = [68, 123];
+const whimperHeardTiles = [28, 69];
+const signalHeardTiles = signal => signal && signal.kind === "whimper" ? whimperHeardTiles : barkHeardTiles;
 
 // The range now (by daylight) of [by day, by night].
 const nowHeard = ([day, night]) => night + (day - night) * sim.clock.light;
@@ -291,6 +305,11 @@ function hearingRange(b) {
   }
   return r;
 }
+
+// The farthest any sense reaches but for howls (heard farther, and perceived wherever they
+// are): a deer galloping on stone at night, heard loudestTiles off (a bark by night as far).
+const detectTiles = Math.max(sightRadiusTiles, loudestTiles, barkHeardTiles[1]);
+const detect2 = detectTiles * detectTiles;
 
 // SMELL
 // How near a critter smells another creature or a carcass, in tiles (estimate).
@@ -339,7 +358,7 @@ function trailsAround(a, species) {
 // dead included), by the most telling sense:
 //   { uid, species, alive, gx, gy, vx, vy, swimming, meat, leg, by, littermate, signal,
 //     isMale, infant, grown, walks, eats, carrying, mateUid, inHeat }   (these last by sight only)
-//   signal:  by sight or hearing, the last signal it howled, { kind, tick } (HOWLS)
+//   signal:  barking, by sight or hearing, the signal it barks, { kind, tick } (BARKS)
 //   leg:     for a carcass seen or smelled, whether a leg is still on it with meat to carry off
 //   littermate: true for one born with it to its mother, by any sense (its scent tells)
 //   by:      "sight", "hearing" or "smell"
@@ -349,45 +368,91 @@ function trailsAround(a, species) {
 function perceive(a) {
   const out = [];
   const hears = use.hearing && sim.can(a, "hear"), smells = use.smell;
-  for (const list of [sim.allCritters, sim.allCorpses]) {
-    for (const b of list) {
-      if (b === a) continue;
-      const dx = b.gx - a.gx, dy = b.gy - a.gy, alive = sim.isLiveCritter(b);
-      let by = null;
-      if (seesNow(a, b)) by = "sight";
-      else {
-        // the cheap tests first: distance, then what it costs to find out more
-        const d2 = dx * dx + dy * dy;
-        if (hears && b.pose === "howl" && d2 <= nowHeard(howlHeardTiles) ** 2) by = "hearing";
-        else if (hears && b.speed > 0 && d2 <= loudestTiles * loudestTiles) {
-          const heard = hearingRange(b);
-          if (heard && d2 <= heard * heard) by = "hearing";
-        }
-        if (!by && smells && (alive || b.carcass) && d2 <= sniffTiles * sniffTiles) by = "smell";
+  const near = nearby(a), all = grid.all;
+  for (let n = 0; n < near.length; n++) {
+    const b = all[near[n]];
+    if (b === a) continue;
+    const dx = b.gx - a.gx, dy = b.gy - a.gy, d2 = dx * dx + dy * dy;
+    if (d2 > detect2 && b.pose !== "howl") continue; // (beyond every sense but howls)
+    const barking = sim.tickCount < b.barkUntil;
+    const alive = sim.isLiveCritter(b);
+    let by = null;
+    if (seesNow(a, b)) by = "sight";
+    else {
+      // the cheap tests first: distance, then what it costs to find out more
+      if (hears && (b.pose === "howl" && d2 <= nowHeard(howlHeardTiles) ** 2 || barking && d2 <= nowHeard(signalHeardTiles(b.signal)) ** 2)) by = "hearing";
+      else if (hears && b.speed > 0 && d2 <= loudestTiles * loudestTiles) {
+        const heard = hearingRange(b);
+        if (heard && d2 <= heard * heard) by = "hearing";
       }
-      const suckling = b.nursingOn === a.uid; // touching it
-      if (!by && suckling) by = "touch";
-      if (!by) continue;
-      const speed = by !== "smell" && b.speed || 0;
-      const o = {
-        uid: b.uid, species: b.species, alive, gx: b.gx, gy: b.gy,
-        vx: speed ? b.hx * speed : 0, vy: speed ? b.hy * speed : 0,
-        swimming: by !== "smell" ? b.pose === "swim" : undefined,
-        meat: b.carcass ? sim.carcassMeatKg(b) / b.carcassFullKg : undefined, by,
-      };
-      if (b.carcass && (by === "sight" || by === "smell")) o.leg = !!sim.legToTake(b); // (a leg to carry off on it: CARRYING)
-      if (suckling) o.nursingOnMe = true;
-      if (b.signal && (by === "sight" || by === "hearing")) o.signal = b.signal; // (its last howl: HOWLS)
-      if (a.parentUids.length && b.parentUids && b.parentUids[0] === a.parentUids[0] && b.birthTime === a.birthTime) o.littermate = true;
-      if (by === "sight") {
-        o.isMale = b.isMale; o.infant = sim.isInfant(b); o.grown = sim.isGrown(b); o.walks = sim.can(b, "walk");
-        o.eats = sim.can(b, "eat"); o.carrying = !!b.carrying;
-        o.mateUid = b.mateUid; o.inHeat = alive && sim.inHeat(b);
-      }
-      out.push(o);
+      if (!by && smells && (alive || b.carcass) && d2 <= sniffTiles * sniffTiles) by = "smell";
     }
+    const suckling = b.nursingOn === a.uid; // touching it
+    if (!by && suckling) by = "touch";
+    if (!by) continue;
+    const speed = by !== "smell" && b.speed || 0;
+    const o = {
+      uid: b.uid, species: b.species, alive, gx: b.gx, gy: b.gy,
+      vx: speed ? b.hx * speed : 0, vy: speed ? b.hy * speed : 0,
+      swimming: by !== "smell" ? b.pose === "swim" : undefined,
+      meat: b.carcass ? sim.carcassMeatKg(b) / b.carcassFullKg : undefined, by,
+    };
+    if (b.carcass && (by === "sight" || by === "smell")) o.leg = !!sim.legToTake(b); // (a leg to carry off on it: CARRYING)
+    if (suckling) o.nursingOnMe = true;
+    if (sim.tickCount < b.barkUntil && (by === "sight" || by === "hearing")) o.signal = b.signal; // (barking now: BARKS)
+    if (a.parentUids.length && b.parentUids && b.parentUids[0] === a.parentUids[0] && b.birthTime === a.birthTime) o.littermate = true;
+    if (by === "sight") {
+      o.isMale = b.isMale; o.infant = sim.isInfant(b); o.grown = sim.isGrown(b); o.walks = sim.can(b, "walk");
+      o.eats = sim.can(b, "eat"); o.carrying = !!b.carrying;
+      o.mateUid = b.mateUid; o.inHeat = alive && sim.inHeat(b);
+    }
+    out.push(o);
   }
   return out;
+}
+
+// NEARBY: every creature (critters, then corpses) in a square grid, cellTiles a side,
+// built afresh at the first call in a tick (positions only change between ticks; a test
+// that moves creatures within one calls regrid). Cells 2 apart along either axis hold
+// creatures more than cellTiles (at least detectTiles) apart, so a critter's candidates
+// are in the 3 x 3 cells about its own.
+const cellTiles = Math.ceil(detectTiles);
+if (!Number.isInteger(cellTiles) || cellTiles < 10) alert("senses: cellTiles must be an integer of 10 or more");
+const cellKey = (i, j) => i * 65536 + j; // (|j| under 32768 cells: unique)
+const grid = { tick: -1, all: [], cells: new Map(), howlers: [] };
+function regrid() { grid.tick = -1; }
+function buildGrid() {
+  const all = grid.all, cells = grid.cells, howlers = grid.howlers;
+  all.length = 0; howlers.length = 0; cells.clear();
+  for (const list of [sim.allCritters, sim.allCorpses]) for (const b of list) all.push(b);
+  for (let n = 0; n < all.length; n++) {
+    const b = all[n], k = cellKey(Math.floor(b.gx / cellTiles), Math.floor(b.gy / cellTiles));
+    const cell = cells.get(k);
+    if (cell) cell.push(n); else cells.set(k, [n]);
+    if (b.pose === "howl") howlers.push(n);
+  }
+  grid.tick = sim.tickCount;
+}
+// Indices into grid.all of the creatures that may be within detectTiles of critter a (a
+// itself among them), and of those howling, in grid.all's order.
+let nearBuf = new Int32Array(256);
+function nearby(a) {
+  if (grid.tick !== sim.tickCount) buildGrid();
+  const ci = Math.floor(a.gx / cellTiles), cj = Math.floor(a.gy / cellTiles), cells = grid.cells;
+  let m = 0;
+  const add = n => {
+    if (m === nearBuf.length) { const b = new Int32Array(m * 2); b.set(nearBuf); nearBuf = b; }
+    nearBuf[m++] = n;
+  };
+  for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) {
+    const cell = cells.get(cellKey(ci + di, cj + dj));
+    if (cell) for (let k = 0; k < cell.length; k++) add(cell[k]);
+  }
+  for (const n of grid.howlers) {
+    const b = grid.all[n], di = Math.floor(b.gx / cellTiles) - ci, dj = Math.floor(b.gy / cellTiles) - cj;
+    if (di < -1 || di > 1 || dj < -1 || dj > 1) add(n);
+  }
+  return nearBuf.subarray(0, m).sort();
 }
 
 // The tiles with plant food on them (grass, undergrowth: sim.plantFoodAt) whose centers
@@ -436,7 +501,7 @@ function attach(theSim) {
 
 return {
   attach, perceive, coverAt, plantsAround, shoresAround, trailsAround, inSight, inView, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
-  sightRadiusTiles, fovDegBySpecies, keepSightS, trailMinStrength, hearingRangeTiles, hearingRangeOf, forgetSight, eyeLevelsBySpecies, sniffTiles,
+  sightRadiusTiles, detectTiles, cellTiles, regrid, nearbyCreatures: a => Array.from(nearby(a), n => grid.all[n]), fovDegBySpecies, keepSightS, trailMinStrength, hearingRangeTiles, hearingRangeOf, forgetSight, eyeLevelsBySpecies, sniffTiles, barkHeardTiles, whimperHeardTiles, nowHeard,
 };
 
 })();

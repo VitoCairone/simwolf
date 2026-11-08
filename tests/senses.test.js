@@ -24,8 +24,9 @@ async function main(browser, r) {
   await p.evaluate(() => {
     window.home = [sim.pcWolf.gx, sim.pcWolf.gy];
     window.S = sim.internals;
-    window.far = c => { c.gx = c.nextGX = c.gy = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c); };
-    window.put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; S.setCritterIdle(c); };
+    // (moved within a tick: senses' grid is built afresh: NEARBY)
+    window.far = c => { c.gx = c.nextGX = c.gy = c.nextGY = -50 - c.uid * 3; c.speed = 0; mind.ignore(c); senses.regrid(); };
+    window.put = (c, x, y) => { c.gx = c.nextGX = x; c.gy = c.nextGY = y; c.speed = 0; c.stunnedUntil = 0; S.setCritterIdle(c); senses.regrid(); };
     window.wolfA = sim.allCritters.find(c => c.species === "wolf" && c !== sim.pcWolf && sim.isGrown(c));
     window.deerA = sim.allCritters.find(c => c.species === "deer" && sim.isGrown(c));
     window.deerB = sim.allCritters.find(c => c.species === "deer" && sim.isGrown(c) && c !== deerA);
@@ -111,6 +112,24 @@ async function main(browser, r) {
   r.check(!keep.none && keep.at4.every(x => x === "sight") && keep.at9.every(x => x === "sight") && keep.turned === null && keep.at16.every(x => x === null),
     `once seen, three deer far ahead of it, beyond its sight circle (${keep.far} tiles), are still seen in line of sight 4 s on (${keep.at4}), and ` +
     `5 s after that (${keep.at9}), each time afresh; not behind it (${keep.turned}); 7 s after it last saw them, no more (${keep.at16})`);
+
+  // KEEPING SIGHT, out to detectTiles only (line of sight aside)
+  const capped = await p.evaluate(() => {
+    senses.use.hearing = senses.use.smell = senses.use.lineOfSight = false;
+    const [hx, hy] = home, D = senses.detectTiles;
+    put(wolfA, hx, hy); wolfA.hx = 1; wolfA.hy = 0;
+    put(deerA, hx + 6, hy);
+    const near = by(wolfA, deerA);
+    put(deerA, hx + D - 5, hy);
+    const within = by(wolfA, deerA);
+    put(deerA, hx + D + 5, hy);
+    const beyond = by(wolfA, deerA);
+    far(deerA); far(wolfA);
+    senses.use.hearing = senses.use.smell = senses.use.lineOfSight = true;
+    return { near, within, beyond, D: Math.round(D) };
+  });
+  r.check(capped.near === "sight" && capped.within === "sight" && capped.beyond === null,
+    `a deer seen 6 tiles off is still seen ${capped.D - 5} tiles off (${capped.within}), not ${capped.D + 5} (${capped.beyond}): kept sight reaches detectTiles (${capped.D}) only`);
 
   // HEARING
   const hearing = await p.evaluate(() => {
@@ -232,6 +251,33 @@ async function main(browser, r) {
   });
   r.check(memory.seenBy === "sight" && memory.smelledBy === "smell" && memory.sexKept && memory.grownKept,
     `a deer seen, then only smelled, is remembered with what sight told of it (${JSON.stringify(memory)})`);
+
+  // NEARBY: the grid misses no creature within detectTiles, and finds howlers anywhere
+  const grid = await p.evaluate(() => {
+    const [hx, hy] = home, D2 = senses.detectTiles ** 2, all = sim.allCritters.concat(sim.allCorpses);
+    let rnd = 12345;
+    const r01 = () => (rnd = (rnd * 1103515245 + 12345) % 2147483648) / 2147483648;
+    all.forEach(c => { if (sim.isLiveCritter(c)) mind.ignore(c); c.gx = c.nextGX = hx - 350 + 700 * r01(); c.gy = c.nextGY = hy - 350 + 700 * r01(); c.speed = 0; });
+    const caller = sim.allCritters.find(c => c.species === "wolf" && sim.isGrown(c));
+    caller.gx = caller.nextGX = hx + 2000; caller.gy = caller.nextGY = hy;
+    caller.pose = "howl";
+    senses.regrid();
+    let missed = 0, candidates = 0, within = 0, callerMissed = 0;
+    for (const a of all) {
+      const near = new Set(senses.nearbyCreatures(a));
+      candidates += near.size;
+      for (const b of all) {
+        if (b === a || (b.gx - a.gx) ** 2 + (b.gy - a.gy) ** 2 > D2) continue;
+        within++;
+        if (!near.has(b)) missed++;
+      }
+      if (a !== caller && !near.has(caller)) callerMissed++;
+    }
+    return { n: all.length, missed, callerMissed, perCritter: +(candidates / all.length).toFixed(1), within: +(within / all.length).toFixed(1), cell: senses.cellTiles };
+  });
+  r.check(grid.missed === 0 && grid.callerMissed === 0,
+    `${grid.n} creatures scattered over 700 tiles square, cells ${grid.cell} tiles: none within detectTiles of another missed (${grid.missed}), a wolf howling 2000 tiles off found by all (${grid.callerMissed} missed); ` +
+    `${grid.perCritter} candidates each for ${grid.within} within reach`);
 
   r.noProblems(p);
   await p.close();

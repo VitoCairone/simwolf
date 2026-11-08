@@ -18,10 +18,10 @@
 const path = require("path");
 const vm = require("vm");
 const fs = require("fs");
-const { ROOT, runStandalone } = require("./helpers");
+const { ROOT, testStart, runStandalone } = require("./helpers");
 
 function load() {
-  const context = vm.createContext({
+  const context = vm.createContext({ simStart: testStart,
     console: { log() {}, info() {}, warn() {} }, Math, Date, Map, Set, Array, Object, Number, String, JSON,
     alert: msg => { throw new Error("alert: " + msg); }, setTimeout, clearTimeout,
   });

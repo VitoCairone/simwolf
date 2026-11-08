@@ -11,13 +11,11 @@ const fs = require("fs");
 const { ROOT, runStandalone } = require("./helpers");
 
 async function main(browser, r) {
-  const context = vm.createContext({
+  const context = vm.createContext({ simStart: { wolves: 50, deer: 3, deerSideTiles: 256 },
     console: { log() {}, info() {}, warn() {} }, Math, Date, Map, Set, Array, Object, Number, String, JSON,
     alert: msg => { throw new Error("alert: " + msg); }, setTimeout, clearTimeout,
   });
   let src = fs.readFileSync(path.join(ROOT, "sim.js"), "utf8");
-  r.check(src.includes("const nWolves = 10;") && src.includes("const nDeer = 50;"), "the start's numbers are where this test changes them");
-  src = src.replace("const nWolves = 10;", "const nWolves = 50;").replace("const nDeer = 50;", "const nDeer = 3;");
   vm.runInContext(fs.readFileSync(path.join(ROOT, "hydrology.js"), "utf8"), context, { filename: "hydrology.js" });
   vm.runInContext(src, context, { filename: "sim.js" });
   for (const f of ["senses.js", "mind.js"]) vm.runInContext(fs.readFileSync(path.join(ROOT, f), "utf8"), context, { filename: f });

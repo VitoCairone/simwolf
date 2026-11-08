@@ -11,6 +11,10 @@ const ROOT = path.resolve(__dirname, "..");
 const PAGE_URL = "file://" + path.join(ROOT, "index.html");
 const OUTPUT_DIR = path.join(__dirname, "output");
 const startTicks = 12; // play before a suite takes over (see openGame)
+// The start in tests (sim.js startSetup): fewer critters than the game's, the deer in the
+// wolves' square, to keep the suites fast; a suite that needs the game's own passes
+// fullStart (openGame) or leaves simStart out of its context.
+const testStart = { wolves: 10, deer: 50, deerSideTiles: 256 };
 
 // Set CHROMIUM_PATH to use a specific Chromium build; otherwise Playwright's own.
 async function launchBrowser() {
@@ -25,11 +29,12 @@ async function launchBrowser() {
 // Unless dayNight is set, the clock is held at noon (see DAY AND NIGHT in sim.js), so
 // other tests aren't upset by the time of day; unless thirst is set, critters are kept
 // full of water (holdWater: see WATER in sim.js), so they don't go looking for it.
-async function openGame(browser, { viewport, initScript, initArg, dayNight = false, thirst = false } = {}) {
+async function openGame(browser, { viewport, initScript, initArg, dayNight = false, thirst = false, fullStart = false } = {}) {
   const page = await browser.newPage(viewport ? { viewport } : {});
   page.problems = [];
   page.on("pageerror", e => page.problems.push("pageerror: " + e.message));
   page.on("dialog", d => { page.problems.push("alert: " + d.message()); d.dismiss(); });
+  if (!fullStart) await page.addInitScript(c => { window.simStart = c; }, testStart);
   if (initScript) await page.addInitScript(initScript, initArg);
   // the game starts paused (before the page's own load handler starts it), runs
   // startTicks, and then runs on: so every suite starts from as much play, however fast
@@ -129,4 +134,4 @@ function ensureOutputDir(sub = "") {
   return dir;
 }
 
-module.exports = { ROOT, PAGE_URL, launchBrowser, openGame, moveToOpenLand, makeStags, makeReporter, runStandalone, ensureOutputDir };
+module.exports = { ROOT, testStart, PAGE_URL, launchBrowser, openGame, moveToOpenLand, makeStags, makeReporter, runStandalone, ensureOutputDir };

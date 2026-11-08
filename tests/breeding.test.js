@@ -347,7 +347,7 @@ async function main(browser, r) {
     runUntil(() => {
       if (pup.nursingOn === f.uid) { suckled++; if (f.speed > 0) motherMoved++; }
       return pup.food >= 0.99;
-    }, 20);
+    }, 80);
     nursing.mind = { suckledS: suckled * sim.tempo, motherMoved, food: pup.food, mode: mind.stateOf(pup).mode };
     mind.ignore(pup); mind.ignore(f);
     // THE WOMB, filling from her body; at the birth, the newborns

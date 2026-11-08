@@ -5,26 +5,27 @@
 //    short of the last young stage can't; put down, the leg is a morsel of its own with the
 //    leg's meat, which a wolf eats; a wolf eating with a leg in its mouth eats the leg; no
 //    biomass is lost or made tearing one off
-//  - HOWLING: a wolf howls a signal, heard 1,000 tiles off, telling it
+//  - BARKING and HOWLING: a wolf's soft bark tells its signal to one 50 tiles off, but isn't
+//    heard 200 off; a howl (the artist's frames, once) is heard 2,500 tiles off
 //  - SCENT: a young wolf never marks over its parent's scent; a young wolf far from its
 //    parents follows a parent's trail back to it
 //  - DENS: a paired, pregnant female picks a den better hidden than where she stands, and
 //    keeps to it; her mate learns it seeing her there
-//  - SUPPORT FEEDING and FAMILY ROLES: with newborns at the den, the hungry male howls
+//  - SUPPORT FEEDING and FAMILY ROLES: with newborns at the den, the hungry male barks
 //    "hunt" and goes to a carcass; the female, hungry once he has gone, having heard that,
 //    stays with the litter;
 //    the male eats, tears off a leg, brings it to her, puts it down beside her, and she
-//    eats it; then, back home, he howls "stay"
+//    eats it; then, back home, he barks "stay"
 //  - the view: a wolf carrying a leg is drawn with the leg (more pixels than without)
 // Runs sim.js, senses.js and mind.js in Node (no browser), then the game in the browser.
 
 const path = require("path");
 const vm = require("vm");
 const fs = require("fs");
-const { ROOT, runStandalone, openGame, moveToOpenLand } = require("./helpers");
+const { ROOT, testStart, runStandalone, openGame, moveToOpenLand } = require("./helpers");
 
 function load() {
-  const context = vm.createContext({
+  const context = vm.createContext({ simStart: testStart,
     console: { log() {}, info() {}, warn() {}, error() {} }, Math, Date, Map, Set, Array, Object, Number, String, JSON,
     alert: msg => { throw new Error("alert: " + msg); }, setTimeout, clearTimeout,
   });
@@ -111,15 +112,20 @@ async function main(browser, r) {
       [w, w2].forEach(away); d.gx = d.nextGX = d.gy = d.nextGY = -600; m.gx = m.nextGX = m.gy = m.nextGY = -601;
     }
 
-    // HOWLING: heard 1,000 tiles off
+    // BARKING: heard 50 tiles off, not 200; HOWLING: heard 2,500 off
     {
-      const w = grown("wolf", true), w2 = grown("wolf", false);
-      put(w, 0.5, 0.5); put(w2, 0.5, 0.5); w2.gx = w2.nextGX = w.gx + 1000;
-      sim.setIntent(w, { gait: "howl", signal: "hunt" });
-      const poses = new Set(); let heard = null;
-      for (let n = 0; n < 2 / sim.tempo; n++) { S.tick(); poses.add(w.pose); heard = heard || senses.perceive(w2).find(o => o.uid === w.uid) || null; }
-      out.howl = { poses: [...poses], signal: w.signal?.kind, heardBy: heard && heard.by, heardSignal: heard && heard.signal?.kind };
-      sim.setIntent(w, null); [w, w2].forEach(away);
+      const w = grown("wolf", true), near = grown("wolf", false), far = grown("wolf", false, 2);
+      put(w, 0.5, 0.5); put(near, 0.5, 0.5); put(far, 0.5, 0.5); near.gx = near.nextGX = w.gx + 50; far.gx = far.nextGX = w.gx + 200;
+      sim.setIntent(w, { gait: "idle", bark: "hunt" });
+      let n = null, f = null;
+      for (let k = 0; k < 0.5 / sim.tempo; k++) { S.tick(); n = n || senses.perceive(near).find(o => o.uid === w.uid) || null; f = f || senses.perceive(far).find(o => o.uid === w.uid) || null; }
+      out.bark = { signal: w.signal?.kind, nearBy: n && n.by, nearSignal: n && n.signal?.kind, far: !!f, pose: w.pose };
+      far.gx = far.nextGX = w.gx + 2500;
+      sim.setIntent(w, { gait: "howl" });
+      const poses = new Set(); let heard = null, ticks = 0;
+      for (let k = 0; k < 3 / sim.tempo; k++) { S.tick(); poses.add(w.pose); if (w.pose === "howl") ticks++; heard = heard || senses.perceive(far).find(o => o.uid === w.uid) || null; }
+      out.howl = { poses: [...poses], s: +(ticks * sim.tempo).toFixed(2), heardBy: heard && heard.by, signal: heard && heard.signal };
+      sim.setIntent(w, null); [w, near, far].forEach(away);
     }
 
     // SCENT: a young wolf never marks over its parent's scent; lost, it follows a parent's trail
@@ -154,6 +160,7 @@ async function main(browser, r) {
       S.pair(he, she); put(she, 0.5, 0.5); put(he, 3.5, 0.5); S.setFood(he, 1); S.setFood(she, 1);
       she.lastBredAt = -Infinity; S.conceive(she, he); she.pregnancy.dueAt = sim.now + 20;
       for (const a of [he, she]) { mind.forget(a); mind.ignore(a, false); }
+      mind.knowShore(she, i0 + 60, j0); // (fresh water she has seen, in reach of a den)
       const stand = senses.coverAt(she.gx, she.gy);
       let learnt = null;
       for (let n = 0; n < 15 / sim.tempo; n++) { S.tick(); if (learnt === null && mind.stateOf(he).den) learnt = +(n * sim.tempo).toFixed(1); }
@@ -168,14 +175,14 @@ async function main(browser, r) {
       kill(d, 25.5, 0.5);
       // (she gets hungry once he has gone: S.setFood below)
       put(he, 3.5, 0.5); he.hx = 1; he.hy = 0; S.setFood(he, 0.6); S.setFood(she, 0.95);
-      he.signal = she.signal = null; mind.forget(he);
+      he.signal = she.signal = he.role = she.role = null; mind.forget(he);
       const log = { heHowls: [], sheModes: new Set(), dropAt: null, sheAte: false, stay: null };
       let n = 0;
       const pups = she.youngUids.map(uid => S.critterByUid.get(uid)), old = new Set(sim.allCorpses.filter(c => c.morsel));
       let farthest = 0;
       for (; n < 150 / sim.tempo; n++) {
         S.tick();
-        if (he.pose === "howl" && !log.heHowls.includes(he.signal.kind)) { log.heHowls.push(he.signal.kind); if (he.signal.kind === "hunt") S.setFood(she, 0.8); }
+        if (sim.tickCount < he.barkUntil && log.heHowls.at(-1) !== he.signal.kind) { log.heHowls.push(he.signal.kind); if (he.signal.kind === "hunt") S.setFood(she, 0.8); }
         const ms = mind.stateOf(she).mode; log.sheModes.add(ms); (log.heModes = log.heModes || new Set()).add(mind.stateOf(he).mode + (he.carrying ? "+leg" : ""));
         farthest = Math.max(farthest, Math.hypot(she.gx - den[0], she.gy - den[1]));
         if (log.dropAt === null && sim.allCorpses.some(c => c.morsel && !old.has(c))) {
@@ -192,7 +199,8 @@ async function main(browser, r) {
     return out;
   })()`, c);
 
-  const { carry, drop, mouth, howl, scent, lost, den, feeding } = res;
+  const { carry, drop, mouth, bark, howl, scent, lost, den, feeding } = res;
+  const sim_howlS = vm.runInContext("sim.howlS", c);
   r.check(carry.first.s >= 1.9 && carry.first.s <= 2.1 && carry.first.piece === carry.first.most && carry.first.kg > 1 && carry.first.left === 0 && carry.first.torn
     && Math.abs(carry.first.biomass) < 1e-6,
     `a grown wolf at a carcass tears off its meatiest leg (${carry.first.piece}, ${carry.first.kg.toFixed(1)} kg) in ${carry.first.s} s and carries it; the carcass has none of that leg left; ` +
@@ -204,8 +212,10 @@ async function main(browser, r) {
     `a wolf eating with a leg in its mouth eats the leg (${mouth.legEaten.toFixed(3)} kg), not the carcass beside it (${mouth.carcassEaten})`);
   r.check(res.pup.can === (res.pup.stage === 0 || res.pup.stage === 4) && (res.pup.stage === 4 || !res.pup.took),
     `a young wolf can carry a leg only in the last young stage (stage ${res.pup.stage}: can ${res.pup.can}, took ${res.pup.took})`);
-  r.check(howl.poses.includes("howl") && howl.signal === "hunt" && howl.heardBy === "hearing" && howl.heardSignal === "hunt",
-    `a wolf howls "hunt" (${howl.poses}), and one 1,000 tiles off hears it (${howl.heardBy}: ${howl.heardSignal})`);
+  r.check(bark.signal === "hunt" && bark.nearBy === "hearing" && bark.nearSignal === "hunt" && !bark.far && bark.pose === "idle",
+    `a wolf barks "hunt" softly (standing as it was: ${bark.pose}); one 50 tiles off hears it (${bark.nearBy}: ${bark.nearSignal}), one 200 off doesn't (${bark.far})`);
+  r.check(howl.poses.includes("howl") && Math.abs(howl.s - sim_howlS) < 0.02 && howl.heardBy === "hearing" && !howl.signal,
+    `a wolf howls once (${howl.s} s, the artist's ${sim_howlS}), heard 2,500 tiles off (${howl.heardBy}), telling no signal`);
   r.check(scent.hers >= 15 && scent.mine === 0,
     `a young wolf walking its mother's trail never marks over her scent (${scent.hers} of 19 tiles hers, ${scent.mine} its own)`);
   r.check(lost.d <= 10 && lost.modes.includes("family"),
@@ -214,9 +224,9 @@ async function main(browser, r) {
     `a paired, pregnant female picks a den better hidden than where she stood (cover ${den.cover} vs ${den.stand}, at ${JSON.stringify(den.den)}), ` +
     `keeps to it (${den.atDen && den.atDen.toFixed(1)} tiles off, ${den.mode}), and gives birth there (${den.born}); her mate learns it seeing her there (after ${den.learnt} s)`);
   r.check(feeding.howls[0] === "hunt" && feeding.sheModes.includes("brood") && feeding.farthest <= 5 && !feeding.sheModes.includes("prowl") && !feeding.sheModes.includes("track"),
-    `the hungry male howls "hunt" and goes for the carcass (${feeding.howls}); the hungry female stays with the litter (${feeding.farthest} tiles from the den at most; ${feeding.sheModes})`);
+    `the hungry male barks "hunt" and goes for the carcass (${feeding.howls}); the hungry female stays with the litter (${feeding.farthest} tiles from the den at most; ${feeding.sheModes})`);
   r.check(feeding.drop && feeding.drop.fromHer <= 1.5 && feeding.sheAte && feeding.stay !== null,
-    `...he brings her a leg, puts it down beside her (${feeding.drop && feeding.drop.fromHer} tiles off, after ${feeding.drop && feeding.drop.s} s), and she eats it (${feeding.sheAte}); back home he howls "stay" (after ${feeding.stay} s; his modes ${feeding.heModes}, food ${feeding.heFood})`);
+    `...he brings her a leg, puts it down beside her (${feeding.drop && feeding.drop.fromHer} tiles off, after ${feeding.drop && feeding.drop.s} s), and she eats it (${feeding.sheAte}); back home he barks "stay" (after ${feeding.stay} s; his modes ${feeding.heModes}, food ${feeding.heFood})`);
 
   // the view: a wolf carrying a leg is drawn with it
   const p = await openGame(browser, { viewport: { width: 600, height: 400 } });

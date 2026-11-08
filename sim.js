@@ -341,9 +341,13 @@ const REALISTIC = {
 // so a wolf's full meter lasts 20 minutes (and its greatest age some 7.5 days); and
 // exertion (draining and refilling) 10 times as fast, and a deer's swimming twice that.
 // The mating act lasts a few seconds, long enough to see. Thirst is slowed apart: a full
-// water meter lasts 30 minutes with neither food nor water (gameThirstS).
+// water meter lasts 30 minutes with neither food nor water (gameThirstS). An infant's
+// hunger is slowed apart too: its full meter lasts gameInfantHungerSlowdown times as long
+// as scaled (burning that much slower: no biomass is made), but never longer than its
+// species' adult's.
 const gameMetabolismScale = (20 * 60) / realFoodFullS.wolf;
 const gameThirstS = 30 * 60;
+const gameInfantHungerSlowdown = 4;
 const gameExertionSpeedup = 10;
 const gameDayS = 10 * 60;
 const scaledAges = (table, k) => Object.fromEntries(Object.entries(table).map(([sp, caps]) =>
@@ -396,7 +400,9 @@ const GAMIFIED = {
   // TODO: one scale for all of GAMIFIED (this is far from metabolism's).
   dayLengthS: gameDayS,
   eatKgPerS: { wolf: realEatKgPerS.wolf / gameMetabolismScale, deer: realEatKgPerS.deer / gameMetabolismScale },
-  infantFoodFullS: scaledTimes(REALISTIC.infantFoodFullS, gameMetabolismScale),
+  // Scaled, a newborn would starve in some 4 minutes: here in about 17 (chosen for play).
+  infantFoodFullS: Object.fromEntries(Object.entries(REALISTIC.infantFoodFullS).map(([sp, t]) =>
+    [sp, Math.min(t * gameMetabolismScale * gameInfantHungerSlowdown, realFoodFullS[sp] * gameMetabolismScale)])),
   nurseFullS: scaledTimes(REALISTIC.nurseFullS, gameMetabolismScale),
   // Scaled, a wolf would gorge its fill, or an infant suckle its, in under a second: too
   // quick to see (chosen for play).
@@ -1007,13 +1013,16 @@ function isLandTile(i, j) {
 // CRITTERS
 // Each is a plain object. Directions are indices into
 // moveVecByDir, clockwise from grid E.
-const nWolves = 10;
+// The start's numbers, and the side of the deer's start square (THE START). A test may set
+// others (simStart, before this loads), to run faster.
+const startSetup = { wolves: 14, deer: 200, deerSideTiles: 512, ...globalThis.simStart };
+const nWolves = startSetup.wolves;
 const wolves = Array.from({length: nWolves}, () => ({}));
 // THE PLAYER'S WOLF: wolves[0] at first. It lives and dies like any wolf; dying, and then
 // as a corpse, it stays the player's until the next wolf is born: that newborn becomes the
 // player's wolf. Meanwhile the player's intents do nothing.
 let pcWolf = wolves[0];
-const nDeer = 50;
+const nDeer = startSetup.deer;
 const deer = Array.from({length: nDeer}, () => ({}));
 
 const allCritters = [];
@@ -1109,9 +1118,11 @@ function initCritter(a, species, tissues = null) {
   return a;
 }
 
-// THE START: every critter starts on a random land tile's center (allLandTiles) in one
-// square, startTiles a side (startArea: { i0, j0, i1, j1 }, i1 and j1 just past it): the
-// first, spiralling out from the map's center by startSearchStepTiles, that is mostly land
+// THE START: every wolf starts on a random land tile's center (allLandTiles) in one
+// square, startTiles a side (startArea: { i0, j0, i1, j1 }, i1 and j1 just past it), and
+// every deer on a random one in the square deerSideTiles a side (startSetup: twice as
+// wide) about the same center (deerArea, within the map). The start square is the first,
+// spiralling out from the map's center by startSearchStepTiles, that is mostly land
 // (startLandShare of startSamples^2 points in it) with a lake near (at startWaterMin of
 // startSamples^2 points in the square startNearTiles a side about it), for swimming and
 // shores, and fresh water (a lake or river) to drink near the center of each quarter of it
@@ -1125,7 +1136,7 @@ const startFreshStepTiles = 16;
 const startSamples = 16;
 const startLandShare = 0.85;
 const startWaterMin = 3;
-let startArea = null;
+let startArea = null, deerArea = null;
 
 function chooseStartArea() {
   const k = startSamples, c0 = Math.floor(gridWidthN / 2), c1 = Math.floor(gridHeightN / 2);
@@ -1184,13 +1195,26 @@ function chooseStartArea() {
   allLandTiles.length = 0;
   for (let i = startArea.i0; i < startArea.i1; i++) for (let j = startArea.j0; j < startArea.j1; j++)
     if (getTerrainAt(i, j) !== "water" && !isBlockedTile(i, j)) allLandTiles.push([i, j]);
+  const m = (startSetup.deerSideTiles - startTiles) / 2;
+  deerArea = { i0: Math.max(0, startArea.i0 - m), j0: Math.max(0, startArea.j0 - m),
+    i1: Math.min(gridWidthN, startArea.i1 + m), j1: Math.min(gridHeightN, startArea.j1 + m) };
+}
+// A random dry, unblocked tile in the deer's start square: [i, j]. (Drawn till one is: the
+// start square within it is mostly land.)
+function randomDeerLandTile() {
+  const A = deerArea;
+  for (let n = 0; n < 10000; n++) {
+    const i = A.i0 + Math.floor(Math.random() * (A.i1 - A.i0)), j = A.j0 + Math.floor(Math.random() * (A.j1 - A.j0));
+    if (getTerrainAt(i, j) !== "water" && !isBlockedTile(i, j)) return [i, j];
+  }
+  return alert("No land found in the deer's start square");
 }
 
-// On a random land tile's center in the start square, facing one of the 4 diagonals,
-// standing.
+// On a random land tile's center in its species' start square, facing one of the 4
+// diagonals, standing.
 function randomlyPlaceCritter(a) {
   if (!startArea) chooseStartArea();
-  const [randLandX, randLandY] = sample(allLandTiles);
+  const [randLandX, randLandY] = a.species === "deer" ? randomDeerLandTile() : sample(allLandTiles);
   a.gx = randLandX + 0.5;
   a.gy = randLandY + 0.5;
   a.currentDirection = Math.floor(Math.random() * 4) * 2;
@@ -2503,7 +2527,8 @@ function giveBirth(f) {
 //   { gait: "mate", with } stand still, ready to mate with critter uid `with` (see BREEDING)
 //   { gait: "take" }       a wolf: stand still and tear a leg off the carcass in reach (CARRYING)
 //   { gait: "drop" }       a wolf: stand still, putting down the leg it carries (CARRYING)
-//   { gait: "howl", signal } a wolf: stand still and howl `signal` (HOWLING)
+//   { gait: "howl" }       a wolf: stand still and howl (HOWLING)
+//   any of these with bark: kind   a wolf: and give a soft bark, signal `kind` (BARKING)
 //   { dx, dy, gait }       move along grid vector (dx, dy), any length, at walk, stalk, trot or
 //                          gallop, or the best gait wind and stamina allow (a newborn
 //                          too young to walk crawls: CRAWLING)
@@ -2541,7 +2566,7 @@ function prepareIntent(intent, prev) {
 }
 
 function setIntent(a, intent) {
-  if (intent) intents.set(a, prepareIntent(intent, intents.get(a)));
+  if (intent) { intents.set(a, prepareIntent(intent, intents.get(a))); if (intent.bark) startBark(a, intent.bark); }
   else intents.delete(a);
 }
 
@@ -2561,7 +2586,7 @@ function applyIntent(a, intent) {
   if (intent.gait === "drop") dropLeg(a);
   if (standingGaits.has(intent.gait)) setCritterIdle(a);
   else setCritterHeading(a, intent.hx, intent.hy, intent.gait, intent.dir);
-  if (intent.gait === "howl") startHowl(a, intent.signal);
+  if (intent.gait === "howl") startHowl(a);
 }
 
 function applyIntents() {
@@ -2582,18 +2607,31 @@ function applyIntents() {
   }
 }
 
-// HOWLING: a wolf standing still howls (pose "howl", for howlS), a signal to the others
-// (a.signal: { kind, tick }, kind "hunt": it is going hunting; "stay": it is staying put):
-// heard far (senses.js: HOWLS). Asked to howl again while howling, or the same signal
-// within howlAgainS, it doesn't (it stands).
+// HOWLING: a wolf standing still howls (pose "howl", for howlS, then idle again), heard
+// far (senses.js: HOWLS). Asked to howl while howling, or again within howlAgainS, it
+// doesn't (it stands). (The minds don't howl yet.)
 const howlS = 1.35;       // the artist's howl, once (images_raw/5V5aC4.gif; animat.js checks it)
 const howlAgainS = 5;
-function startHowl(a, kind) {
+function startHowl(a) {
   if (a.species !== "wolf" || a.pose === "howl" || isInWater(a) || a.speed > 0) return;
-  if (a.signal && a.signal.kind === kind && g_tick - a.signal.tick < howlAgainS / tempo) return;
-  a.signal = { kind, tick: g_tick };
+  if (a.howlUntil !== undefined && g_tick - a.howlUntil < howlAgainS / tempo) return;
   a.howlUntil = g_tick + Math.round(howlS / tempo);
   setPose(a, "howl");
+}
+
+// BARKING: a wolf gives a soft bark (an intent's bark: whatever else it does), a signal to
+// those near (a.signal: { kind, tick }), barkS long, heard like any other sound (senses.js
+// BARKS). Kinds: "hunt" (it is going hunting) and "stay" (it is staying put), its role,
+// kept in a.role too; "come" (come to me: a call); and "whimper" (a hungry infant's,
+// quieter). The same signal again within barkAgainS, it doesn't bark. TODO: no bark frames yet (it
+// is heard, not seen).
+const barkS = 0.3, barkAgainS = 5;
+function startBark(a, kind) {
+  if (a.species !== "wolf" || !isLiveCritter(a)) return;
+  if (a.signal && a.signal.kind === kind && g_tick - a.signal.tick < barkAgainS / tempo) return;
+  a.signal = { kind, tick: g_tick };
+  if (kind === "hunt" || kind === "stay") a.role = a.signal;
+  a.barkUntil = g_tick + Math.round(barkS / tempo);
 }
 
 function stun(a) {
@@ -3363,8 +3401,8 @@ function start({ consoleOnly = false } = {}) {
 // eating, carcass, carcassFullKg, uid, blockedTick, stunnedUntil, isMale, birthTime,
 // deathTime, weightKg, adultKg, frameKg, boxRad, mateUid, matingWith, parentUids,
 // youngUids, pregnancy, nursingOn, bumpedTick, bumpedBy, bumpedDx, bumpedDy, bumpedX,
-// bumpedY, touchedTick, touchedBy, touchedX, touchedY, carrying, morsel, signal,
-// howlUntil)
+// bumpedY, touchedTick, touchedBy, touchedX, touchedY, carrying, morsel, signal, role,
+// howlUntil, barkUntil)
 // but change the world only through these functions.
 return {
   // lifecycle and time
@@ -3408,6 +3446,7 @@ return {
   can: _can, isGrown, isInfant, isFertile, inHeat, mateReachTiles, youngStage, youngScales,
   adultBoxRad: critterBoxRad, nurseContactTiles, nurseMotherMinFood,
   get nurseFullS() { return SPEEDS.nurseFullS; },
+  get infantFoodFullS() { return SPEEDS.infantFoodFullS; },
   mateActSBySpecies: Object.fromEntries(Object.entries(SPEEDS.breeding).map(([sp, b]) => [sp, b.mateActS])),
 
   // intents

@@ -8,12 +8,12 @@
 const path = require("path");
 const vm = require("vm");
 const fs = require("fs");
-const { ROOT, openGame, runStandalone } = require("./helpers");
+const { ROOT, testStart, openGame, runStandalone } = require("./helpers");
 
 function bareContext() {
   // no window, no document, no requestAnimationFrame. alert() is the game's "halt" (see
   // README), so here it throws.
-  return vm.createContext({
+  return vm.createContext({ simStart: testStart,
     console: { log() {} }, Math, Date, Map, Set, Array, Object, Number, String, JSON,
     alert: msg => { throw new Error("alert: " + msg); },
     setTimeout, clearTimeout,
