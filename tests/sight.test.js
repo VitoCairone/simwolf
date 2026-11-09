@@ -10,11 +10,16 @@
 //    without colour (greyed out, or black where never seen), just outside in colour
 //  - the boulder hides the part of its own tile beyond its center too
 //  - on water as on land, the field of view's edges run straight
-//  - a tile seen before but now partly out of sight is shown as seen when a deer standing
-//    on it would be seen and no obstacle hides any of it (the terrain's own shadows round
-//    to whole tiles), and is split into seen and greyed parts otherwise
+//  - the sight range's edge is drawn as a true ellipse (the circle at the height of the
+//    ground under the wolf): just inside it in colour, just outside without
+//  - shadows are where a standing deer could hide: a cliff hides a deer on top of its block
+//    (but near its edge) and behind it from below, its shadow's sides straight lines from
+//    the eye past the cliff's ends; a step a level down hides none (no shadow below it)
+//  - high ground beyond the range, drawn where the circle at the wolf's height would take
+//    it in, is out of sight all the same
 //  - ground it saw before but can't see now (behind the boulder, once it has moved) is
-//    greyed out: drawn without colour, darker, not black
+//    greyed out: drawn without colour, darker, not black; a tile seen even in part is never
+//    black again; nothing (undergrowth) is drawn on ground never seen
 //  - a deer behind the boulder isn't drawn (nor picked by a click), one in sight is
 //  - with the camera panned, everything is drawn as usual again
 // Saves a screenshot to tests/output/sight/.
@@ -151,31 +156,6 @@ async function main(browser, r) {
     `the boulder hides the part of its own tile beyond its center, as it does the tiles behind (before ${own.before}, beyond ${own.beyond}, ` +
     `the next tile ${own.next}): the tile is split, the shadow drawn on it too (${own.state})`);
 
-  // a tile seen before, but not all of it now, is shown as seen when a deer standing on it
-  // would be seen and no obstacle (nor the edge of its field of view) hides any of it;
-  // split (partly greyed) only otherwise
-  const rounding = await p.evaluate(() => {
-    const w = sim.pcWolf, R = 24, deerEye = senses.eyeLevelsBySpecies.deer;
-    const out = { rounded: 0, wrong: [] };
-    for (let i = Math.floor(w.gx) - R; i <= w.gx + R; i++) for (let j = Math.floor(w.gy) - R; j <= w.gy + R; j++) {
-      if (i < 0 || j < 0 || i >= sim.gridWidthN || j >= sim.gridHeightN || sim.obstacleAt(i, j)) continue;
-      const state = animat.tileSight(i, j);
-      if (state !== "seen" && state !== "part") continue;
-      const hidden = [];
-      for (let a = 0; a <= 2; a++) for (let b = 0; b <= 2; b++)
-        if (!senses.canSeePoint(w, i + a / 2, j + b / 2)) hidden.push([i + a / 2, j + b / 2]);
-      if (!hidden.length) continue;
-      const deer = senses.canSeePoint(w, i + 0.5, j + 0.5, sim.heightAt(i + 0.5, j + 0.5) + deerEye);
-      const rock = hidden.some(([x, y]) => senses.obstacleInWay(w, x, y) || !senses.inView(w, x - w.gx, y - w.gy));
-      if (state === "seen") out.rounded++;
-      if ((state === "seen") !== (deer && !rock)) out.wrong.push([i, j, state, deer, rock]);
-    }
-    return out;
-  });
-  r.check(rounding.rounded > 0 && rounding.wrong.length === 0,
-    `a tile partly out of sight is shown as seen when a deer on it would be seen and no obstacle hides any of it, ` +
-    `else split (${rounding.rounded} shown as seen; wrong: ${JSON.stringify(rounding.wrong.slice(0, 5))})`);
-
   // the edges of its field of view: just inside each, 3 tiles out, in colour; just outside,
   // without colour (greyed, or black where never seen)
   const fov = await p.evaluate(() => {
@@ -196,10 +176,10 @@ async function main(browser, r) {
   const behind = [bi + 3, bj + 0];
   const greyed = await p.evaluate(([i, j]) => {
     const [px, py] = animat.isoProject(i + 0.5, j + 0.5);
-    return { state: animat.tileSight(i, j), at: animat.worldToScreen(px, py - sim.heightAt(i + 0.5, j + 0.5) * 8) };
+    return { state: animat.tileSight(i, j), sees: animat.sightSees(i + 0.5, j + 0.5), at: animat.worldToScreen(px, py - sim.heightAt(i + 0.5, j + 0.5) * 8) };
   }, behind);
   const [greyPx] = await pixels(p, [greyed.at]);
-  r.check(greyed.state === "greyed" && colourOf(greyPx) <= 3 && brightnessOf(greyPx) > 20,
+  r.check((greyed.state === "greyed" || greyed.state === "part") && !greyed.sees && colourOf(greyPx) <= 3 && brightnessOf(greyPx) > 20,
     `ground it saw before, now behind the boulder, is greyed out: no colour, not black (${greyed.state}, ${greyPx})`);
 
   // never seen: black, the tile and beyond the map (at zoom 1, far to the screen's right)
@@ -230,6 +210,30 @@ async function main(browser, r) {
   }, at.B);
   r.check(deer.hidden && !deer.pickHidden, `a deer behind the boulder isn't drawn, nor picked by a click (${JSON.stringify(deer)})`);
   r.check(deer.shown && deer.pickShown, "a deer in sight is drawn");
+
+  // ground once seen, even in part, is never black again: what any of the tiles about the
+  // boulder shows from south of it, seen again from west of it, now partly in its shadow
+  const memory = await p.evaluate(([bi, bj]) => {
+    const seenAny = [];
+    __wolfTo(bi + 0.5, bj + 4.5);
+    for (let i = bi - 10; i <= bi + 10; i++) for (let j = bj - 10; j <= bj + 10; j++) {
+      let any = false;
+      for (let a = 0; a <= 2 && !any; a++) for (let b = 0; b <= 2 && !any; b++) any = animat.sightSees(i + a / 2, j + b / 2);
+      if (any) seenAny.push([i, j]);
+    }
+    __wolfTo(bi + 0.5 - 3, bj + 0.7);
+    const black = seenAny.filter(([i, j]) => animat.tileSight(i, j) === "black");
+    // and drawn so: the middle of each such tile out of sight, not black
+    const unseen = seenAny.filter(([i, j]) => !animat.sightSees(i + 0.5, j + 0.5) && !sim.obstacleAt(i, j)).slice(0, 20).map(([i, j]) => {
+      const [px, py] = animat.isoProject(i + 0.5, j + 0.5);
+      return animat.worldToScreen(px, py - sim.heightAt(i + 0.5, j + 0.5) * 8);
+    });
+    return { seen: seenAny.length, black, unseen };
+  }, at.B);
+  const memPx = await pixels(p, memory.unseen);
+  r.check(memory.seen > 50 && memory.black.length === 0 && memPx.every(px => brightnessOf(px) > 20),
+    `ground once seen, even in part, is never black again: of ${memory.seen} tiles seen from south of the boulder, ` +
+    `none black from west of it (${JSON.stringify(memory.black.slice(0, 5))}), ${memPx.length} out of sight drawn grey (darkest ${Math.min(...memPx.map(brightnessOf))})`);
 
   // on water too, the field of view ends along straight lines: a wolf swimming in a lake,
   // having looked about, faces along +i; just inside each edge in colour, just outside
@@ -268,6 +272,153 @@ async function main(browser, r) {
   const deerBack = await p.evaluate(() => sim.allCritters.filter(c => c.species === "deer" && sim.isLiveCritter(c)).slice(0, 1).map(d => animat.spriteOf(d).hidden)[0]);
   r.check(!panned && colourOf(panPx) > 20 && deerBack === false,
     `panned away from the wolf, everything is drawn as usual (${panned}, ${panPx}, hidden deer ${deerBack})`);
+
+  // the sight range's edge: a true ellipse on screen (the circle at the floor's height);
+  // probes just inside and just outside it, where nothing else hides the ground
+  const range = await p.evaluate(([bi, bj]) => {
+    const S = sim.internals, w = sim.pcWolf, wi = bi - 14, wj = bj + 12, L = sim.tileCorners(wi, wj)[0];
+    for (let di = -30; di <= 30; di++) for (let dj = -30; dj <= 30; dj++) { S.setTileCorners(wi + di, wj + dj, [L, L, L, L]); S.setBoulder(wi + di, wj + dj, false); }
+    sim.allCritters.filter(c => c !== w).forEach(c => { c.gx = c.gy = c.nextGX = c.nextGY = -500 - c.uid * 3; });
+    __put(w, wi + 0.5, wj + 0.5); w.hx = 1; w.hy = 0;
+    animat.followWolf(); animat.setZoom(1); animat.redrawTerrain();
+    for (let k = 0; k < 12; k++) S.tick(); for (let k = 0; k < 40; k++) animat.render();
+    const f = animat.sightField(), out = [];
+    for (let k = 0; k < 180; k++) {
+      const a = k * Math.PI / 90, ux = Math.cos(a), uy = Math.sin(a);
+      if (!senses.inView(w, ux, uy)) continue;
+      const ins = [f.ex + ux * (f.R - 0.4), f.ey + uy * (f.R - 0.4)], outs = [f.ex + ux * (f.R + 0.4), f.ey + uy * (f.R + 0.4)];
+      if (!animat.sightSees(...ins) || !animat.sightSees(f.ex + ux * (f.R - 1.5), f.ey + uy * (f.R - 1.5))) continue;
+      let rock = false;
+      for (let di = -3; di <= 3; di++) for (let dj = -3; dj <= 3; dj++) if (sim.obstacleAt(Math.floor(outs[0]) + di, Math.floor(outs[1]) + dj)) rock = true;
+      // (level ground there, with no undergrowth: the pixel is the ground's)
+      for (const [x, y] of [ins, outs]) {
+        if (Math.abs(sim.heightAt(x, y) - f.floor) > 0.25) rock = true;
+        for (let di = -1; di <= 1; di++) for (let dj = -1; dj <= 1; dj++) if (animat.undergrowthOf(Math.floor(x) + di, Math.floor(y) + dj)) rock = true;
+      }
+      if (rock) continue;
+      const flat = ([x, y]) => { const [px, py] = animat.isoProject(x, y); return animat.worldToScreen(px, py - f.floor * 8); };
+      const q = { a: k * 2, ins: flat(ins), outs: flat(outs) };
+      if ([q.ins, q.outs].every(([x, y]) => x > 160 && x < innerWidth - 10 && y > 10 && y < innerHeight - 10)) out.push(q);
+    }
+    return out;
+  }, at.B);
+  const rangePx = await pixels(p, range.flatMap(q => [q.ins, q.outs]));
+  const rangeBad = range.filter((q, k) => !(colourOf(rangePx[2 * k]) > 20 && colourOf(rangePx[2 * k + 1]) <= 3));
+  r.check(range.length >= 10 && rangeBad.length === 0,
+    `the sight range's edge is a true ellipse: in colour just inside it, without colour just outside (${range.length} probes; wrong at ${rangeBad.map(q => q.a + " deg")})`);
+  await p.screenshot({ path: path.join(outDir, "range.png") });
+
+  // a cliff: a block of land 8 levels up, 7 tiles wide, 6 east of the wolf (on level ground
+  // otherwise), hides a deer standing on its top (but near its edge) or behind it from the
+  // wolf below it, between straight lines from its eye past the cliff's ends; just outside
+  // them the ground beside the block is in colour
+  const cliff = await p.evaluate(([bi, bj]) => {
+    const S = sim.internals, w = sim.pcWolf, wi = bi - 14, wj = bj + 12, L = sim.tileCorners(wi, wj)[0];
+    for (let di = -2; di <= 26; di++) for (let dj = -12; dj <= 12; dj++) {
+      const up = di >= 6 && di <= 12 && dj >= -3 && dj <= 3 ? 8 : 0;
+      S.setTileCorners(wi + di, wj + dj, [L + up, L + up, L + up, L + up]); S.setBoulder(wi + di, wj + dj, false);
+    }
+    sim.allCritters.filter(c => c !== w).forEach(c => { c.gx = c.gy = c.nextGX = c.nextGY = -500 - c.uid * 3; });
+    __put(w, wi + 0.5, wj + 0.5); w.hx = 1; w.hy = 0;
+    animat.followWolf(); animat.setZoom(1); animat.redrawTerrain();
+    for (let k = 0; k < 12; k++) S.tick(); for (let k = 0; k < 40; k++) animat.render();
+    const ex = w.gx, ey = w.gy, out = [], deer = senses.eyeLevelsBySpecies.deer;
+    // the lateral lines past the cliff's ends, (wi + 6, wj - 3) and (wi + 6, wj + 4), on the
+    // ground behind the block, 16 east
+    for (const [cx, cy, way] of [[wi + 6, wj - 3, -1], [wi + 6, wj + 4, 1]]) {
+      const x = wi + 16, y = ey + (cy - ey) * (x - ex) / (cx - ex);
+      for (const [inside, off] of [[true, -0.3], [false, 0.3]]) {
+        const py0 = y + way * off, z = L;
+        const [px, py] = animat.isoProject(x, py0);
+        out.push({ inside, sees: senses.canSeePoint(w, x, py0, z + deer), drawn: animat.sightSees(x, py0), at: animat.worldToScreen(px, py - z * 8) });
+      }
+    }
+    // on the block's top, toward its back; and near its edge (a deer there seen, its head above it)
+    for (const [x, inside] of [[wi + 11.5, true], [wi + 6.3, false]]) {
+      const [px, py] = animat.isoProject(x, wj + 0.5);
+      out.push({ inside, sees: senses.canSeePoint(w, x, wj + 0.5, L + 8 + deer), drawn: animat.sightSees(x, wj + 0.5), at: animat.worldToScreen(px, py - (L + 8) * 8) });
+    }
+    return out;
+  }, at.B);
+  const cliffPx = await pixels(p, cliff.map(q => q.at));
+  await p.screenshot({ path: path.join(outDir, "cliff.png") });
+  r.check(cliff.every((q, k) => q.sees === !q.inside && q.drawn === !q.inside && (q.inside ? colourOf(cliffPx[k]) <= 3 : colourOf(cliffPx[k]) > 20)),
+    `a cliff 8 levels up hides a deer standing on its block (but near its edge) or behind it from the wolf below, between straight lines from its eye past the cliff's ends ` +
+    `(${cliff.map((q, k) => `${q.inside ? "in" : "out"} sees ${q.sees} drawn ${q.drawn} ${colourOf(cliffPx[k])}`).join(", ")})`);
+
+  // a step a level down, 6 tiles east of the wolf: the ground just below it is out of its
+  // sight, but a deer standing there would be seen: no shadow, drawn in colour
+  const step = await p.evaluate(([bi, bj]) => {
+    const S = sim.internals, w = sim.pcWolf, wi = bi - 14, wj = bj + 12, L = sim.tileCorners(wi, wj)[0], deer = senses.eyeLevelsBySpecies.deer;
+    for (let di = -30; di <= 30; di++) for (let dj = -30; dj <= 30; dj++) {
+      const z = di < 6 ? L + 1 : L;
+      S.setTileCorners(wi + di, wj + dj, [z, z, z, z]); S.setBoulder(wi + di, wj + dj, false);
+    }
+    __put(w, wi + 0.5, wj + 0.5); w.hx = 1; w.hy = 0;
+    animat.redrawTerrain();
+    for (let k = 0; k < 12; k++) S.tick(); for (let k = 0; k < 40; k++) animat.render();
+    const out = [];
+    for (const x of [6.4, 6.8, 7.5]) for (const dy of [-2, 0, 2]) {
+      const gx = wi + x, gy = wj + 0.5 + dy, [px, py] = animat.isoProject(gx, gy);
+      out.push({ ground: senses.canSeePoint(w, gx, gy), deer: senses.canSeePoint(w, gx, gy, L + deer), drawn: animat.sightSees(gx, gy),
+        at: animat.worldToScreen(px, py - L * 8) });
+    }
+    return out;
+  }, at.B);
+  const stepPx = await pixels(p, step.map(q => q.at));
+  r.check(step.some(q => !q.ground) && step.every((q, k) => q.deer && q.drawn && colourOf(stepPx[k]) > 20),
+    `a step a level down casts no shadow: the ground just below it partly out of sight (${step.filter(q => !q.ground).length} of ${step.length}), ` +
+    `but a deer there would be seen, and it is drawn in colour (${step.map((q, k) => colourOf(stepPx[k]))})`);
+
+  // high ground beyond the range, 12 levels up, 27 tiles or more ahead of the wolf and
+  // behind it: drawn where the circle at the wolf's height would take it in, but out of
+  // sight all the same (no colour)
+  const high = await p.evaluate(([bi, bj]) => {
+    const S = sim.internals, w = sim.pcWolf, wi = bi - 14, wj = bj + 12, L = sim.tileCorners(wi, wj)[0];
+    for (let di = -34; di <= 34; di++) for (let dj = -12; dj <= 12; dj++) {
+      const z = Math.abs(di) >= 27 ? L + 12 : L;
+      S.setTileCorners(wi + di, wj + dj, [z, z, z, z]); S.setBoulder(wi + di, wj + dj, false);
+    }
+    __put(w, wi + 0.5, wj + 0.5); w.hx = 1; w.hy = 0;
+    animat.redrawTerrain();
+    for (let k = 0; k < 12; k++) S.tick(); for (let k = 0; k < 40; k++) animat.render();
+    const f = animat.sightField(), out = [];
+    for (const di of [-29, -28, 28, 29]) for (const dj of [-4, 0, 4]) {
+      const gx = wi + di + 0.5, gy = wj + dj + 0.5, [px, py] = animat.isoProject(gx, gy);
+      // (where the circle at the wolf's height would have it: within the ellipse)
+      const flat = Math.hypot(gx - (L + 12 - f.floor) * 0.5 - f.ex, gy - (L + 12 - f.floor) * 0.5 - f.ey) < f.R;
+      const at = animat.worldToScreen(px, py - (L + 12) * 8);
+      if (flat && at[0] > 160 && at[0] < innerWidth && at[1] > 0 && at[1] < innerHeight) out.push({ di, dj, at, beyond: Math.hypot(gx - f.ex, gy - f.ey) > f.R });
+    }
+    return out;
+  }, at.B);
+  const highPx = await pixels(p, high.map(q => q.at));
+  await p.screenshot({ path: path.join(outDir, "high.png") });
+  r.check(high.length >= 4 && high.every((q, k) => q.beyond && colourOf(highPx[k]) <= 3),
+    `high ground beyond the range, ahead and behind, drawn within the circle at the wolf's height, is out of sight: ${high.length} probes, colour ${high.map((q, k) => `${q.di},${q.dj}: ${colourOf(highPx[k])}`)}`);
+
+  // nothing drawn on ground never seen: undergrowth there (in the midst of ground never
+  // seen) shows black, like the ground
+  const unseenPlants = await p.evaluate(() => {
+    // (somewhere new: a land tile with undergrowth 200 tiles off, or more)
+    const S = sim.internals, w = sim.pcWolf, out = [];
+    const far = S.allLandTiles.find(([i, j]) => Math.abs(i - w.gx) + Math.abs(j - w.gy) > 200 && animat.undergrowthOf(i + 3, j + 3) && animat.undergrowthOf(i - 3, j - 3) && !sim.obstacleAt(i, j));
+    __put(w, far[0] + 0.5, far[1] + 0.5);
+    animat.setZoom(1);
+    for (let k = 0; k < 12; k++) S.tick(); for (let k = 0; k < 40; k++) animat.render();
+    for (const t of animat.tilesInView()) {
+      const { i, j } = t;
+      let alone = true;
+      for (let a = -1; a <= 1 && alone; a++) for (let b = -1; b <= 1 && alone; b++) if (animat.sightSeen(i + a, j + b) || animat.tileSight(i + a, j + b) !== "black") alone = false;
+      const u = alone && animat.undergrowthOf(i, j);
+      if (u) out.push(animat.worldToScreen(u.left + 16, u.top + 20));
+      if (out.length >= 20) break;
+    }
+    return out;
+  });
+  const plantPx = await pixels(p, unseenPlants);
+  r.check(unseenPlants.length >= 3 && plantPx.every(px => brightnessOf(px) <= 12),
+    `undergrowth on ground never seen isn't drawn: ${unseenPlants.length} plants, the brightest at their middles ${Math.max(...plantPx.map(brightnessOf))}`);
 
   r.noProblems(p);
   await p.close();

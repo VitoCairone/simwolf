@@ -612,6 +612,7 @@ function shoreVariantAt(i, j) {
 // For tests: forget what is known about the terrain and draw it afresh.
 function redrawTerrain() {
   placements.clear();
+  brinkBlocks.clear(); sight.field = null; sight.tick = -Infinity;
   clearChunks();
   render();
 }
@@ -776,7 +777,7 @@ const chunkKeepFrames = 120;
 const chunks = new Map(); // ci * 10000 + cj -> chunk
 let frameCount = 0;
 
-const chunkLayers = ["water", "land", "waterMask", "landMask"];
+const chunkLayers = ["water", "land", "waterMask", "landMask", "waterGrey", "landGrey"];
 function clearChunks() {
   for (const c of chunks.values()) for (const k of chunkLayers) if (c[k]) c[k].width = 0;
   chunks.clear();
@@ -801,7 +802,7 @@ function chunkAt(ci, cj) {
   const y1 = (i1 + j1) * qtrTile - (lo - 1) * levelHeightPY + groundCellH + tileRiserPY;
   c = { ci, cj, i0, j0, i1, j1, x0, y0, w: x1 - x0, h: y1 - y0, water: null, land: null,
     hasWater: false, hasLand: false, shores: false, waterClock: -1, landDirty: true, boulders: [], plants: [], used: 0, scanned: false,
-    waterMask: null, landMask: null, maskDirty: true, maskScale: 0 };
+    waterMask: null, landMask: null, waterGrey: null, landGrey: null, maskDirty: true, greyDirty: true, maskScale: 0 };
   chunks.set(key, c);
   return c;
 }
@@ -895,10 +896,10 @@ function noteGrass() {
   const { serial, tiles } = sim.grassChangesSince(grassSerial);
   grassSerial = serial;
   // (the masks too: grass changes its tiles' shapes; see SIGHT VIEW)
-  if (!tiles) { for (const c of chunks.values()) c.landDirty = c.maskDirty = true; return; }
+  if (!tiles) { for (const c of chunks.values()) c.landDirty = c.maskDirty = c.greyDirty = true; return; }
   for (const [i, j] of tiles) {
     const c = chunks.get(Math.floor(i / chunkTiles) * 10000 + Math.floor(j / chunkTiles));
-    if (c) c.landDirty = c.maskDirty = true;
+    if (c) c.landDirty = c.maskDirty = c.greyDirty = true;
   }
 }
 
@@ -919,51 +920,92 @@ function tilesInView() {
   return out;
 }
 
-// SIGHT VIEW: while the camera follows the player's wolf, the view shows what it sees
-// (senses.canSeePoint, seesCreature): ground it can see as usual; ground it has seen
-// before but can't see now greyed out (no colour, darker: sightGrey), with its boulders;
-// tiles it has never seen black, and the map's surroundings black. Only the critters and
-// corpses it sees are drawn (and itself), and, greyed, the corpses and sleepers it saw
-// (REMEMBERED). What it has seen is the wolf's own: a new player's wolf starts having
-// seen nothing.
-// FIELD: whether the wolf sees the ground is sampled every sightSampleTiles over the square
-// about its sight circle, worked out again at most every sightEveryS of game time while it moves or
-// turns (or the light changes its sight). A tile is seen if its center or the middle of an edge is.
-// A tile seen before but not all of it now is shown as seen all the same if a grown deer
-// standing on its center would be seen (eye to eye), and no obstacle stands in the way of
-// any part of it the wolf doesn't see, nor is any outside its field of view (looksSeen):
-// so the terrain's own shadows don't flicker over every fold of the ground, while an
-// obstacle's, and the edges of its field of view, stay sharp and straight. (Critters hide
-// nothing from one another: see SIGHT in senses.js.) Otherwise a tile it partly sees is
-// split along the line between seen and unseen ground (a boulder's own tile too, behind
-// it: see walkLine in senses.js): on each side of a sample cell
-// whose ends differ, where it changes is found by halving (sightBisectSteps), so a
-// shadow's edges run straight, where the lines of sight run.
-// MASKS: each chunk keeps a mask for its water and one for its land, painted back to front
-// like its terrain: each tile first clears what it covers, then paints its unseen part
-// from greyed-out or black copies of its sprites (sightSheet); seen ground is left clear.
-// They are painted at sight.maskScale times the world's pixels (2 from zoom 2), so the
-// shadows' edges are finer than the art's pixels, and afresh when their tiles' states
-// change (or a partly seen tile's line moves, or its grass): sightMasksAFrame a frame,
-// the nearest the wolf first. Each chunk's mask is painted right after its terrain
-// layer, so the chunks in front cover it as their terrain does.
-// Boulders, swimmers (and the land in front of them) and critters, drawn after, are
-// greyed out or left out by the same rules. Water is greyed as plain water (its shores
-// still).
-const sightSampleTiles = 0.5;
+// SIGHT VIEW: while the camera follows the player's wolf, the view shows what it sees: ground
+// in sight as usual; ground it has seen before but not now greyed out (no colour, darker:
+// sightGrey), with its boulders; ground it has never seen black, and the map's surroundings
+// black. Only the critters and corpses it sees are drawn (senses.seesCreature; and itself),
+// and, greyed, the corpses and sleepers it saw (REMEMBERED). What it has seen is the wolf's
+// own: a new player's wolf starts having seen nothing.
+// THE REGION IN SIGHT is drawn as one shape, worked out again at most every sightEveryS of
+// game time while the wolf moves or turns (or the light changes its sight): its SIGHT
+// RANGE, the circle of its sight radius within its field of view (and within
+// senses.nearViewTiles all round), less the SHADOWS of what stands in its way. The circle is
+// drawn at the height of the ground (or water) under the wolf, so on screen it is a true
+// ellipse, but for higher ground beyond it, which would be drawn within it: that is cut
+// back to the circle on the ground. The field of view's edges, and the shadows', are
+// straight lines on the ground, drawn over its (smooth) heights. Nothing is decided tile by
+// tile.
+// SHADOWS: each blocker is a straight piece of line with a top height: a boulder's rock,
+// across the line of sight from the eye (its span, sim.obstacleAcross, as senses.js reckons
+// it: top its sim.sightHeightAt), and the BRINKS of the land. A shadow is where a deer could
+// stand hidden: between the lines from the eye past the blocker's ends, where the line of
+// sight from the wolf's eye to a standing deer's (senses.eyeLevelsBySpecies) would pass
+// below the blocker's top, the ground behind taken as level (a boulder's ground; behind a
+// brink, its foot; on top of a cliff, its top). So a blocker below the wolf's eye hides
+// only a deer close behind it, and none at all unless it stands above the deer's eye; one
+// above the wolf's eye hides a deer from as far behind it as needed on (to beyond the
+// circle). Near the eye a blocker is cut in pieces (sightShadowPieceShare of their
+// distance), so the shadow's far side stays out of the circle.
+// BRINKS: where the land bends down: an edge between two tiles, the ground (at their
+// centers, as senses.js reckons it) falling across it by brinkLeastDropLevels at least,
+// where it falls by brinkMinLevels more over the two tiles after it than over the two
+// before (a crest, a step, a cliff, a slope steepening; not a steady slope), and by more
+// than at the edges either side (the bend's sharpest). Within each square of
+// brinkBlockTiles, the edges are joined into lines and straightened (to within
+// brinkStraightTiles: a staircase along a diagonal becomes one straight line), each
+// straight piece with the mean height of its top (the higher tile) and its foot (two tiles
+// below). Seen from the top side, a brink shades the ground below it; a cliff (a fall of
+// cliffLevels across the edge itself) seen from its foot, the ground on top (taken to go
+// on level): as SHADOWS. (The view's own
+// reckoning, close to the senses': it is the senses that say what the wolf sees.)
+// TILE STATES (what it has seen, and which masks need painting; never where an outline
+// runs): by each tile's center: in sight (SEEN) or out (GREYED, or BLACK if never seen)
+// with no outline within sightClearTiles of it (the range's edge as drawn), else crossed by
+// one (PART). A tile is seen, for good, once any of it is in sight (its center, corners or
+// the middles of its edges), or its boulder's top: from then on it is greyed out of sight,
+// never black. A tile never seen shows nothing on it (undergrowth, boulder).
+// MASKS: each chunk keeps a grey layer for its water and one for its land, painted back to
+// front like its terrain (each tile first clearing what it covers) from greyed-out copies
+// of its tiles' sprites (sightSheet), or black ones for tiles never seen, afresh when its
+// tiles are first seen (or their grass changes); and from each, a mask: none with all its
+// tiles in sight, the grey layer itself with none in sight or crossed, else the grey layer
+// clipped to the region out of sight as drawn (unseenPath), so the outlines run through the
+// pixels, not the tiles. They are painted at sight.maskScale times the world's pixels (2
+// from zoom 2), so the outlines are finer than the art's pixels; a mask afresh when the
+// region changes about it, sightMasksAFrame a frame or as many as sightMaskMS allows. Each
+// chunk's mask is painted right after its terrain layer, so the chunks in front cover it as
+// their terrain does. Boulders and critters, drawn after, are greyed out or left out whole
+// (a boulder by whether the wolf sees its top; undergrowth by its tile's center); swimmers'
+// land, by the same region. Water is greyed as plain water (its shores still).
 const sightEveryS = 0.1;
-const sightBisectSteps = 6;
-const sightClipPadTiles = 0.1;
 const sightMasksAFrame = 4;
-const sightTuftsPY = 6; // grass tufts stand up to this above a tile's back edges
+const sightMaskMS = 6; // ...or as many more as this many milliseconds a frame allows
 const sightGrey = "#8c8c8c"; // greying out: no colour, then darkened by this
+const sightArcSteps = 720;   // the sight range's outline, in steps round the circle
+const sightClearTiles = Math.SQRT1_2 + 0.35; // a tile's half diagonal, and its sprite's overhang
+const sightShadowPieceShare = 0.5;
+const sightTilesPerLevel = levelHeightPY / (2 * qtrTile); // a level up is drawn where the ground is this many tiles back along i and j
+const sightBeyondTiles = 16;  // the ground beyond the range drawn out of sight this much further on
+const sightCellTiles = 1.5;
+const sightCullTiles = 1;     // ...but none drawn wholly this far outside the circle   // the region out of sight drawn in cells at most about this wide
+const sightBucketPX = 256;    // ...kept in buckets this square (world pixels)
+const sightEdgeTiles = 8; // (a tile this far within the range is taken to be drawn within it)
+const sightShadowLeastTiles = 0.2; // a shadow narrower than this at the range's edge isn't drawn
+const sightShadowReach = 1.15; // ...and its far side this share of the sight radius out (at least)
+const brinkMinLevels = 1;
+const brinkLeastDropLevels = 0.25; // ...and by this at least itself
+const cliffLevels = 2;
+const brinkBlockTiles = 32;
+const brinkStraightTiles = 0.75;
+const sightArc = Array.from({ length: sightArcSteps }, (_, k) =>
+  [Math.cos(2 * Math.PI * k / sightArcSteps), Math.sin(2 * Math.PI * k / sightArcSteps)]);
 // a tile's state in the view
 const SEEN = 0, PART = 1, GREYED = 2, BLACK = 3;
 const sight = {
   wolf: null,       // whose sight
   seen: null,       // by tile (TILE BYTES): 1 once the wolf has seen it
   shown: null,      // by tile (TILE BYTES): its state (SEEN ... BLACK) as last worked out
-  field: null,      // { eye (a copy of the wolf as it was), ox, oy, n, vis, crossings, boulders }
+  field: null,      // the region in sight (fieldFor)
   tick: -Infinity, gx: NaN, gy: NaN, hx: NaN, hy: NaN, share: NaN, stage: -1,
   maskScale: 0,
 };
@@ -992,7 +1034,8 @@ function resetSightMasks() {
   for (const c of chunks.values()) c.maskScale = 0;
 }
 
-// Works out the field again when due (see FIELD), and what the wolf has now seen.
+// Works out the region in sight again when due, what the wolf has now seen, and each
+// tile's state.
 function updateSight() {
   const w = sim.pcWolf, W = sim.gridWidthN, H = sim.gridHeightN;
   if (w !== sight.wolf) {
@@ -1005,59 +1048,435 @@ function updateSight() {
     || Math.abs(share - sight.share) > 0.005 || stage !== sight.stage;
   if (sight.field && (!changed || sim.tickCount - sight.tick < Math.round(sightEveryS / sim.tempo))) return;
   Object.assign(sight, { tick: sim.tickCount, gx: w.gx, gy: w.gy, hx: w.hx, hy: w.hy, share, stage });
-  // the circle's bounds
-  const reach = Math.ceil(share * senses.sightRadiusTiles) + 1;
-  const ox = Math.floor(w.gx) - reach, oy = Math.floor(w.gy) - reach, tiles = 2 * reach + 1;
-  const per = Math.round(1 / sightSampleTiles), n = tiles * per + 1;
-  const eye = { ...w };
-  const vis = new Uint8Array(n * n);
-  if (share > 0) for (let u = 0; u < n; u++) for (let v = 0; v < n; v++)
-    vis[u * n + v] = senses.canSeePoint(eye, ox + u / per, oy + v / per) ? 1 : 0;
-  const old = sight.field;
-  sight.field = { eye, ox, oy, n, per, tiles, vis, crossings: new Map(), boulders: new Map(), plants: new Map() };
-  // what it has seen, and each tile's state, over the old field's tiles and the new
-  const boxes = [[ox, oy, tiles]];
-  if (old) boxes.push([old.ox, old.oy, old.tiles]);
-  const dirty = new Set();
-  for (const [bx, by, bt] of boxes) for (let i = Math.max(0, bx); i < Math.min(W, bx + bt); i++)
-    for (let j = Math.max(0, by); j < Math.min(H, by + bt); j++) {
-      const st = fieldTileState(i, j);
-      const was = tileByte(sight.shown, i, j);
-      if (st !== was || st === PART) dirty.add(Math.floor(i / chunkTiles) * 10000 + Math.floor(j / chunkTiles));
-      setTileByte(sight.shown, i, j, st);
-    }
-  for (const key of dirty) { const c = chunks.get(key); if (c) c.maskDirty = true; }
-}
-
-// Tile (i, j)'s state by the field (marking it seen if it is), or by what was seen.
-function fieldTileState(i, j) {
-  const f = sight.field;
-  const u0 = (i - f.ox) * f.per, v0 = (j - f.oy) * f.per;
-  if (u0 < 0 || v0 < 0 || u0 + f.per >= f.n || v0 + f.per >= f.n) return tileByte(sight.seen, i, j) ? GREYED : BLACK;
-  let any = 0, all = 1;
-  for (let u = u0; u <= u0 + f.per; u++) for (let v = v0; v <= v0 + f.per; v++) {
-    const s = f.vis[u * f.n + v]; any |= s; all &= s;
+  const old = sight.field, f = sight.field = fieldFor(w, share);
+  const boxes = [f.box];
+  if (old) boxes.push(old.box);
+  const chunkOf = (i, j) => chunks.get(Math.floor(i / chunkTiles) * 10000 + Math.floor(j / chunkTiles));
+  for (const [i0, j0, i1, j1] of boxes) {
+    for (let i = Math.max(0, i0); i <= Math.min(W - 1, i1); i++)
+      for (let j = Math.max(0, j0); j <= Math.min(H - 1, j1); j++) {
+        const v = fieldTileState(f, i, j);
+        // (seen once any of it is in sight: then never black again)
+        if (!tileByte(sight.seen, i, j) && (v.st === SEEN || v.inSight || v.st === PART && seesAnyOf(f, i, j)
+          || sim.obstacleHeightAt(i, j) > 0 && (i + 0.5 - f.ex) ** 2 + (j + 0.5 - f.ey) ** 2 <= f.R2 && seesBoulder(i, j))) {
+          setTileByte(sight.seen, i, j, 1);
+          const c = chunkOf(i, j);
+          if (c) c.greyDirty = true;
+        }
+        const st = v.st === SEEN ? SEEN : v.st === PART ? PART : tileByte(sight.seen, i, j) ? GREYED : BLACK;
+        const was = tileByte(sight.shown, i, j);
+        // (a chunk's mask changes where a tile's state does, or an outline crosses one)
+        if (st !== was || st === PART || was === PART) {
+          const c = chunkOf(i, j);
+          if (c && !c.maskDirty) { c.maskDirty = true; c.dirtySince = sim.tickCount; }
+        }
+        setTileByte(sight.shown, i, j, st);
+      }
   }
-  const h = f.per / 2, mid = (u, v) => f.vis[(u0 + u) * f.n + v0 + v];
-  if (mid(h, h) || mid(h, 0) || mid(0, h) || mid(f.per, h) || mid(h, f.per)) setTileByte(sight.seen, i, j, 1);
-  if (!tileByte(sight.seen, i, j)) return BLACK;
-  if (all || looksSeen(i, j, u0, v0)) return SEEN;
-  return any ? PART : GREYED;
 }
 
-// Whether tile (i, j), seen before but not all of it now, is shown as seen all the same
-// (see FIELD): a deer standing on it would be seen, and no obstacle hides any of it, nor
-// the edge of the wolf's field of view.
-function looksSeen(i, j, u0, v0) {
-  const f = sight.field, cx = i + 0.5, cy = j + 0.5;
-  if (sim.obstacleAt(i, j)) return false;
-  if (!senses.canSeePoint(f.eye, cx, cy, sim.heightAt(cx, cy) + senses.eyeLevelsBySpecies.deer)) return false;
-  for (let u = u0; u <= u0 + f.per; u++) for (let v = v0; v <= v0 + f.per; v++) {
-    if (f.vis[u * f.n + v]) continue;
-    const x = f.ox + u / f.per, y = f.oy + v / f.per;
-    if (!senses.inView(f.eye, x - f.eye.gx, y - f.eye.gy) || senses.obstacleInWay(f.eye, x, y)) return false;
+// The height a grid point's surface is drawn at: the ground, or a water tile's surface.
+function surfaceLevelAt(gx, gy) {
+  const i = Math.floor(gx), j = Math.floor(gy);
+  return sim.getTerrainAt(i, j) === "water" ? sim.waterLevelAt(i, j) : sim.heightAt(gx, gy);
+}
+// Where a grid point on the surface is drawn (world pixels): a water tile's surface as
+// describeTile draws it; at height z instead, if given.
+function surfaceProject(gx, gy, z) {
+  if (z !== undefined) { const [px, py] = isoProject(gx, gy); return [px, py - z * levelHeightPY]; }
+  const x = Math.min(Math.max(gx, 0), sim.gridWidthN - 0.001), y = Math.min(Math.max(gy, 0), sim.gridHeightN - 0.001);
+  const [px, py] = isoProject(gx, gy), i = Math.floor(x), j = Math.floor(y);
+  if (sim.getTerrainAt(i, j) === "water") return [px, py + waterSurfaceDropPY - sim.waterLevelAt(i, j) * levelHeightPY];
+  return [px, py - sim.heightAt(x, y) * levelHeightPY];
+}
+
+// THE REGION IN SIGHT of wolf w, its sight at `share` of its radius: { eye (a copy of the
+// wolf), ex, ey, ez (its eye's height), R, outline (the sight range: grid points, the
+// circle's at the height of the ground under it as floor), shadows ({ pts, edges (unit
+// outward normals and offsets), box }), box (the tiles it spans), path (lazily: the region
+// out of sight, drawn) }.
+function fieldFor(w, share) {
+  const R = share * senses.sightRadiusTiles, ex = w.gx, ey = w.gy;
+  const floor = surfaceLevelAt(ex, ey), ez = sim.heightAt(ex, ey) + senses.eyeLevels(w);
+  const r = Math.ceil(R + sightClearTiles) + 1;
+  const f = { eye: { ...w }, ex, ey, ez, R, R2: R * R, floor, outline: [], shadows: [], path: null,
+    box: [Math.floor(ex) - r, Math.floor(ey) - r, Math.floor(ex) + r, Math.floor(ey) + r] };
+  if (R <= 0) return f;
+  f.outline = sightRangeOutline(f, w);
+  if (senses.use.lineOfSight) {
+    for (let i = f.box[0]; i <= f.box[2]; i++) for (let j = f.box[1]; j <= f.box[3]; j++) {
+      if (!(sim.obstacleHeightAt(i, j) > 0) || (i + 0.5 - ex) ** 2 + (j + 0.5 - ey) ** 2 > (R + 1) ** 2) continue;
+      // the rock's span across the line of sight to its center (as walkLine sees it)
+      const cx = i + 0.5, cy = j + 0.5, dir = sim.getDir(cx - ex, cy - ey), [ux, uy] = sim.moveVecByDir[dir];
+      const across = sim.obstacleAcross(i, j, dir);
+      if (!across || across[1] <= across[0]) continue;
+      const nx = -uy, ny = ux;
+      castShadow(f, [cx + nx * across[0], cy + ny * across[0]], [cx + nx * across[1], cy + ny * across[1]],
+        sim.sightHeightAt(i, j), sim.centerHeightAt(i, j));
+    }
+    const B = brinkBlockTiles;
+    for (let bi = Math.floor(f.box[0] / B); bi <= Math.floor(f.box[2] / B); bi++)
+      for (let bj = Math.floor(f.box[1] / B); bj <= Math.floor(f.box[3] / B); bj++)
+        for (const s of brinksIn(bi, bj)) {
+          if (segmentDist2(ex, ey, s.p, s.q) > f.R2) continue;
+          const top = (ex - s.p[0]) * s.nx + (ey - s.p[1]) * s.ny > 0; // (the eye on its top side)
+          if (top) castShadow(f, s.p, s.q, s.top, s.foot, s.top);
+          else if (s.cliff) castShadow(f, s.p, s.q, s.top, s.top, s.top);
+        }
+  }
+  return f;
+}
+
+// The sight range's outline (see THE REGION IN SIGHT): round the circle, within the field
+// of view; round senses.nearViewTiles, outside it.
+function sightRangeOutline(f, w) {
+  const { ex, ey, R } = f, near = Math.min(R, senses.nearViewTiles), N = sightArcSteps;
+  const hx = w.hx || 0, hy = w.hy || 0, deg = senses.fovDegBySpecies[w.species];
+  const pts = [];
+  if (hx === 0 && hy === 0 || deg >= 360) { for (const [c, s] of sightArc) pts.push([ex + c * R, ey + s * R]); return pts; }
+  const half = fovHalf(deg), steps = Math.floor(half.rad / (2 * Math.PI) * N - 1e-9);
+  const at = (c, s, r) => [ex + (hx * c - hy * s) * r, ey + (hx * s + hy * c) * r];
+  pts.push(at(half.cos, -half.sin, near), at(half.cos, -half.sin, R));
+  for (let k = -steps; k <= steps; k++) { const [c, s] = sightArc[(k + N) % N]; pts.push(at(c, s, R)); }
+  pts.push(at(half.cos, half.sin, R), at(half.cos, half.sin, near));
+  for (let k = steps + 1; k < N - steps; k++) { const [c, s] = sightArc[k]; pts.push(at(c, s, near)); }
+  return pts;
+}
+const fovHalves = new Map();
+function fovHalf(deg) {
+  let h = fovHalves.get(deg);
+  if (!h) { const rad = deg * Math.PI / 360; fovHalves.set(deg, h = { rad, cos: Math.cos(rad), sin: Math.sin(rad) }); }
+  return h;
+}
+
+// The squared distance from (x, y) to segment pq.
+function segmentDist2(x, y, p, q) {
+  const dx = q[0] - p[0], dy = q[1] - p[1], l2 = dx * dx + dy * dy;
+  let t = l2 > 0 ? ((x - p[0]) * dx + (y - p[1]) * dy) / l2 : 0;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return (p[0] + dx * t - x) ** 2 + (p[1] + dy * t - y) ** 2;
+}
+
+// Adds the shadow of blocker pq to field f (see SHADOWS): its top's height, and the
+// height of the ground behind it (taken as level), where a standing deer's eye would be
+// hidden: from k0 to k1 times as far from the eye as the blocker (k > 1). In pieces near
+// the eye; its near side drawn at height `edge` if given (a brink's top) and the shadow
+// starts at the blocker, else on the ground.
+function castShadow(f, p, q, top, ground, edge) {
+  const { ex, ey, ez } = f, zt = ground + senses.eyeLevelsBySpecies.deer;
+  if (segmentDist2(ex, ey, p, q) < 0.01) return;
+  // a line of sight from the eye to the deer's eye, k times as far as the blocker, passes it
+  // at ez + (zt - ez) / k: hidden while that is below the top
+  let k0 = 1, k1 = Infinity;
+  if (top > ez) { if (zt > ez) k0 = Math.max(1, (zt - ez) / (top - ez)); }
+  else if (zt < ez) k1 = (ez - zt) / (ez - top);
+  else return;
+  if (!(k1 > k0)) return;
+  const dp = Math.hypot(p[0] - ex, p[1] - ey), dq = Math.hypot(q[0] - ex, q[1] - ey);
+  // (one seen all but end on, at most sightShadowLeastTiles wide at the range's edge: none)
+  if (Math.abs((p[0] - ex) * (q[1] - ey) - (p[1] - ey) * (q[0] - ex)) * f.R < sightShadowLeastTiles * dp * dq) return;
+  if (k0 * Math.min(dp, dq) > f.R) return; // (starting beyond the range)
+  const len = Math.hypot(q[0] - p[0], q[1] - p[1]);
+  const n = Math.max(1, Math.ceil(len / (sightShadowPieceShare * Math.max(0.1, Math.min(dp, dq)))));
+  const at = (x, y, k) => {
+    const s = Math.min(k, Math.max(1, sightShadowReach * f.R / Math.max(0.05, Math.hypot(x - ex, y - ey))));
+    return [ex + (x - ex) * s, ey + (y - ey) * s];
+  };
+  for (let m = 0; m < n; m++) {
+    let a = [p[0] + (q[0] - p[0]) * m / n, p[1] + (q[1] - p[1]) * m / n];
+    let b = [p[0] + (q[0] - p[0]) * (m + 1) / n, p[1] + (q[1] - p[1]) * (m + 1) / n];
+    const fa = at(...a, k1), fb = at(...b, k1);
+    if (k0 > 1) { a = at(...a, k0); b = at(...b, k0); }
+    else if (edge !== undefined) { a.push(edge); b.push(edge); }
+    addShadow(f, [a, b, fb, fa]);
+  }
+}
+
+// Adds convex polygon pts to f's shadows, wound one way (positive area), with its edges'
+// outward normals.
+function addShadow(f, pts) {
+  let area = 0;
+  for (let k = 0; k < pts.length; k++) { const [x0, y0] = pts[k], [x1, y1] = pts[(k + 1) % pts.length]; area += x0 * y1 - x1 * y0; }
+  if (Math.abs(area) < 1e-9) return;
+  if (area < 0) pts.reverse();
+  const edges = [];
+  let i0 = Infinity, j0 = Infinity, i1 = -Infinity, j1 = -Infinity;
+  for (let k = 0; k < pts.length; k++) {
+    const [x0, y0] = pts[k], [x1, y1] = pts[(k + 1) % pts.length], l = Math.hypot(x1 - x0, y1 - y0);
+    if (l > 0) { const nx = (y1 - y0) / l, ny = -(x1 - x0) / l; edges.push([nx, ny, nx * x0 + ny * y0]); }
+    i0 = Math.min(i0, x0); j0 = Math.min(j0, y0); i1 = Math.max(i1, x0); j1 = Math.max(j1, y0);
+  }
+  f.shadows.push({ pts, edges, box: [i0, j0, i1, j1] });
+}
+
+// Tile (i, j)'s state by field f (see TILE STATES): { st: SEEN, PART or (out) GREYED,
+// inSight: its center in sight }.
+function fieldTileState(f, i, j) {
+  const cx = i + 0.5, cy = j + 0.5, dx = cx - f.ex, dy = cy - f.ey, d2 = dx * dx + dy * dy, m = sightClearTiles;
+  const out = { st: GREYED, inSight: false };
+  if (f.R <= 0) return out;
+  // the range's edge as drawn (at the floor's height): the tile's center where it would be
+  // drawn at that height, give or take its slope and its sides (sightTilesPerLevel a level)
+  let part = d2 <= (senses.nearViewTiles + m) ** 2;
+  if (d2 > (f.R + m) ** 2) return out;
+  if (d2 > (f.R - m) ** 2) part = true;
+  if (d2 > (f.R - sightEdgeTiles) ** 2) {
+    const z = surfaceLevelAt(cx, cy), [n0, n1, n2, n3] = sim.tileCorners(i, j);
+    const low = Math.min(n0, n1, n2, n3, surfaceLevelAt(cx + 1, cy), surfaceLevelAt(cx, cy + 1), surfaceLevelAt(cx + 1, cy + 1));
+    const sh = (z - f.floor) * sightTilesPerLevel, mR = m + (Math.max(n0, n1, n2, n3, z) - low) * sightTilesPerLevel * Math.SQRT2;
+    const r2 = (dx - sh) ** 2 + (dy - sh) ** 2;
+    if (r2 > (f.R + mR) ** 2) return out;
+    if (r2 > (f.R - mR) ** 2) part = true;
+  }
+  // the field of view's edges: its corners some in it and some out (or all out)
+  let ins = 0;
+  for (const [x, y] of [[i, j], [i + 1, j], [i, j + 1], [i + 1, j + 1]]) if (senses.inView(f.eye, x - f.ex, y - f.ey)) ins++;
+  if (ins === 0 && !part) return out;
+  if (ins < 4) part = true;
+  let inShadow = false;
+  for (const s of f.shadows) {
+    const b = s.box;
+    if (cx < b[0] - m || cx > b[2] + m || cy < b[1] - m || cy > b[3] + m) continue;
+    let most = -Infinity;
+    for (const [nx, ny, c] of s.edges) { const e = nx * cx + ny * cy - c; if (e > most) most = e; }
+    if (most > m) continue;
+    if (most < -m) return out; // (deep in this shadow)
+    part = true;
+    if (most <= 0) inShadow = true;
+  }
+  out.inSight = !inShadow && d2 <= f.R2 && senses.inView(f.eye, dx, dy);
+  out.st = part ? PART : SEEN;
+  return out;
+}
+
+// Whether field f has any of tile (i, j) in sight: its corners, the middles of its edges.
+function seesAnyOf(f, i, j) {
+  for (let a = 0; a <= 2; a++) for (let b = 0; b <= 2; b++) if (fieldSees(f, i + a / 2, j + b / 2)) return true;
+  return false;
+}
+
+// Whether field f has grid point (x, y) in sight.
+function fieldSees(f, x, y) {
+  const dx = x - f.ex, dy = y - f.ey;
+  if (dx * dx + dy * dy > f.R2 || !senses.inView(f.eye, dx, dy)) return false;
+  for (const s of f.shadows) {
+    const b = s.box;
+    if (x < b[0] || x > b[2] || y < b[1] || y > b[3]) continue;
+    if (s.edges.every(([nx, ny, c]) => nx * x + ny * y <= c)) return false;
   }
   return true;
+}
+
+// The region out of sight, as drawn (world pixels): outside, all but the sight range's
+// circle, at the floor's height (a path: even-odd); and CELLS, small quadrilaterals on the
+// ground, each drawn over the ground's heights (so a line bends with them) and wound one way,
+// whose union is the rest: the ground beyond the range (out to sightBeyondTiles more:
+// higher ground beyond it, drawn within the circle, is cut back to the circle on the
+// ground), behind (out of the field of view, beyond senses.nearViewTiles) and the shadows.
+// Being small, a cell keeps its shape where the ground folds as drawn (a cliff, the ground
+// behind it hidden by it: one large shape there would turn inside out and cancel itself
+// out). Cells are kept in buckets of sightBucketPX square (world pixels), by their boxes.
+function unseenShapes(f) {
+  if (f.shapes) return f.shapes;
+  const big = 1e7, outside = new Path2D(), buckets = new Map(), cells = [], B = sightBucketPX;
+  outside.moveTo(-big, -big); outside.lineTo(big, -big); outside.lineTo(big, big); outside.lineTo(-big, big); outside.closePath();
+  const proj = v => v.length > 2 ? surfaceProject(v[0], v[1], v[2]) : surfaceProject(v[0], v[1]);
+  let covering = []; // (shadows already cut in cells: a cell wholly within one is left out)
+  const within = (s, v) => v[0] >= s.box[0] && v[0] <= s.box[2] && v[1] >= s.box[1] && v[1] <= s.box[3] && s.edges.every(([nx, ny, c]) => nx * v[0] + ny * v[1] <= c);
+  const cell = (q, cull) => { // (grid points, in order round it; with cull, left out where drawn outside the circle anyway)
+    if (covering.length && covering.some(s => q.every(v => within(s, v)))) return;
+    if (cull && q.every(v => { const sh = (v.length > 2 ? v[2] : surfaceLevelAt(v[0], v[1])) - f.floor, o = sh * sightTilesPerLevel;
+      return (v[0] - o - f.ex) ** 2 + (v[1] - o - f.ey) ** 2 > (f.R + sightCullTiles) ** 2; })) return;
+    let pts = q.map(proj), area = 0;
+    for (let k = 0; k < 4; k++) { const [x0, y0] = pts[k], [x1, y1] = pts[(k + 1) % 4]; area += x0 * y1 - x1 * y0; }
+    if (area < 0) pts = pts.reverse();
+    const xs = pts.map(v => v[0]), ys = pts.map(v => v[1]);
+    const box = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)], c = { pts, box };
+    cells.push(c);
+    for (let bx = Math.floor(box[0] / B); bx <= Math.floor(box[2] / B); bx++) for (let by = Math.floor(box[1] / B); by <= Math.floor(box[3] / B); by++) {
+      const key = bx * 100000 + by;
+      if (!buckets.has(key)) buckets.set(key, []);
+      buckets.get(key).push(c);
+    }
+  };
+  // a quadrilateral on the ground (a, b one side; fb, fa the other), in cells about a tile
+  // long and sightCellTiles across; a side drawn at the height its points carry, if they do
+  const quad = (a, b, fb, fa) => {
+    const z0 = a[2] !== undefined && a[2] === b[2] ? a[2] : undefined, z1 = fa[2] !== undefined && fa[2] === fb[2] ? fa[2] : undefined;
+    const L = Math.max(Math.hypot(fa[0] - a[0], fa[1] - a[1]), Math.hypot(fb[0] - b[0], fb[1] - b[1]));
+    const W = Math.max(Math.hypot(b[0] - a[0], b[1] - a[1]), Math.hypot(fb[0] - fa[0], fb[1] - fa[1]));
+    const n = Math.max(1, Math.ceil(L / sightCellTiles)), m = Math.max(1, Math.ceil(W / sightCellTiles));
+    const at = (u, v) => { // (u along, v across)
+      const p = [a[0] + (b[0] - a[0]) * v, a[1] + (b[1] - a[1]) * v], q = [fa[0] + (fb[0] - fa[0]) * v, fa[1] + (fb[1] - fa[1]) * v];
+      const g = [p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u];
+      return u === 0 && z0 !== undefined ? [g[0], g[1], z0] : u === 1 && z1 !== undefined ? [g[0], g[1], z1] : g;
+    };
+    for (let k = 0; k < n; k++) for (let l = 0; l < m; l++) cell([at(k / n, l / m), at(k / n, (l + 1) / m), at((k + 1) / n, (l + 1) / m), at((k + 1) / n, l / m)], true);
+  };
+  // a ring's sector about the eye: radii r0 to r1, angles a0 to a1 (radians from the +x axis)
+  const sector = (r0, r1, a0, a1, size = sightCellTiles) => {
+    const n = Math.max(1, Math.ceil((r1 - r0) / size)), m = Math.max(1, Math.ceil((a1 - a0) * r1 / size));
+    const at = (r, a) => [f.ex + r * Math.cos(a), f.ey + r * Math.sin(a)];
+    for (let k = 0; k < n; k++) for (let l = 0; l < m; l++) {
+      const ra = r0 + (r1 - r0) * k / n, rb = r0 + (r1 - r0) * (k + 1) / n, aa = a0 + (a1 - a0) * l / m, ab = a0 + (a1 - a0) * (l + 1) / m;
+      cell([at(ra, aa), at(ra, ab), at(rb, ab), at(rb, aa)], true);
+    }
+  };
+  if (f.R > 0) {
+    const flat = ([x, y]) => { const [px, py] = isoProject(x, y); return [px, py - f.floor * levelHeightPY]; };
+    const pts = sightArc.map(([c, s]) => flat([f.ex + c * f.R, f.ey + s * f.R]));
+    outside.moveTo(...pts[0]);
+    for (const v of pts) outside.lineTo(...v);
+    outside.closePath();
+    const far = f.R + sightBeyondTiles;
+    sector(f.R, far, 0, 2 * Math.PI);
+    const w = f.eye, hx = w.hx || 0, hy = w.hy || 0, deg = senses.fovDegBySpecies[w.species];
+    if ((hx || hy) && deg < 360) {
+      const half = fovHalf(deg).rad, h = Math.atan2(hy, hx);
+      sector(Math.min(f.R, senses.nearViewTiles), far, h + half, h + 2 * Math.PI - half); // (on into the ground beyond: no seam at the circle)
+    }
+  }
+  for (const s of f.shadows) {
+    const [a, b, fb, fa] = s.pts;
+    covering = f.shadows.slice(0, f.shadows.indexOf(s));
+    if (s.pts.length === 4) quad(a, b, fb, fa);
+  }
+  return f.shapes = { outside, buckets, cells };
+}
+
+// Field f's sight range's circle (as drawn: a true ellipse), wound against the cells.
+function unseenCellsRing(f) {
+  const P = new Path2D();
+  if (f.R <= 0) return P;
+  let pts = sightArc.map(([c, s]) => { const [px, py] = isoProject(f.ex + c * f.R, f.ey + s * f.R); return [px, py - f.floor * levelHeightPY]; });
+  let area = 0;
+  for (let k = 0; k < pts.length; k++) { const [x0, y0] = pts[k], [x1, y1] = pts[(k + 1) % pts.length]; area += x0 * y1 - x1 * y0; }
+  if (area > 0) pts = pts.reverse();
+  P.moveTo(...pts[0]);
+  for (const v of pts) P.lineTo(...v);
+  P.closePath();
+  return P;
+}
+
+// The cells of field f's region out of sight within box (world pixels), in one path
+// (nonzero: their union, with no seams where they meet).
+function unseenCells(f, box) {
+  const { buckets, cells } = unseenShapes(f), B = sightBucketPX, seen = new Set(), P = new Path2D();
+  if (box[0] === -Infinity) {
+    for (const c of cells) { P.moveTo(...c.pts[0]); P.lineTo(...c.pts[1]); P.lineTo(...c.pts[2]); P.lineTo(...c.pts[3]); P.closePath(); }
+    return P;
+  }
+  for (let bx = Math.floor(box[0] / B); bx <= Math.floor(box[2] / B); bx++) for (let by = Math.floor(box[1] / B); by <= Math.floor(box[3] / B); by++)
+    for (const c of buckets.get(bx * 100000 + by) || []) {
+      if (seen.has(c) || c.box[2] < box[0] || c.box[0] > box[2] || c.box[3] < box[1] || c.box[1] > box[3]) continue;
+      seen.add(c);
+      P.moveTo(...c.pts[0]); P.lineTo(...c.pts[1]); P.lineTo(...c.pts[2]); P.lineTo(...c.pts[3]); P.closePath();
+    }
+  return P;
+}
+
+// The region out of sight in field f (within box, world pixels, if given; else all of it,
+// kept), as one path (nonzero): everything, the circle wound against it, the cells with it.
+function unseenPath(f, box) {
+  if (!box && f.path) return f.path;
+  const P = new Path2D(), big = 1e7;
+  P.moveTo(-big, -big); P.lineTo(big, -big); P.lineTo(big, big); P.lineTo(-big, big); P.closePath();
+  P.addPath(unseenCellsRing(f));
+  P.addPath(unseenCells(f, box || [-Infinity, -Infinity, Infinity, Infinity]));
+  if (!box) f.path = P;
+  return P;
+}
+
+// The points between p and q, one a tile or so apart (so a line bends with the ground).
+function densify(p, q) {
+  const n = Math.ceil(Math.max(Math.abs(q[0] - p[0]), Math.abs(q[1] - p[1])));
+  const out = [];
+  for (let k = 1; k < n; k++) {
+    const v = [p[0] + (q[0] - p[0]) * k / n, p[1] + (q[1] - p[1]) * k / n];
+    if (p[2] !== undefined && q[2] !== undefined) v.push(p[2] + (q[2] - p[2]) * k / n);
+    out.push(v);
+  }
+  return out;
+}
+
+// BRINKS of the square of tiles (bi, bj), brinkBlockTiles a side (worked out once): straight
+// pieces { p, q, nx, ny (the unit normal toward its top side), top, foot }.
+const brinkBlocks = new Map();
+function brinksIn(bi, bj) {
+  const key = bi * 100000 + bj;
+  let out = brinkBlocks.get(key);
+  if (out) return out;
+  brinkBlocks.set(key, out = []);
+  const B = brinkBlockTiles, W = sim.gridWidthN, H = sim.gridHeightN;
+  const h = (i, j) => sim.centerHeightAt(Math.min(Math.max(i, 0), W - 1), Math.min(Math.max(j, 0), H - 1));
+  // the edges, each directed with its top side on its left: from vertex a to b
+  const edges = [];
+  for (let i = bi * B; i < Math.min(W, bi * B + B); i++) for (let j = bj * B; j < Math.min(H, bj * B + B); j++) {
+    if (i < 0 || j < 0) continue;
+    for (const [di, dj] of [[1, 0], [0, 1]]) {
+      if (i + di >= W || j + dj >= H) continue;
+      // the shared edge
+      const a = di ? [i + 1, j] : [i, j + 1], b = [i + 1, j + 1];
+      for (const down of [1, -1]) {
+        // X the higher tile, the ground falling away from it by (ei, ej) a tile
+        const [xi, xj] = down > 0 ? [i, j] : [i + di, j + dj], ei = di * down, ej = dj * down;
+        const at = k => h(xi + ei * k, xj + ej * k); // (k = 0: X; 1: the tile below it)
+        const top = at(0);
+        if (top - at(1) < brinkLeastDropLevels) continue;
+        // how much more it falls over the two tiles after the edge than over the two before
+        const bend = k => (at(k) - at(k + 2)) - (at(k - 2) - at(k));
+        const here = bend(0);
+        if (here < brinkMinLevels || here < bend(-1) || here <= bend(1)) continue;
+        // directed with its top side (toward X) on its left
+        let p = a, q = b;
+        if ((q[1] - p[1]) * -ei + -(q[0] - p[0]) * -ej < 0) [p, q] = [q, p];
+        edges.push({ p, q, top, foot: at(2), cliff: top - at(1) >= cliffLevels, used: false });
+      }
+    }
+  }
+  // joined into lines, end to start
+  const vkey = v => v[0] * 100000 + v[1];
+  const from = new Map();
+  for (const e of edges) { const k = vkey(e.p); if (!from.has(k)) from.set(k, []); from.get(k).push(e); }
+  const to = new Map();
+  for (const e of edges) { const k = vkey(e.q); if (!to.has(k)) to.set(k, []); to.get(k).push(e); }
+  const next = e => (from.get(vkey(e.q)) || []).find(x => !x.used);
+  const prev = e => (to.get(vkey(e.p)) || []).find(x => !x.used);
+  for (const e0 of edges) {
+    if (e0.used) continue;
+    e0.used = true;
+    const line = [e0];
+    for (let e = next(e0); e; e = next(e)) { e.used = true; line.push(e); }
+    for (let e = prev(e0); e; e = prev(e)) { e.used = true; line.unshift(e); }
+    const vs = [line[0].p, ...line.map(e => e.q)];
+    const keep = straighten(vs);
+    for (let k = 0; k + 1 < keep.length; k++) {
+      const part = line.slice(keep[k], keep[k + 1]);
+      const top = part.reduce((s, e) => s + e.top, 0) / part.length, foot = part.reduce((s, e) => s + e.foot, 0) / part.length;
+      const cliff = part.filter(e => e.cliff).length * 2 > part.length;
+      const p = vs[keep[k]], q = vs[keep[k + 1]], l = Math.hypot(q[0] - p[0], q[1] - p[1]);
+      if (l > 0) out.push({ p, q, nx: (q[1] - p[1]) / l, ny: -(q[0] - p[0]) / l, top, foot, cliff });
+    }
+  }
+  return out;
+}
+
+// The indices of the points of polyline vs kept straightening it to within
+// brinkStraightTiles (Douglas-Peucker).
+function straighten(vs) {
+  const keep = new Set([0, vs.length - 1]);
+  const go = (a, b) => {
+    const [x0, y0] = vs[a], [x1, y1] = vs[b], l = Math.hypot(x1 - x0, y1 - y0);
+    let most = 0, at = -1;
+    for (let k = a + 1; k < b; k++) {
+      const [x, y] = vs[k];
+      const d = l > 0 ? Math.abs((x - x0) * (y1 - y0) - (y - y0) * (x1 - x0)) / l : Math.hypot(x - x0, y - y0);
+      if (d > most) { most = d; at = k; }
+    }
+    if (most > brinkStraightTiles) { keep.add(at); go(a, at); go(at, b); }
+  };
+  go(0, vs.length - 1);
+  return [...keep].sort((a, b) => a - b);
 }
 
 function tileSightState(i, j) {
@@ -1065,60 +1484,11 @@ function tileSightState(i, j) {
   return sight.shown ? tileByte(sight.shown, i, j) : SEEN;
 }
 
-// Where the wolf's sight changes between samples (u0, v0) and (u1, v1) (neighbours, one
-// seen and one not): a grid point, found by halving.
-function sightCrossing(u0, v0, u1, v1) {
-  const f = sight.field;
-  const key = (Math.min(u0, u1) * f.n + Math.min(v0, v1)) * 2 + (u0 === u1 ? 1 : 0);
-  let p = f.crossings.get(key);
-  if (p) return p;
-  const x0 = f.ox + u0 / f.per, y0 = f.oy + v0 / f.per, x1 = f.ox + u1 / f.per, y1 = f.oy + v1 / f.per;
-  const seen0 = f.vis[u0 * f.n + v0] === 1;
-  let lo = 0, hi = 1; // lo on (u0, v0)'s side
-  for (let k = 0; k < sightBisectSteps; k++) {
-    const t = (lo + hi) / 2;
-    if (senses.canSeePoint(f.eye, x0 + (x1 - x0) * t, y0 + (y1 - y0) * t) === seen0) lo = t; else hi = t;
-  }
-  const t = (lo + hi) / 2;
-  p = [x0 + (x1 - x0) * t, y0 + (y1 - y0) * t];
-  p.crossing = true;
-  f.crossings.set(key, p);
-  return p;
-}
-
-// The unseen parts of partly seen tile (i, j): polygons of grid points, one or two a sample
-// cell (marching squares: each cell's unseen corners, and where its sides change).
-function unseenPolygons(i, j) {
-  const f = sight.field, out = [];
-  const u0 = (i - f.ox) * f.per, v0 = (j - f.oy) * f.per;
-  const pt = (u, v) => [f.ox + u / f.per, f.oy + v / f.per];
-  for (let a = 0; a < f.per; a++) for (let b = 0; b < f.per; b++) {
-    const cs = [[u0 + a, v0 + b], [u0 + a + 1, v0 + b], [u0 + a + 1, v0 + b + 1], [u0 + a, v0 + b + 1]];
-    const s = cs.map(([u, v]) => f.vis[u * f.n + v]);
-    const hidden = s.filter(x => !x).length;
-    if (hidden === 0) continue;
-    if (hidden === 4) { out.push(cs.map(c => pt(...c))); continue; }
-    const cross = k => sightCrossing(...cs[k], ...cs[(k + 1) % 4]);
-    // two unseen corners across from each other: one piece if the cell's middle is unseen
-    const saddle = hidden === 2 && s[0] === s[2];
-    if (saddle && senses.canSeePoint(f.eye, ...pt(u0 + a + 0.5, v0 + b + 0.5))) {
-      for (let k = 0; k < 4; k++) if (!s[k]) out.push([cross((k + 3) % 4), pt(...cs[k]), cross(k)]);
-      continue;
-    }
-    const poly = [];
-    for (let k = 0; k < 4; k++) {
-      if (!s[k]) poly.push(pt(...cs[k]));
-      if (s[k] !== s[(k + 1) % 4]) poly.push(cross(k));
-    }
-    out.push(poly);
-  }
-  return out;
-}
-
 // Whether the wolf sees the top of the boulder on tile (i, j) (kept for the field).
 function seesBoulder(i, j) {
   const f = sight.field;
   if (!f) return false;
+  if (!f.boulders) f.boulders = new Map();
   const k = i * sim.gridHeightN + j;
   let v = f.boulders.get(k);
   if (v === undefined) {
@@ -1128,22 +1498,18 @@ function seesBoulder(i, j) {
   return v;
 }
 
-// Whether the wolf sees the undergrowth on tile (i, j): the tile in sight, or split and
-// the ground at its center seen (kept for the field).
+// Whether the wolf sees the undergrowth on tile (i, j): the tile in sight, or crossed and
+// its center in sight.
 function seesUndergrowth(i, j) {
   const st = tileSightState(i, j);
   if (st !== PART) return st === SEEN;
-  const f = sight.field, k = i * sim.gridHeightN + j;
-  let v = f.plants.get(k);
-  if (v === undefined) { v = senses.canSeePoint(f.eye, i + 0.5, j + 0.5); f.plants.set(k, v); }
-  return v;
+  return !!sight.field && fieldSees(sight.field, i + 0.5, j + 0.5);
 }
 
 // Paints undergrowth u, whole (row 0) or its foreground half (row 1), as the sight view
 // shows it: in sight, as it is; seen before, greyed; never seen, not at all.
 function paintUndergrowthSeen(u, row = 0) {
-  const st = tileSightState(u.i, u.j);
-  if (st === BLACK) return;
+  if (!tileByte(sight.seen, u.i, u.j)) return;
   if (seesUndergrowth(u.i, u.j)) { paintUndergrowth(screen, image(undergrowthImage), u, row); return; }
   const img = sightSheet(undergrowthImage, "greyed");
   if (img) paintUndergrowth(screen, img, u, row);
@@ -1186,116 +1552,96 @@ function paintTileShape(t, d, kind) {
     drawCell(t, img, p.col * groundCellW, p.row * groundCellH, groundCellW, groundCellH, d.left, d.top + p.top);
 }
 
-// Clips target t to the unseen part of partly seen tile d: its unseen polygons on its
-// surface; below its front edges (S and E), its sides and any cliff under them; and above
-// its back edges, the grass standing up from them.
-function clipToUnseen(t, d) {
-  const water = d.kind === "water";
-  const proj = (gx, gy) => {
-    const [px, py] = water ? isoProject(gx, gy) : groundProject(gx, gy);
-    return [px * t.A + t.Bx, (py + (water ? waterSurfaceDropPY - d.level * levelHeightPY : 0)) * t.A + t.By];
-  };
-  const drop = ((water ? 1 + d.step : d.pieces.length + 1) * levelHeightPY + groundBaseY) * t.A;
-  const rise = sightTuftsPY * t.A;
-  const ctx = t.ctx;
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  ctx.beginPath();
-  // every piece wound the same way, so together they make their union
-  const addPoly = pts => {
-    let area = 0;
-    for (let k = 0; k < pts.length; k++) {
-      const [x0, y0] = pts[k], [x1, y1] = pts[(k + 1) % pts.length];
-      area += x0 * y1 - x1 * y0;
-    }
-    if (area < 0) pts = [...pts].reverse();
-    ctx.moveTo(...pts[0]);
-    for (let k = 1; k < pts.length; k++) ctx.lineTo(...pts[k]);
-    ctx.closePath();
-  };
-  const eps = 1e-9, fi = d.i + 1, fj = d.j + 1;
-  // points on the tile's edges pushed out a little, to take in the edges of its sprites:
-  // where sight changes, along the line between seen and unseen (from the cell's other
-  // such point), so the shadow's edge stays straight
-  const out = (x, lo) => Math.abs(x - lo) < eps ? lo - sightClipPadTiles : Math.abs(x - lo - 1) < eps ? lo + 1 + sightClipPadTiles : x;
-  const onEdge = p => Math.abs(p[0] - d.i) < eps || Math.abs(p[0] - fi) < eps || Math.abs(p[1] - d.j) < eps || Math.abs(p[1] - fj) < eps;
-  const along = (poly, k) => {
-    const p = poly[k], n = poly.length, q = poly[(k + 1) % n].crossing ? poly[(k + 1) % n] : poly[(k + n - 1) % n];
-    if (!onEdge(p) || !q.crossing) return proj(p[0], p[1]);
-    const dx = p[0] - q[0], dy = p[1] - q[1], m = Math.max(Math.abs(dx), Math.abs(dy));
-    return m > eps ? proj(p[0] + dx / m * sightClipPadTiles, p[1] + dy / m * sightClipPadTiles) : proj(p[0], p[1]);
-  };
-  for (const poly of unseenPolygons(d.i, d.j)) {
-    const pts = poly.map((p, k) => p.crossing ? along(poly, k) : proj(out(p[0], d.i), out(p[1], d.j)));
-    addPoly(pts);
-    for (let k = 0; k < poly.length; k++) {
-      const p = poly[k], q = poly[(k + 1) % poly.length];
-      const on = (c, v) => Math.abs(p[c] - v) < eps && Math.abs(q[c] - v) < eps;
-      const front = on(0, fi) || on(1, fj), back = on(0, d.i) || on(1, d.j);
-      if (!front && !back) continue;
-      const P = pts[k], Q = pts[(k + 1) % poly.length], dy = front ? drop : -rise;
-      addPoly([P, Q, [Q[0], Q[1] + dy], [P[0], P[1] + dy]]);
-    }
-  }
-  ctx.clip();
-}
-
-// Paints tile d's unseen part (state st) from the sight sheets.
+// Paints tile d's part out of sight (state st) from the sight sheets: greyed if seen
+// before, else black; a crossed tile clipped to the region out of sight (unseenShapes).
 function paintUnseenPart(t, d, st) {
   if (st === SEEN) return;
-  if (st === PART) { t.ctx.save(); clipToUnseen(t, d); paintTileShape(t, d, "greyed"); t.ctx.restore(); }
-  else paintTileShape(t, d, st === BLACK ? "black" : "greyed");
+  const kind = tileByte(sight.seen, d.i, d.j) ? "greyed" : "black";
+  if (st !== PART || !sight.field) { paintTileShape(t, d, kind); return; }
+  t.ctx.save();
+  t.ctx.setTransform(t.A, 0, 0, t.A, t.Bx, t.By);
+  const [x0, y0] = [d.left - tileSize, d.top - 4 * tileSize];
+  t.ctx.clip(unseenPath(sight.field, [x0, y0, x0 + 3 * tileSize, y0 + 6 * tileSize]));
+  paintTileShape(t, d, kind);
+  t.ctx.restore();
 }
 
-// Paints chunk c's masks (see MASKS). A layer with no unseen ground has none.
-function paintChunkMasks(c) {
+// Paints chunk c's grey layers (see MASKS) afresh: its water's and its land's.
+function paintChunkGreys(c) {
   const S = sight.maskScale;
-  for (const [layer, isWater] of [["waterMask", true], ["landMask", false]]) {
+  for (const [grey, isWater] of [["waterGrey", true], ["landGrey", false]]) {
     if (!(isWater ? c.hasWater : c.hasLand)) continue;
-    const mine = (i, j) => (sim.getTerrainAt(i, j) === "water") === isWater;
-    let any = false;
-    forEachChunkTile(c, (i, j) => { if (!any && mine(i, j) && tileSightState(i, j) !== SEEN) any = true; });
-    if (!any) { if (c[layer]) c[layer].width = 0; c[layer] = null; continue; }
-    const cv = c[layer] || (c[layer] = document.createElement("canvas"));
+    const cv = c[grey] || (c[grey] = document.createElement("canvas"));
     if (cv.width !== c.w * S || cv.height !== c.h * S) { cv.width = c.w * S; cv.height = c.h * S; }
     const t = { ctx: cv.getContext("2d"), A: S, Bx: -c.x0 * S, By: -c.y0 * S };
     t.ctx.setTransform(1, 0, 0, 1, 0, 0);
     t.ctx.imageSmoothingEnabled = false;
     t.ctx.globalCompositeOperation = "source-over";
     t.ctx.clearRect(0, 0, cv.width, cv.height);
-    let painted = false; // (until something is, there is nothing to clear)
     forEachChunkTile(c, (i, j) => {
-      if (!mine(i, j)) return;
-      const st = tileSightState(i, j);
-      if (st === SEEN && !painted) return;
+      if ((sim.getTerrainAt(i, j) === "water") !== isWater) return;
       const d = describeTile(i, j);
-      if (painted) {
-        t.ctx.globalCompositeOperation = "destination-out";
-        paintTileShape(t, d, "black");
-        t.ctx.globalCompositeOperation = "source-over";
-      }
-      paintUnseenPart(t, d, st);
-      painted = painted || st !== SEEN;
+      t.ctx.globalCompositeOperation = "destination-out";
+      paintTileShape(t, d, "black");
+      t.ctx.globalCompositeOperation = "source-over";
+      paintTileShape(t, d, tileByte(sight.seen, i, j) ? "greyed" : "black");
     });
   }
-  c.maskDirty = false;
+  c.greyDirty = false;
   c.maskScale = S;
+  c.maskDirty = true;
 }
 
-// Brings the masks of the chunks in view up to date: out-of-date ones at most
-// sightMasksAFrame a frame, the nearest the wolf first (the rest on later frames), but a
-// chunk's first, or at a new scale, at once.
+// Paints chunk c's masks (see MASKS): its grey layers afresh if due; a mask: none with
+// all its tiles in sight, its grey layer with none in sight or crossed, else its grey layer
+// clipped to the region out of sight (unseenPath).
+function paintChunkMasks(c) {
+  const S = sight.maskScale;
+  if (c.greyDirty || c.maskScale !== S) paintChunkGreys(c);
+  let path = null;
+  for (const [layer, grey, isWater] of [["waterMask", "waterGrey", true], ["landMask", "landGrey", false]]) {
+    if (!(isWater ? c.hasWater : c.hasLand)) continue;
+    let seen = 0, all = 0, part = false;
+    forEachChunkTile(c, (i, j) => {
+      if ((sim.getTerrainAt(i, j) === "water") !== isWater) return;
+      all++;
+      const st = tileSightState(i, j);
+      if (st === SEEN) seen++; else if (st === PART) part = true;
+    });
+    if (seen === all) { if (c[layer] && c[layer] !== c[grey]) c[layer].width = 0; c[layer] = null; continue; }
+    if (!part && !seen || !sight.field) { if (c[layer] && c[layer] !== c[grey]) c[layer].width = 0; c[layer] = c[grey]; continue; }
+    const cv = c[layer] && c[layer] !== c[grey] ? c[layer] : (c[layer] = document.createElement("canvas"));
+    if (cv.width !== c.w * S || cv.height !== c.h * S) { cv.width = c.w * S; cv.height = c.h * S; }
+    const g = cv.getContext("2d");
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.save();
+    g.setTransform(S, 0, 0, S, -c.x0 * S, -c.y0 * S);
+    g.clip(path || (path = unseenPath(sight.field, [c.x0, c.y0, c.x0 + c.w, c.y0 + c.h])));
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.drawImage(c[grey], 0, 0);
+    g.restore();
+  }
+  c.maskDirty = false;
+}
+
+// Brings the masks of the chunks in view up to date: a chunk's first, or at a new scale, at
+// once; the rest out of date sightMasksAFrame a frame or as many as sightMaskMS allows: those
+// with no mask (all in colour) first, then the longest out of date, then the nearest the
+// wolf (the rest on later frames).
 function updateChunkMasks(chunksShown) {
-  const S = sight.maskScale, w = sim.pcWolf;
-  const stale = [];
+  const S = sight.maskScale, w = sim.pcWolf, stale = [];
   for (const c of chunksShown) {
     if (c.maskScale !== S) paintChunkMasks(c);
-    else if (c.maskDirty) stale.push(c);
+    else if (c.maskDirty || c.greyDirty) stale.push(c);
   }
-  const d2 = c => ((c.i0 + c.i1) / 2 - w.gx) ** 2 + ((c.j0 + c.j1) / 2 - w.gy) ** 2;
-  stale.sort((a, b) => d2(a) - d2(b)).slice(0, sightMasksAFrame).forEach(paintChunkMasks);
+  const d2 = c => ((c.i0 + c.i1) / 2 - w.gx) ** 2 + ((c.j0 + c.j1) / 2 - w.gy) ** 2, t0 = performance.now();
+  // (one with no mask yet, showing all in colour, before one with)
+  const bare = c => c.landMask || c.waterMask ? 1 : 0;
+  stale.sort((a, b) => bare(a) - bare(b) || (a.dirtySince || 0) - (b.dirtySince || 0) || d2(a) - d2(b));
+  for (let k = 0; k < stale.length && (k < sightMasksAFrame || performance.now() - t0 < sightMaskMS); k++) paintChunkMasks(stale[k]);
 }
 
-// Paints chunk c's mask layer (after its terrain layer: see MASKS).
 function paintChunkMask(c, layer) {
   const cv = c[layer], S = sight.maskScale;
   if (!cv) return;
@@ -1348,8 +1694,8 @@ function paintSpriteGreyed(target, r) {
 }
 
 function paintBoulderSeen(b) {
+  if (!tileByte(sight.seen, b.i, b.j)) return;
   const st = tileSightState(b.i, b.j);
-  if (st === BLACK) return;
   if (st === SEEN || seesBoulder(b.i, b.j)) { paintBoulder(screen, b); return; }
   const img = sightSheet(tilesImage, "greyed");
   if (img) drawCell(screen, img, b.col * tileSize, b.row * tileSize, tileSize, tileSize, b.left, b.top);
@@ -1906,6 +2252,16 @@ return {
   // the sight view: whether it is on, and tile (i, j)'s state in it ("seen", "part",
   // "greyed", "black")
   sightViewOn: () => sightViewOn(), tileSight: (i, j) => ["seen", "part", "greyed", "black"][tileSightState(i, j)],
+  // the region in sight (THE REGION IN SIGHT): whether it takes in grid point (x, y); its
+  // eye, radius, floor and shadows; the brinks of the land in the square of tiles (bi, bj)
+  sightSees: (x, y) => !!sight.field && fieldSees(sight.field, x, y),
+  sightField: () => sight.field && { ex: sight.field.ex, ey: sight.field.ey, ez: sight.field.ez, R: sight.field.R, floor: sight.field.floor,
+    shadows: sight.field.shadows.map(s => s.pts.map(p => [...p])) },
+  brinksIn: (bi, bj) => brinksIn(bi, bj).map(b => ({ ...b })), brinkBlockTiles,
+  // for tests: whether the wolf has ever seen tile (i, j); every chunk's masks painted
+  // afresh now (what the view should show, with none left out of date)
+  sightSeen: (i, j) => !!sight.seen && !!tileByte(sight.seen, i, j),
+  refreshSightMasks: () => { for (const c of chunks.values()) if (c.maskScale) paintChunkMasks(c); },
   remembered: () => [...remembered.byUid.keys()], // (REMEMBERED: the uids)
   youngStage: a => sim.youngStage(a), hasAntlers,
   spriteRow, spriteZIndex, frameDataBySpeciesAndPose,

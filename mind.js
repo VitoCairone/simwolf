@@ -42,7 +42,9 @@
 //     whenever it can't see or hear its prey
 //   mates and family (social): courting and mating as above, at any hunger; keeping near
 //     a partner or infants; the young keep near a parent (but one too young to walk stays
-//     put unless it perceives her: PUPS STAY PUT); calling ("come") kin it has lost
+//     put unless it perceives her: PUPS STAY PUT)
+//   a grown wolf not hunting calls ("come") kin it has lost, along with whatever it does
+//     (CALLS)
 //   a hungry infant not perceiving its mother whimpers (along with whatever it does)
 //   anything else wanders (calm)
 // And whatever it decides, if that is to stand still and something has just bumped into
@@ -1226,6 +1228,7 @@ function search(a, m, now) {
 function decideWolf(a, m, now) {
   m.bark = null;
   const intent = wolfChoice(a, m, now);
+  if (!m.bark) callKin(a, m, now);
   return m.bark && intent ? { ...intent, bark: m.bark } : intent; // (a soft bark along with it: BARKING in sim.js)
 }
 
@@ -1271,6 +1274,18 @@ function wolfChoice(a, m, now) {
   // (a mother with infants stays by them rather than prowl)
   const mothering = !a.isMale && a.youngUids.some(uid => m.known.get(uid)?.infant);
   return hunt(a, m, now) || (mothering ? settle(a, m, now) : prowl(a, m, now));
+}
+
+// CALLS: a grown wolf, but while hunting, calls ("come": BARKS) young that could come to it
+// (that walk, not grown), or its mate (neither of them off hunting), that it has lost or not
+// perceived in callAfterS. (It only marks the bark, m.bark, to go along with what it does.)
+const huntingModes = new Set(["chase", "wait", "track", "prowl", "ashore"]);
+function callKin(a, m, now) {
+  if (!sim.isGrown(a) || huntingModes.has(m.mode)) return;
+  const missing = k => k && k.alive && (k.lost || now - k.seenTick > ticks(callAfterS));
+  const mk = a.mateUid !== null && m.known.get(a.mateUid);
+  if (a.youngUids.some(uid => { const k = m.known.get(uid); return k && k.walks === true && k.grown !== true && missing(k); })
+    || mk && missing(mk) && mk.signal?.kind !== "hunt" && a.role?.kind !== "hunt") m.bark = "come";
 }
 
 // FAMILY ROLES: a paired wolf with young of its own still dependent (infants it knows of,
@@ -1842,9 +1857,7 @@ function backToLitter(a, m, now) {
 //   PUPS STAY PUT: one too young to walk goes (crawls) only to a parent it perceives now;
 //     otherwise it lies still where it is, never taking her as lost, and whimpers while
 //     hungry for milk (nurseOrSuckle).
-//   CALLS: a wolf barks "come" (BARKING in sim.js) for young that walk, or for its mate
-//     (unless one of them is off hunting), it has lost or not perceived in callAfterS;
-//     hearing it, they know where it is, and keep near it as kin do.
+//   Hearing a call ("come": CALLS), kin know where the caller is, and keep near it as kin do.
 function social(a, m, now, romanceOnly = false) {
   const live = uid => {
     const k = m.known.get(uid);
@@ -1903,14 +1916,6 @@ function social(a, m, now, romanceOnly = false) {
     if (go) return go;
   }
 
-  // CALLS: it calls ("come": BARKS) young that could come to it, or its mate (not off
-  // hunting), that it has lost or not perceived in callAfterS
-  if (!romanceOnly && a.species === "wolf") {
-    const missing = k => k && k.alive && (k.lost || now - k.seenTick > ticks(callAfterS));
-    const mk = a.mateUid !== null && m.known.get(a.mateUid);
-    if (a.youngUids.some(uid => { const k = m.known.get(uid); return k && k.walks === true && k.grown !== true && missing(k); })
-      || mk && missing(mk) && mk.signal?.kind !== "hunt" && a.role?.kind !== "hunt") m.bark = "come";
-  }
 
   if (a.mateUid !== null) {
     m.court = null;

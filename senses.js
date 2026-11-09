@@ -501,7 +501,7 @@ function attach(theSim) {
 
 return {
   attach, perceive, coverAt, plantsAround, shoresAround, trailsAround, inSight, inView, canSee, canSeeTile, canSeePoint, seesCreature, obstacleInWay, use, sightShare, sky, nightSightShare,
-  sightRadiusTiles, detectTiles, cellTiles, regrid, nearbyCreatures: a => Array.from(nearby(a), n => grid.all[n]), fovDegBySpecies, keepSightS, trailMinStrength, hearingRangeTiles, hearingRangeOf, forgetSight, eyeLevelsBySpecies, sniffTiles, barkHeardTiles, whimperHeardTiles, nowHeard,
+  sightRadiusTiles, detectTiles, cellTiles, regrid, nearbyCreatures: a => Array.from(nearby(a), n => grid.all[n]), fovDegBySpecies, keepSightS, trailMinStrength, hearingRangeTiles, hearingRangeOf, forgetSight, eyeLevelsBySpecies, eyeLevels, nearViewTiles, sniffTiles, barkHeardTiles, whimperHeardTiles, nowHeard,
 };
 
 })();

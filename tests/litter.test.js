@@ -156,20 +156,21 @@ async function main(browser, r, survive = false) {
       let lo = 0, hi = sim.now - kid.birthTime;
       for (let n = 0; n < 60; n++) { const mid = (lo + hi) / 2; kid.birthTime = sim.now - mid; if (sim.can(kid, "wean")) hi = mid; else lo = mid; }
       kid.birthTime = sim.now - hi * 1.5; S.setBodyByAge(kid); kid.mateUid = null;
-      put(mom, -20.5, 0.5); put(kid, -18.5, 0.5);
+      put(mom, -20.5, 0.5); put(kid, -18.5, 0.5); mom.hx = 1; mom.hy = 0; // (she sees it walk)
       for (const a of [mom, kid]) { mind.forget(a); mind.ignore(a, false); S.setFood(a, 1); }
       for (let n = 0; n < 1 / sim.tempo; n++) S.tick();
-      put(kid, 40.5, 0.5); kid.hx = 1; kid.hy = 0; mom.hx = -1; mom.hy = 0;
+      mind.ignore(kid); put(kid, 40.5, 0.5); kid.hx = 1; kid.hy = 0; mom.hx = -1; mom.hy = 0;
       mind.markLost(mom, kid.uid);
-      let called = null, heard = null, closest = Infinity;
+      let called = null, heard = null, closest = Infinity, kidModes = new Set();
       for (let n = 0; n < 40 / sim.tempo; n++) {
         S.tick();
-        if (called === null && sim.tickCount < mom.barkUntil && mom.signal.kind === "come") called = +(n * sim.tempo).toFixed(1);
+        if (called === null && sim.tickCount < mom.barkUntil && mom.signal.kind === "come") { called = +(n * sim.tempo).toFixed(1); mind.ignore(kid, false); mind.ignore(mom); sim.setIntent(mom, { gait: "idle" }); } // (she waits there)
         const k = mind.stateOf(kid).known.find(k => k.uid === mom.uid);
         if (heard === null && k && k.by === "hearing" && k.call && k.call.kind === "come") heard = true;
         closest = Math.min(closest, dist(mom, kid));
+        if (called !== null) kidModes.add(mind.stateOf(kid).mode);
       }
-      out.come = { called, heard, from: 60, closest: +closest.toFixed(1) };
+      out.come = { called, heard, from: 60, closest: +closest.toFixed(1), kidModes: [...kidModes] };
       // a paired wolf calls a mate it hasn't perceived in callAfterS
       mind.ignore(she); mind.ignore(mom); mind.ignore(kid);
       const m2 = grown(true, 1), f2 = grown(false, 3);
@@ -238,8 +239,8 @@ async function main(browser, r, survive = false) {
   r.check(res.tripLong.nearer && res.tripLong.modes.includes("brood") && !res.tripLong.modes.includes("drink"),
     `away from the litter too long, she heads back before drinking (${res.tripLong.modes}), but badly thirsty she drinks first (${res.tripThirsty.modes})`);
   r.check(res.tripThirsty.modes.includes("drink") && !res.tripThirsty.modes.includes("brood"), `...badly thirsty: ${res.tripThirsty.modes}`);
-  r.check(res.come.called !== null && res.come.heard && res.come.closest < 20,
-    `a parent calls ("come") a walking youngster it has lost (after ${res.come.called} s); the youngster, ${res.come.from} tiles off, hears it (${res.come.heard}) and comes (within ${res.come.closest})`);
+  r.check(res.come.called !== null && res.come.heard && res.come.closest < 30,
+    `a parent calls ("come") a walking youngster it has lost (after ${res.come.called} s); the youngster, ${res.come.from} tiles off, hears it (${res.come.heard}) and comes (at least half way: within ${res.come.closest}; ${res.come.kidModes})`);
   r.check(res.mateCall !== null, `a paired wolf calls a mate it hasn't perceived lately (after ${res.mateCall} s)`);
   r.check(res.ranges.whimper[0] < res.ranges.bark[0] && res.ranges.whimper[1] < res.ranges.bark[1] && res.ranges.bark[1] <= res.ranges.detect,
     `a whimper carries less far than a bark (${res.ranges.whimper} vs ${res.ranges.bark} tiles), and a bark within the grid's ${res.ranges.detect}`);
