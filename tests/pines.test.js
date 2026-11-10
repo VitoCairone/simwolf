@@ -15,7 +15,8 @@
 //    tile, its trunk as wide as it blocks sight with a foot the front half of an
 //    ellipse, not drawn under its crown; a tree's crown (over 8 m) always see-through, a
 //    sapling's where it covers a critter (purely drawing), all see-through crowns drawn as
-//    one layer at 65%, so overlapping ones are no more opaque than one
+//    one layer at 65%, so overlapping ones are no more opaque than one, and not over a
+//    critter in front of them
 // Runs sim.js, senses.js and mind.js in Node; then the game in the browser. Saves
 // screenshots to tests/output/pines/.
 
@@ -352,6 +353,44 @@ async function main(browser, r) {
     `a 3 m sapling's crown is drawn as the sheet's (${sapShown}/${s1.pts.length} pixels), but see-through over a deer behind it ` +
     `(${sapChanged}/${s2.pts.length} differ from the sheet's)`);
   await p.evaluate(() => { const d = sim.allCritters.find(a => a.species === "deer" && sim.isGrown(a)); d.gx = d.nextGX = d.gy = d.nextGY = -400; sim.internals.tick(); });
+  // a deer in front of a tree, overlapping its crown on screen (as one can standing on
+  // ground raised in front of a tree): not covered by it
+  const front = await p.evaluate(async ({ i, j, sheets }) => {
+    const S = sim.internals, d = sim.allCritters.find(a => a.species === "deer" && sim.isGrown(a));
+    S.setBoulder(i, j, false);
+    const lv = sim.tileCorners(i, j)[0];
+    S.setTileCorners(i + 1, j, [lv + 8, lv + 8, lv + 8, lv + 8]); // (a ledge)
+    d.gx = d.nextGX = i + 1.1; d.gy = d.nextGY = j + 0.1; d.speed = 0; S.setCritterIdle(d); d.hx = 0; d.hy = -1; // (just in front)
+    S.tick(); animat.redrawTerrain(); animat.render();
+    S.setPine(i, j, 2, 0.6, sim.pineHeightM(14)); animat.redrawTerrain(); animat.render();
+    const pine = animat.pineOf(i, j), c = pine.crown;
+    // the crown's opaque pixels, from the sheet
+    const im = new Image(); im.src = sheets.crowns; await im.decode();
+    const cv = document.createElement("canvas"); cv.width = c[2]; cv.height = c[3];
+    const g = cv.getContext("2d"); g.drawImage(im, c[0], c[1], c[2], c[3], 0, 0, c[2], c[3]);
+    const a = g.getImageData(0, 0, c[2], c[3]).data;
+    const inCrown = (wx, wy) => { const x = Math.floor(wx - (pine.fx - c[4])), y = Math.floor(wy - (pine.fy - c[5]));
+      return x >= 0 && y >= 0 && x < c[2] && y < c[3] && a[(y * c[2] + x) * 4 + 3] === 255; };
+    // screen points about the deer, from its foot up 36 px
+    const pts = [];
+    const [fx, fy] = animat.isoProject(d.gx, d.gy), fh = fy - sim.heightAt(d.gx, d.gy) * 8;
+    for (let y = 1; y < 36; y++) for (let x = -14; x <= 14; x++) pts.push({ w: [fx + x + 0.5, fh - y + 0.5] });
+    for (const q of pts) { q.s = animat.worldToScreen(...q.w); q.crown = inCrown(...q.w); }
+    return { pts };
+  }, { ...spot, sheets });
+  const withTree = await shot(front.pts, "deer-before-tree.png");
+  await p.evaluate(({ i, j }) => { sim.internals.setBoulder(i, j, false); animat.redrawTerrain(); animat.render(); }, spot);
+  const deerOnly = await shot(front.pts, "deer-alone.png");
+  await p.evaluate(() => { const d = sim.allCritters.find(a => a.species === "deer" && sim.isGrown(a)); d.gx = d.nextGX = d.gy = d.nextGY = -400; sim.internals.tick(); animat.render(); });
+  const bare = await shot(front.pts, "neither.png");
+  // (its body: far from the ground's colour, not its see-through shadow)
+  const onDeer = front.pts.map((q, k) => Math.max(...deerOnly[k].map((v, c) => Math.abs(v - bare[k][c]))) > 60);
+  const covered = front.pts.filter((q, k) => onDeer[k] && q.crown);
+  const clean = front.pts.filter((q, k) => onDeer[k] && q.crown && same(withTree[k], deerOnly[k])).length;
+  // (allowing for its idle frame changing between the shots)
+  r.check(covered.length >= 30 && clean >= covered.length * 0.9,
+    `a deer standing on a ledge in front of a tree, overlapping its crown on screen, is drawn untinted by it (${clean}/${covered.length} of its pixels there as with no tree)`);
+  await p.evaluate(({ i, j }) => { const lv = sim.tileCorners(i, j)[0]; sim.internals.setTileCorners(i + 1, j, [lv, lv, lv, lv]); animat.redrawTerrain(); }, spot);
   // its trunk as wide on screen as it blocks sight: a row of it below the crown shows the
   // trunk sheet's pixels; and its foot is an ellipse's front half
   const widths = [];

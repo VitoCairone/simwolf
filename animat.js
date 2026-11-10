@@ -244,7 +244,8 @@ function frameColumn(a, fd, sinceTick = a.poseTick ?? 0) {
 //      so a critter standing on its tile is drawn after it), in depth order; on a tie a
 //      boulder or undergrowth first; a heart over its pair. A critter or corpse on a tile
 //      with undergrowth has the undergrowth's foreground half drawn again over it.
-//   4. the crown layer: the see-through pine crowns, over everything (see PINES)
+//   4. the crown layer: the see-through pine crowns, over everything but the critters in
+//      front of them (see CROWN LAYER)
 //   5. the debug outline
 // In the SIGHT VIEW each chunk's mask of unseen ground goes right after its terrain; the
 // scent marks (SCENT VIEW) go among the land critters, at their tile's back corner's depth
@@ -851,7 +852,9 @@ function clippedTrunk(trunks, img, p) {
 
 // CROWN LAYER: the see-through crowns, drawn whole into a canvas the screen's size, in
 // depth order (a nearer one hiding a farther one), then laid over the whole frame at
-// crownLayerAlpha: where crowns overlap, no more opaque than one.
+// crownLayerAlpha: where crowns overlap, no more opaque than one. A critter or corpse
+// (not a swimmer) cuts itself out of the layer as it is painted, so the crowns behind it
+// (drawn before it) don't cover it, and those in front (drawn after) do.
 const crownLayerAlpha = 0.65;
 let crownLayer = null; // { ctx, A, Bx, By, frame } (as screen; the frame it was cleared for)
 
@@ -867,6 +870,15 @@ function crownLayerFor(target) {
     crownLayer = { ctx: g, A: target.A, Bx: target.Bx, By: target.By, frame: frameCount };
   }
   return crownLayer;
+}
+
+// Cuts sprite r (painted by paint) out of the crown layer drawn so far (the crowns behind
+// it), so only the crowns in front of it, drawn later, cover it.
+function cutFromCrownLayer(paint, r) {
+  if (!crownLayer || crownLayer.frame !== frameCount) return;
+  crownLayer.ctx.globalCompositeOperation = "destination-out";
+  paint(crownLayer, r);
+  crownLayer.ctx.globalCompositeOperation = "source-over";
 }
 
 // Lays this frame's crown layer, if any, over the screen.
@@ -2201,7 +2213,7 @@ function render() {
     const i = Math.floor(gx), j = Math.floor(gy);
     const u = sim.undergrowthShownAt(i, j) ? describeUndergrowth(i, j) : null;
     const front = u && plantPaint(u, 1);
-    items.push([r.z, 1, items.length, front ? () => { paint(screen, r); front(); } : () => paint(screen, r)]);
+    items.push([r.z, 1, items.length, () => { paint(screen, r); if (front) front(); cutFromCrownLayer(paint, r); }]);
   };
   for (const r of recs) if (!r.swim) spriteItem(r, r.critter.gx, r.critter.gy, paintSprite);
   if (sightOn && !showOnlySet) for (const r of rememberedSprites()) if (inView(r.left, r.top, r.w, r.h)) spriteItem(r, r.gx, r.gy, paintSpriteGreyed);
