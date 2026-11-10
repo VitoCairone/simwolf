@@ -53,16 +53,17 @@ async function openGame(browser, { viewport, initScript, initArg, dayNight = fal
 }
 
 // Moves a critter (default: the player's wolf) to the middle of open, dry, level land, at
-// least `radius` tiles from any water, blocked tile (boulder) or change of height, stops
+// least `radius` tiles from any water, boulder, pine or change of height, stops
 // it, and centers the camera on it.
 // Use this before tests that expect land poses (walk/trot/gallop/idle): critters can
 // otherwise wander into water and swim. With clearOthers, every other critter is moved
-// off the map so nothing gets in the way.
-async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = false } = {}) {
-  return page.evaluate(({ who, radius, clearOthers }) => {
+// off the map so nothing gets in the way. With clearTrees, the pines within that many
+// tiles are taken away (a tall one's crown is drawn over ground far behind it).
+async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = false, clearTrees = 0 } = {}) {
+  return page.evaluate(({ who, radius, clearOthers, clearTrees }) => {
     const a = who === "pcWolf" ? sim.pcWolf : eval(who);
-    // dry, unblocked and level with the middle tile (so no step can stop it either)
-    const dry = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.isBlockedTile(i, j);
+    // dry, unblocked, clear of pines and level with the middle tile (so no step can stop it either)
+    const dry = (i, j) => sim.getTerrainAt(i, j) !== "water" && !sim.isBlockedTile(i, j) && !sim.pineAt(i, j);
     const tile = sim.internals.allLandTiles.find(([i, j]) => {
       if (i < radius || j < radius || i >= sim.gridWidthN - radius || j >= sim.gridHeightN - radius) return false;
       const level = sim.tileCorners(i, j)[0];
@@ -75,6 +76,9 @@ async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = 
     if (clearOthers) sim.allCritters.filter(c => c !== a).forEach(c => {
       c.gx = c.gy = c.nextGX = c.nextGY = -500 - c.uid * 3; c.speed = 0; mind.ignore(c); // (beyond smell)
     });
+    for (let di = -clearTrees; di <= clearTrees; di++) for (let dj = -clearTrees; dj <= clearTrees; dj++)
+      if (sim.pineAt(tile[0] + di, tile[1] + dj)) sim.internals.setBoulder(tile[0] + di, tile[1] + dj, false);
+    if (clearTrees) animat.redrawTerrain();
     a.gx = a.nextGX = tile[0] + 0.5; a.gy = a.nextGY = tile[1] + 0.5;
     a.stunnedUntil = 0; // not stunned from before it was moved
     sim.internals.setCritterIdle(a);
@@ -83,7 +87,7 @@ async function moveToOpenLand(page, { who = "pcWolf", radius = 4, clearOthers = 
     if (a === sim.pcWolf) animat.followWolf();
     animat.render();
     return tile;
-  }, { who, radius, clearOthers });
+  }, { who, radius, clearOthers, clearTrees });
 }
 
 // Makes every deer a grown stag (antlered: see ANTLERS in animat.js), for tests of the

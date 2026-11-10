@@ -67,9 +67,10 @@ const use = { lineOfSight: true, hearing: true, smell: true };
 // |dx - dy| up to 20.2 and |dx + dy| up to 25.3, its corner some 22.9 m off).
 const sightRadiusTiles = Math.sqrt((20.2 * 20.2 + 25.3 * 25.3) / 2) + 1; // about 23.9
 const sightRadius2 = sightRadiusTiles * sightRadiusTiles;
-// An adult's eye above the ground under it, in levels (8 px each), from its sprite: the
-// wolf's eye is drawn about 18 px above its ground point (counting the ground's slope to
-// its head), the deer's about 20. A young critter's is lower by its size (sim.youngScales).
+// An adult's eye above the ground under it, in levels (8 px, 0.41 m, each), from its
+// sprite: the wolf's eye is drawn about 18 px above its ground point (counting the
+// ground's slope to its head), the deer's about 20. A young critter's is lower by its size
+// (sim.youngScales).
 const eyeLevelsBySpecies = { wolf: 2.25, deer: 2.5 };
 
 // How much of its daylight sight's area a critter keeps in the dark (estimates). Both have
@@ -330,7 +331,8 @@ function inSniffPatch(di, dj, r) {
 
 // The trails of species in the sniffing patch of critter a (trailSniffTiles) that it can
 // still smell: [{ i, j, ageS, uid }], and for a critter's trail its maker's isMale, grown
-// and paired.
+// and paired; for death scent, meaty (its carcass had meat on it when laid: the scent
+// tells).
 function trailsAround(a, species) {
   if (!use.smell) return [];
   const makers = new Map(); // uid -> { isMale, grown, paired }
@@ -349,7 +351,7 @@ function trailsAround(a, species) {
   for (let i = ci - R; i <= ci + R; i++) for (let j = cj - R; j <= cj + R; j++) {
     if (!inSniffPatch(i - ci, j - cj, r)) continue;
     const s = sim.scentAt(i, j, species);
-    if (s && s.ageS <= maxAgeS) out.push(species === "death" ? { i, j, ageS: s.ageS, uid: s.uid } : { i, j, ageS: s.ageS, uid: s.uid, ...maker(s.uid) });
+    if (s && s.ageS <= maxAgeS) out.push(species === "death" ? { i, j, ageS: s.ageS, uid: s.uid, meaty: s.meaty } : { i, j, ageS: s.ageS, uid: s.uid, ...maker(s.uid) });
   }
   return out;
 }

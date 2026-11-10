@@ -53,9 +53,10 @@ const terrainSeed = 1;
 //   breeding               gestation, how often a female can conceive, the oldest a
 //                          critter is fertile, and the mating act (see BREEDING)
 //   forcedMortalityMaxS, mortalityRatio   how long critters live (see FORCED MORTALITY)
-//   foodFullS, eatKgPerS, grassMaxKg, grassRegrowKgPerS, undergrowthRegrowKgPerS
-//                          how long a full meter lasts (and with it how fast a stomach
-//                          empties), eating, grass and undergrowth (see FOOD and BODY)
+//   foodFullS, eatKgPerS, grassMaxKg, grassRegrowKgPerS, undergrowthRegrowKgPerS,
+//   pineRegrowShare        how long a full meter lasts (and with it how fast a stomach
+//                          empties), eating, grass, undergrowth and pine browse (see FOOD
+//                          and BODY)
 //   infantFoodFullS, nurseFullS   how long an infant's full meter lasts, and how long it
 //                          takes to suckle it full (see BREEDING)
 //   feedingMinS            the least time a meal at a carcass or a suckle takes (see
@@ -197,6 +198,22 @@ const realUndergrowthRegrowKgPerS = { bush: undergrowthMostKg.bush / yearS, flow
 const grassDryYieldMJPerKg = 10;
 const grassCarbsDigested = (grassDryYieldMJPerKg * grassDryShare - grassShares.fatKg * fatMJPerKg
   - grassShares.proteinKg * proteinMJPerKg) / (grassShares.carbsKg * carbsMJPerKg);
+// PINE NEEDLES (estimates): deer browse needles and twig tips up to about 1.5 m (Michigan
+// DNR: white pine a preferred food, jack pine fair, red pine a starvation food). Fresh,
+// about 45% dry matter (pineDryShare): 8% of that protein, 3% fat, 3% minerals, and only
+// about 40% digestible (grass, 65%): ~6 MJ a kg dry. Its carbohydrate is what yields that,
+// digested as grass's is; the fibre counts as water. Within reach: about 0.3 kg dry on a
+// sapling, 0.2 on a small tree's low branches (pineBrowseDryKg); regrowing in a year.
+const pineDryShare = 0.45, pineDryYieldMJPerKg = 6;
+const pineShares = (() => {
+  const fatKg = 0.03 * pineDryShare, proteinKg = 0.08 * pineDryShare, mineralKg = 0.03 * pineDryShare;
+  const carbsKg = (pineDryYieldMJPerKg * pineDryShare - fatKg * fatMJPerKg - proteinKg * proteinMJPerKg) / (carbsMJPerKg * grassCarbsDigested);
+  return withWater({ fatKg, carbsKg, proteinKg, mineralKg });
+})();
+const pineBrowseDryKg = { sapling: 0.3, small: 0.2 };
+// the most browse on a pine, fresh kg, by its size (pineOn): a sapling, a small tree, none on larger
+const pineMostKgBySize = [0, pineBrowseDryKg.sapling / pineDryShare, pineBrowseDryKg.small / pineDryShare, 0, 0, 0, 0, 0, 0];
+const realPineRegrowShare = 1 / yearS; // of its most, a second
 const carbsDigestedBySpecies = { wolf: 1, deer: grassCarbsDigested };
 const milkSharesBySpecies = {
   wolf: withWater({ fatKg: 0.095, carbsKg: 0.035, proteinKg: 0.09, mineralKg: 0.012 }),
@@ -333,6 +350,7 @@ const REALISTIC = {
   grassMaxKg: 0.3 / grassDryShare,
   grassRegrowKgPerS: realGrassRegrowKgPerS,
   undergrowthRegrowKgPerS: realUndergrowthRegrowKgPerS,
+  pineRegrowShare: realPineRegrowShare,
 };
 
 // GAMIFIED shrinks real times by one factor per area: METABOLISM (gameMetabolismScale)
@@ -417,6 +435,7 @@ const GAMIFIED = {
   grassMaxKg: 0.3 / grassDryShare,
   grassRegrowKgPerS: realGrassRegrowKgPerS / gameMetabolismScale,
   undergrowthRegrowKgPerS: Object.fromEntries(Object.entries(realUndergrowthRegrowKgPerS).map(([k, v]) => [k, v / gameMetabolismScale])),
+  pineRegrowShare: realPineRegrowShare / gameMetabolismScale,
 };
 
 const SPEEDS = GAMIFIED;
@@ -462,12 +481,13 @@ function sample(list) {
 // TERRAIN
 // Everything about the ground is a pure function of the tile (no random numbers), built
 // from independent parts:
-//   LAND AND WATER  hydrology.js (terrainMap)  the land's height in metres, and the sea,
+//   LAND AND WATER  hydrology.js (terrainMap)  the land's height in levels, and the sea,
 //                   lakes and rivers on it (worked out once, at load, for the whole map:
 //                   a coarse graph of a few MB; then any tile from the graph near it)
 //   GROUND COVER    groundCoverAt              grass, dirt or stone, on land, by region
 //   UNDERGROWTH     undergrowthAt              low bushes and flowers, on land
 //   OBSTACLES       obstacleAt                 boulders, on land
+//   PINES           pineAt                     pine trees and saplings, on land
 // They are worked out a block at a time and kept for a while (TERRAIN CACHE): getTerrainAt
 // and the rest read the cache.
 const terrainMap = hydrology.makeMap({ seed: terrainSeed, width: gridWidthN, height: gridHeightN });
@@ -737,12 +757,13 @@ const wallGapAbove = 0.75;    // larger: fewer, shorter gaps
 const loneBoulderAreaAbove = 0.55; // lone boulders only where this area field is above...
 const loneBoulderAbove = 0.8;      // ...and there, larger: fewer of them
 
-// "boulder" if one stands on the tile containing (gx, gy), else null.
+// What blocks the way on the tile containing (gx, gy): "boulder", "pine" (a tree's trunk:
+// see PINES; a sapling blocks nothing), else null.
 function obstacleAt(gx, gy) {
   const i = Math.floor(gx), j = Math.floor(gy);
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return null;
-  const b = terrainBlock(i, j);
-  return b.boulder[(i - b.i0) * terrainBlockTiles + j - b.j0] ? "boulder" : null;
+  const b = terrainBlock(i, j), k = (i - b.i0) * terrainBlockTiles + j - b.j0;
+  return b.boulder[k] ? "boulder" : (b.pine[k] & pineSizeBits) > 1 ? "pine" : null;
 }
 
 // BOULDER FOOTPRINTS: each boulder is one of the artist's rocks (boulderRocks, measured
@@ -784,10 +805,13 @@ function boulderRockAt(i, j) {
   return set[((h ^ (h >>> 15)) >>> 0) % set.length];
 }
 
-// The span [lo, hi] of the obstacle on tile (i, j) across a line of sight heading dir (see
-// BOULDER FOOTPRINTS); null for none.
+// The span [lo, hi] of what stands on tile (i, j) across a line of sight heading dir (see
+// BOULDER FOOTPRINTS; a pine's trunk or foliage, PINES); null for none.
 function obstacleAcross(i, j, dir) {
-  return obstacleAt(i, j) ? boulderRocks[boulderRockAt(i, j)].across[dir] : null;
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return null;
+  const b = terrainBlock(i, j), k = (i - b.i0) * terrainBlockTiles + j - b.j0;
+  if (b.boulder[k]) return boulderRocks[boulderRockAt(i, j)].across[dir];
+  return b.pine[k] ? pineSpans[b.pineSpan[k]] : null;
 }
 
 function isBoulderSite(x, y) {
@@ -807,37 +831,194 @@ function isBoulderSite(x, y) {
   return jag(x / 2.9) + jag(y / 3.3) + jag((x + y) / 4.7) + jag((x - y) / 5.3) > 4 * loneBoulderAbove;
 }
 
-// Whether no critter can enter the tile containing (gx, gy).
-// For tests: put a boulder on tile (i, j), or take it away.
+// For tests: put a boulder on tile (i, j), or (on false) clear it of boulder and pine.
 function setBoulder(i, j, on = true) {
-  const b = terrainBlock(i, j);
-  b.boulder[(i - b.i0) * terrainBlockTiles + j - b.j0] = on ? 1 : 0;
+  const b = terrainBlock(i, j), k = (i - b.i0) * terrainBlockTiles + j - b.j0;
+  b.boulder[k] = on ? 1 : 0;
+  b.pine[k] = 0; b.pineSpan[k] = 0;
+  b.tall[k] = on ? boulderHeightLevels * tallPerLevel : 0;
 }
 
+// Whether no critter can enter the tile containing (gx, gy).
 function isBlockedTile(gx, gy) {
   return obstacleAt(gx, gy) !== null;
 }
 
-// How high each kind of obstacle stands above the ground at its tile's center, in levels
-// (see TERRAIN HEIGHT). The boulders' rocks are drawn 1.5 to 3 levels tall (12-25 px);
-// taken as 3, above a wolf's or a deer's eye, so a boulder hides what is behind it.
-const obstacleHeightLevels = { boulder: 3 };
+// How high a boulder stands above the ground at its tile's center, in levels (see TERRAIN
+// HEIGHT). The boulders' rocks are drawn 1.5 to 3 levels tall (12-25 px: 0.6-1.2 m); taken
+// as 3, above a wolf's or a deer's eye, so a boulder hides what is behind it. (A pine's is
+// its own: PINES.) Kept by tile in a block's `tall`, in 1/tallPerLevel levels.
+const boulderHeightLevels = 3;
+const tallPerLevel = 2;
+const levelsPerMetre = Math.sqrt(6); // (see TERRAIN HEIGHT: 19.6 px / 8 px)
 
-// How high the obstacle on tile (i, j) stands above its ground, in levels (0: none).
+// How high what stands on tile (i, j) (a boulder, a pine or a sapling) rises above its
+// ground, in levels (0: nothing).
 function obstacleHeightAt(i, j) {
-  const o = obstacleAt(i, j);
-  return o ? obstacleHeightLevels[o] : 0;
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 0;
+  const b = terrainBlock(i, j);
+  return b.tall[(i - b.i0) * terrainBlockTiles + j - b.j0] / tallPerLevel;
+}
+
+// PINES: pine forests in some parts of the map, open stands and lone pines in some others,
+// none elsewhere; on land, never on a boulder's tile, fewer on stone. Figures (Arizona
+// Cooperative Extension az1397, ponderosa pine; Michigan DNR, deer foods; the Forest
+// Vegetation Simulator's Lake States variant, FVS-LS, eastern white pine):
+//   Density: a forest's heart pineForestPerTile (600 a hectare, a tile being a square
+//   metre: a closed forest, as today's unthinned stands are, far denser than the guide's
+//   target), thinning out to its edge; open stands pineStandPerTile
+//   (120 a hectare, as a restored ponderosa forest's 27-57 trees an acre over 4"), lone
+//   pines pineLonePerTile. Trees keep apart: at most one in each pineCellTiles square, and
+//   never two on neighbouring tiles, so a critter can always pass between two trunks.
+//   Sizes: an uneven-aged stand has many small trees and few large (its "reverse J"):
+//   trees an acre in the guide's 4" diameter classes (DBH, at breast height) 7.3, 5.9,
+//   3.9, 3.1, 2.6, 2.1, 1.7 (pineClasses, in cm); saplings (under 10 cm) besides, more
+//   of them toward a forest's edge and in open stands (pineSaplingShare).
+//   Height (pineHeightM): FVS-LS's for white pine (Curtis-Arney): H = 4.5 + 2108.8442
+//   e^(-5.6595 D^-0.1856) ft, D the DBH in inches: ~9 m at 10 cm, ~23 m at 40, ~33 m at
+//   75. A sapling 0.6-3 m.
+//   Crown (pineCrownRadiusM): its largest width, by FVS-LS's for white pine: grown in a
+//   forest (Bechtold 2003), 0.3914 + 0.9923 D + 0.1080 CR ft (CR: the live crown, as a
+//   percent of the height: pineCrownRatio's forest), at most 45 ft: ~1.3 m in radius at
+//   10 cm, ~3.1 at 40, ~5.2 at 75; grown in the open (Ek 1974: lone pines and open stands),
+//   1.62 + 3.197 D^0.7981 ft, at most 58 ft: ~1.7, ~4.6, ~7.5 m. A sapling's: its foliage.
+//   Crowns block no sight (a sapling's and a small tree's foliage aside); animat.js draws
+//   them, at real size.
+// A tree's trunk blocks the way (obstacleAt "pine") and sight, as wide as its DBH; a small
+// tree (the first class) keeps its low branches, so sight is blocked as wide as its
+// foliage. A sapling blocks only sight, its foliage, up to its height: a deer sees over a
+// short one, and a wolf lying behind it is hidden. In a block, by tile: pine (0 none; its
+// size: 1 a sapling, 2.. a tree, by pineClasses + 2; plus pineOpenGrown if grown outside a
+// forest), its span (pineSpan, an index into pineSpans:
+// half its width in cm) and its height (tall, in levels). Deer browse the needles in reach (PINE
+// BROWSE).
+const pineCellTiles = 3;
+const pineForestPerTile = 0.06, pineStandPerTile = 0.012, pineLonePerTile = 0.0015;
+const pineForestShare = 0.18;   // of the land: forest
+const pineForestEdge = 0.05;    // of the forest field's range: from its edge to its heart
+const pineParkShare = 0.45;     // of the land outside forests: where stands and lone pines grow
+const pineStandShare = 0.25;    // of that: stands
+const pineOnCover = { grass: 1, dirt: 1, stone: 0.3 };
+const pineClasses = [ // DBH, cm: [lo, hi], and trees an acre
+  [10, 18, 7.3], [20, 28, 5.9], [30, 38, 3.9], [41, 48, 3.1], [51, 58, 2.6], [61, 69, 2.1], [71, 79, 1.7],
+];
+const pineClassTotal = pineClasses.reduce((t, c) => t + c[2], 0);
+const pineSaplingShare = { heart: 0.25, edge: 0.6 };
+const pineFoliageHalfM = 0.6;   // a small tree's foliage, or the widest sapling's
+const pineSpans = Array.from({ length: 256 }, (_, cm) => [-cm / 100, cm / 100]);
+const pineOpenGrown = 16, pineSizeBits = 15;
+const pineCrownRatio = { forest: 0.4, open: 0.7 }; // (estimates)
+const footM = 0.3048, inchCm = 2.54;
+
+// A pine's height, m, by its DBH, cm (see PINES).
+function pineHeightM(dbhCm) {
+  return (4.5 + 2108.8442 * Math.exp(-5.6595 * Math.pow(dbhCm / inchCm, -0.1856))) * footM;
+}
+
+// A pine's crown at its widest, its radius, m, by its DBH, cm, and whether it grew in the
+// open (see PINES).
+function pineCrownRadiusM(dbhCm, open) {
+  const d = dbhCm / inchCm;
+  const ft = open ? Math.min(58, 1.62 + 3.197 * Math.pow(d, 0.7981))
+    : Math.min(45, 0.3914 + 0.9923 * d + 0.1080 * pineCrownRatio.forest * 100);
+  return ft * footM / 2;
+}
+const pineSeed = 141;
+
+// The share of tiles a pine stands on near tile (x, y) of cover `cover`, and how far into
+// a forest it is (0 outside or at its edge, 1 at its heart).
+function pineDensityAt(x, y, cover) {
+  const on = pineOnCover[cover];
+  if (!on) return [0, 0];
+  const f = noiseField(x / 600, y / 600, pineSeed, 0.6);
+  const forest = (f - pineForestEdgeAt) / (pineForestHeartAt - pineForestEdgeAt);
+  if (forest > 0) return [on * Math.max(pineStandPerTile, pineForestPerTile * Math.min(1, forest)), Math.min(1, forest)];
+  if (noiseField(x / 900, y / 900, pineSeed + 2, 0) < pineParkAt) return [0, 0];
+  return [on * (noiseField(x / 70, y / 70, pineSeed + 4, 0.3) > pineStandAt ? pineStandPerTile : pineLonePerTile), 0];
+}
+const pineForestEdgeAt = noiseQuantile(2, 1 - pineForestShare);
+const pineForestHeartAt = pineForestEdgeAt + pineForestEdge;
+const pineParkAt = noiseQuantile(0, 1 - pineParkShare);
+const pineStandAt = noiseQuantile(1, 1 - pineStandShare);
+
+// The tile of pine cell (ci, cj)'s one place a pine may stand: [i, j].
+function pineSpotIn(ci, cj) {
+  const h = hashU(ci, cj, pineSeed + 6);
+  return [ci * pineCellTiles + h % pineCellTiles, cj * pineCellTiles + (h >>> 8) % pineCellTiles];
+}
+
+// Whether pine cell (ci, cj)'s spot is kept: not beside another cell's that comes first.
+function pineSpotKeptIn(ci, cj) {
+  const [x, y] = pineSpotIn(ci, cj), mine = hashU(ci, cj, pineSeed + 7);
+  for (let a = ci - 1; a <= ci + 1; a++) for (let c = cj - 1; c <= cj + 1; c++) {
+    if (a === ci && c === cj) continue;
+    const [oi, oj] = pineSpotIn(a, c);
+    if (Math.abs(oi - x) <= 1 && Math.abs(oj - y) <= 1 && hashU(a, c, pineSeed + 7) < mine) return false;
+  }
+  return true;
+}
+// the share of spots kept (sampled once, at load)
+const pineSpotKept = (() => {
+  let kept = 0;
+  for (let k = 0; k < 4096; k++) kept += pineSpotKeptIn(k, 7 * k + 3);
+  return kept / 4096;
+})();
+
+// The pine on land tile (x, y) of cover `cover`: [pine, span, tall] as a block keeps them
+// (see PINES), or null. Most tiles are decided by the first test.
+function pineIn(x, y, cover) {
+  const ci = Math.floor(x / pineCellTiles), cj = Math.floor(y / pineCellTiles);
+  const [si, sj] = pineSpotIn(ci, cj);
+  if (si !== x || sj !== y || !pineSpotKeptIn(ci, cj)) return null;
+  const [density, heart] = pineDensityAt(x, y, cover);
+  if (hash01(x, y, pineSeed + 8) >= density * pineCellTiles * pineCellTiles / pineSpotKept) return null;
+  const saplings = pineSaplingShare.edge + (pineSaplingShare.heart - pineSaplingShare.edge) * heart;
+  const u = hash01(x, y, pineSeed + 9), v = hash01(x, y, pineSeed + 10);
+  if (u < saplings) {
+    const h = 0.6 + 2.4 * v;
+    const half = Math.min(pineFoliageHalfM, 0.15 + 0.15 * h);
+    return [1 + (heart ? 0 : pineOpenGrown), Math.round(half * 100), Math.round(h * levelsPerMetre * tallPerLevel)];
+  }
+  let w = (u - saplings) / (1 - saplings) * pineClassTotal, k = 0;
+  while (k < pineClasses.length - 1 && w >= pineClasses[k][2]) w -= pineClasses[k++][2];
+  const dbh = pineClasses[k][0] + (pineClasses[k][1] - pineClasses[k][0]) * v;
+  const half = k === 0 ? pineFoliageHalfM : dbh / 200;
+  return [k + 2 + (heart ? 0 : pineOpenGrown), Math.round(half * 100), Math.round(pineHeightM(dbh) * levelsPerMetre * tallPerLevel)];
+}
+
+// What grows on the tile containing (gx, gy): "sapling", "tree", or null.
+function pineAt(gx, gy) {
+  const i = Math.floor(gx), j = Math.floor(gy);
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return null;
+  const b = terrainBlock(i, j), p = b.pine[(i - b.i0) * terrainBlockTiles + j - b.j0] & pineSizeBits;
+  return p === 0 ? null : p === 1 ? "sapling" : "tree";
+}
+
+// The pine on tile (i, j) as a block keeps it: { size (1 a sapling, 2.. a tree's class + 2),
+// open (grown in the open), halfM (half its width blocking sight), heightM }, or null.
+function pineOn(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return null;
+  const b = terrainBlock(i, j), k = (i - b.i0) * terrainBlockTiles + j - b.j0, p = b.pine[k];
+  return p ? { size: p & pineSizeBits, open: (p & pineOpenGrown) !== 0, halfM: b.pineSpan[k] / 100, heightM: b.tall[k] / tallPerLevel / levelsPerMetre } : null;
+}
+
+// For tests: put a pine of size `size` (as pineOn's) on tile (i, j), clearing a boulder.
+function setPine(i, j, size, halfM, heightM, open = false) {
+  const b = terrainBlock(i, j), k = (i - b.i0) * terrainBlockTiles + j - b.j0;
+  b.boulder[k] = 0; b.plant[k] = 0;
+  b.pine[k] = size + (open ? pineOpenGrown : 0); b.pineSpan[k] = Math.round(halfM * 100); b.tall[k] = Math.round(heightM * levelsPerMetre * tallPerLevel);
 }
 
 // TERRAIN HEIGHT, in whole levels at tile corners; a tile's surface blends its four
-// corners bilinearly. One level is a metre (drawn one block riser high: see animat.js),
-// so a vertex is at the floor of the land's height there (terrainMap). Water is flat, at
-// the floor of its surface's height (waterLevelAt): the sea at 0, a lake at its level, a
-// river falling from tile to tile; a vertex touching water is at the lowest water it
-// touches. A tile whose corners would differ by 2 levels or more becomes a cliff tile:
-// its corners are squeezed into [m, m + 1] (m: the floor of their average), so a cliff
-// face stands between it and its neighbours. A critter can step up or down at most
-// maxStepLevels.
+// corners bilinearly. A level is drawn one block riser high (8 px: see animat.js); a metre
+// up is drawn 19.6 px (the tiles' own projection: a metre across a tile's diagonal is
+// 22.6 px, seen from 30 degrees up), so a level is 1/levelsPerMetre m (0.41 m). A vertex
+// is at the floor of the land's height there (terrainMap). Water is flat, at the floor of
+// its surface's height (waterLevelAt): the sea at 0, a lake at its level, a river falling
+// from tile to tile; a vertex touching water is at the lowest water it touches. A tile
+// whose corners would differ by 2 levels or more becomes a cliff tile: its corners are
+// squeezed into [m, m + 1] (m: the floor of their average), so a cliff face stands
+// between it and its neighbours. A critter can step up or down at most maxStepLevels.
 const maxStepLevels = 1.5;
 
 // TERRAIN CACHE: the terrain in blocks of terrainBlockTiles square, each worked out the
@@ -845,8 +1026,8 @@ const maxStepLevels = 1.5;
 // and the least recently used dropped beyond terrainBlocksKept (so memory stays bounded
 // however far critters and the camera roam). A block holds, by tile: its kind (an index
 // into terrainKinds), water's kind (into waterKinds) and level, its corners' levels and
-// whether a boulder stands on it, its undergrowth (into undergrowthKinds); and its lowest
-// and highest corner.
+// whether a boulder stands on it, its undergrowth (into undergrowthKinds), its pine (see
+// PINES), how tall what stands on it is (tall); and its lowest and highest corner.
 const terrainBlockTiles = 64;
 const terrainBlocksKept = 800;
 const terrainKinds = ["grass", "dirt", "stone", "water"];
@@ -901,6 +1082,7 @@ function makeTerrainBlock(bi, bj) {
   }
   const kind = new Uint8Array(B * B), waterKind = new Uint8Array(B * B), waterLevel = new Int16Array(B * B);
   const corners = new Int16Array(B * B * 4), boulder = new Uint8Array(B * B), plant = new Uint8Array(B * B);
+  const pine = new Uint8Array(B * B), pineSpan = new Uint8Array(B * B), tall = new Uint8Array(B * B);
   const near = regionsNear(i0, j0, B);
   let minLevel = Infinity, maxLevel = -Infinity;
   for (let a = 0; a < B; a++) for (let c = 0; c < B; c++) {
@@ -914,7 +1096,10 @@ function makeTerrainBlock(bi, bj) {
       kind[k] = terrainKinds.indexOf(cover);
       waterLevel[k] = noWater;
       boulder[k] = isBoulderSite(i, j) ? 1 : 0;
-      plant[k] = boulder[k] ? 0 : undergrowthIn(r, i, j, cover);
+      const p = boulder[k] ? null : pineIn(i, j, cover);
+      if (p) [pine[k], pineSpan[k], tall[k]] = p;
+      else if (boulder[k]) tall[k] = boulderHeightLevels * tallPerLevel;
+      plant[k] = boulder[k] || p ? 0 : undergrowthIn(r, i, j, cover);
       cs = [vertex[a * m + c], vertex[(a + 1) * m + c], vertex[a * m + c + 1], vertex[(a + 1) * m + c + 1]];
       if (Math.max(...cs) - Math.min(...cs) >= 2) {
         const mid = Math.floor((cs[0] + cs[1] + cs[2] + cs[3]) / 4);
@@ -924,7 +1109,7 @@ function makeTerrainBlock(bi, bj) {
     corners.set(cs, k * 4);
     minLevel = Math.min(minLevel, ...cs); maxLevel = Math.max(maxLevel, ...cs);
   }
-  return { bi, bj, i0, j0, kind, waterKind, waterLevel, corners, boulder, plant, minLevel, maxLevel, used: 0 };
+  return { bi, bj, i0, j0, kind, waterKind, waterLevel, corners, boulder, plant, pine, pineSpan, tall, minLevel, maxLevel, used: 0 };
 }
 
 // The kind of water on tile (i, j) ("sea", "lake", "river"), or null on land. Off the
@@ -1440,8 +1625,8 @@ function burn(b, mj) {
 //
 // GRASS: every grass tile holds grass, fresh kg (grassShares): at most SPEEDS.grassMaxKg
 // (under a boulder, rockGrassShare of that: grassMostAt), starting at grassStartShare of
-// that, regrowing at SPEEDS.grassRegrowKgPerS (plants, grass and undergrowth, are the
-// only makers of biomass). Its HEIGHT (bare, short, medium, tall) is for the view; tiles
+// that, regrowing at SPEEDS.grassRegrowKgPerS (plants, grass, undergrowth and pines, are
+// the only makers of biomass). Its HEIGHT (bare, short, medium, tall) is for the view; tiles
 // whose height changes are logged (grassChangesSince) so the view redraws only those. It
 // grows on every tile at once, and is kept only where grazed (KEPT ONLY WHERE GRAZED).
 // UNDERGROWTH FOOD: each low bush or flowers (see UNDERGROWTH) holds plant mass of its
@@ -1449,11 +1634,18 @@ function burn(b, mj) {
 // SPEEDS.undergrowthRegrowKgPerS (it too makes biomass). A deer eats it before the grass
 // on its tile. Kept only where eaten (undergrowthTouched, by tile index: its kg and when),
 // until grown back; flowers eaten below flowersShownFrom of their most aren't drawn.
-// PLANT FOOD: a tile's grass and undergrowth together (plantFoodAt, plantMostAt), what a
-// grazing deer looks for.
+// PINE BROWSE: the needles in a deer's reach on a sapling or a small tree (see PINE
+// NEEDLES), fresh kg (pineShares): at most pineMostKgBySize, as it starts, regrowing at
+// SPEEDS.pineRegrowShare of that a second. Kept only where eaten (pineTouched), as
+// undergrowth. A deer strips needles at the dry matter rate it crops grass (so about half
+// as much fresh: pineBiteShare), eating them last on its tile: a sapling's from on its
+// tile, a small tree's from beside it (as grass under a boulder).
+// PLANT FOOD: a tile's grass, undergrowth and pine browse together (plantFoodAt,
+// plantMostAt), what a grazing deer looks for.
 // UNDER A BOULDER: a deer eats grass under a boulder it stands right beside
 // (inGrassReach), turning to face it: the EAT intent with `at`, the boulder's tile. It
-// eats at the same rate, so the little there is goes in a third of the time.
+// eats at the same rate, so the little there is goes in a third of the time. So too on a
+// tree's tile (a blocked tile like a boulder's): its grass, and a small tree's needles.
 //
 // CARCASSES: a dead deer's whole biomass (its body, stomach and womb) becomes its carcass:
 // its bone (all its minerals, with bone's share of the rest: boneShares), and its soft
@@ -1538,6 +1730,7 @@ function grassNow(e) {
 function initGrass() {
   grassTouched.clear();
   undergrowthTouched.clear();
+  pineTouched.clear();
   plantClockS = 0;
   grassGrownKg = 0;
   grassChangesAll();
@@ -1679,21 +1872,66 @@ function undergrowthTotalKg() {
   return kg;
 }
 
+const pineTouched = new Map();
+const pineBiteShare = grassDryShare / pineDryShare;
+
+// The most pine browse tile (i, j) can hold, fresh kg.
+function pineMostAt(i, j) {
+  const p = pineOn(i, j);
+  return p ? pineMostKgBySize[p.size] : 0;
+}
+
+// The pine browse on tile (i, j), fresh kg.
+function pineFoodAt(i, j) {
+  const most = pineMostAt(i, j);
+  if (!most) return 0;
+  const e = pineTouched.get(i * gridHeightN + j);
+  return e ? Math.min(most, e.kg + most * SPEEDS.pineRegrowShare * (plantClockS - e.at)) : most;
+}
+
+// Sets the pine browse on tile (i, j) to kg (it has some): how much it changed by.
+function setPineKg(i, j, kg) {
+  const most = pineMostAt(i, j), before = pineFoodAt(i, j);
+  kg = Math.max(0, Math.min(most, kg));
+  pineTouched.set(i * gridHeightN + j, { kg, at: plantClockS, most });
+  return kg - before;
+}
+
+// Pine browse regrows to the plant clock (after growUndergrowth moves it on): the ledger
+// counts it; what has grown back is forgotten.
+function growPines() {
+  let grown = 0;
+  for (const [k, e] of pineTouched) {
+    const now = Math.min(e.most, e.kg + e.most * SPEEDS.pineRegrowShare * (plantClockS - e.at));
+    grown += now - e.kg;
+    if (now >= e.most) pineTouched.delete(k);
+    else { e.kg = now; e.at = plantClockS; }
+  }
+  biomassLedger.grownKg += grown;
+}
+
+// The world's pine browse as it differs from untouched, kg.
+function pineTotalKg() {
+  let kg = 0;
+  for (const e of pineTouched.values()) kg += Math.min(e.most, e.kg + e.most * SPEEDS.pineRegrowShare * (plantClockS - e.at)) - e.most;
+  return kg;
+}
+
 // Whether the undergrowth on tile (i, j) shows (flowers eaten nearly bare don't).
 function undergrowthShownAt(i, j) {
   const u = undergrowthAt(i, j);
   return u === "bush" || (u === "flowers" && undergrowthFoodAt(i, j) >= flowersShownFrom * undergrowthMostKg.flowers);
 }
 
-// PLANT FOOD on tile (i, j): its grass and undergrowth, fresh kg.
+// PLANT FOOD on tile (i, j): its grass, undergrowth and pine browse, fresh kg.
 function plantFoodAt(i, j) {
-  return grassFoodAt(i, j) + undergrowthFoodAt(i, j);
+  return grassFoodAt(i, j) + undergrowthFoodAt(i, j) + pineFoodAt(i, j);
 }
 
 // The most plant food tile (i, j) can hold, fresh kg.
 function plantMostAt(i, j) {
   const u = undergrowthAt(i, j);
-  return grassMostAt(i, j) + (u ? undergrowthMostKg[u] : 0);
+  return grassMostAt(i, j) + (u ? undergrowthMostKg[u] : 0) + pineMostAt(i, j);
 }
 
 // The nearest corpse within a's reach with meat left, or null.
@@ -1733,6 +1971,12 @@ function eat(a) {
     if (take > 0) {
       const taken = -setGrassKg(i * gridHeightN + j, kg - take);
       for (const k of NUTRIENTS) a.stomach[k] += grassShares[k] * taken;
+      bite -= taken;
+    }
+    const pkg = pineFoodAt(i, j), ptake = Math.min(bite * pineBiteShare, pkg);
+    if (ptake > 0) {
+      const taken = -setPineKg(i, j, pkg - ptake);
+      for (const k of NUTRIENTS) a.stomach[k] += pineShares[k] * taken;
     }
     return;
   }
@@ -2073,7 +2317,7 @@ function growthKgPerS(a) {
 // All the biomass in the world: grass, undergrowth, critters, corpses and carcasses, kg
 // (plants as they differ from untouched).
 function worldBiomassKg() {
-  let kg = grassTotalKg() + undergrowthTotalKg();
+  let kg = grassTotalKg() + undergrowthTotalKg() + pineTotalKg();
   for (const a of allCritters.concat(allCorpses)) {
     for (const b of [a.tissues, a.stomach, a.womb]) kg += biomassKg(b);
     if (a.carcass) kg += carcassMeatKg(a) + biomassKg(a.carcass.bones);
@@ -2144,7 +2388,9 @@ function updateClock() {
 // pose is done), and again over the whole circle every deathScentRenewS while the corpse
 // lasts. Each tile's mark is
 // made older by deathScentAgeSPerTile for each tile from the carcass, so the scent is
-// always stronger toward it (a fresher mark is never replaced by an older one).
+// always stronger toward it (a fresher mark is never replaced by an older one). A mark
+// tells whether the carcass had meat on it when laid; once it has none, it lays its whole
+// circle afresh at once (so the ground about it soon tells it is bare).
 // WIND: one breeze over the whole map, blowing toward the unit vector (windX, windY); every
 // SPEEDS.windChangeEveryS it turns by up to windTurnMaxRad either way. (No scent rides
 // it for now: see SMELL in senses.js.)
@@ -2194,11 +2440,13 @@ function markScent() {
 }
 
 // Death scent from every carcass (see DEATH SCENT), each tick: its growing circle, and its
-// renewal when due. c.deathScent: { since, next (the disk's index it has reached), renewedAt }.
+// renewal when due. c.deathScent: { since, next (the disk's index it has reached), renewedAt,
+// meaty (whether it had meat at its last marks) }.
 function spreadDeathScent() {
   for (const c of allCorpses) {
     if (!c.carcass || c.morsel) continue;
-    const ds = c.deathScent || (c.deathScent = { since: c.deathTime, next: 0, renewedAt: c.deathTime });
+    const meaty = carcassMeatKg(c) > 0;
+    const ds = c.deathScent || (c.deathScent = { since: c.deathTime, next: 0, renewedAt: c.deathTime, meaty });
     const ci = Math.floor(c.gx), cj = Math.floor(c.gy);
     const lay = (di, dj, d) => {
       const i = ci + di, j = cj + dj;
@@ -2206,22 +2454,24 @@ function spreadDeathScent() {
       const k = i * gridHeightN + j, at = g_now - d * deathScentAgeSPerTile, old = scentMarks.death.get(k);
       if (old && old[0] >= at) return;
       scentMarks.death.delete(k); // (in order of marking: see markScent)
-      scentMarks.death.set(k, [at, c.uid]);
+      scentMarks.death.set(k, [at, c.uid, meaty]);
     };
     const r = deathScentTiles * Math.min(1, (g_now - ds.since) / deathScentGrowS);
     while (ds.next < deathScentDisk.length && deathScentDisk[ds.next][2] <= r) lay(...deathScentDisk[ds.next++]);
-    if (g_now - ds.renewedAt >= deathScentRenewS) {
-      ds.renewedAt = g_now;
+    if (g_now - ds.renewedAt >= deathScentRenewS || ds.meaty && !meaty) {
+      ds.renewedAt = g_now; ds.meaty = meaty;
       for (const t of deathScentDisk) lay(...t);
     }
   }
 }
 
-// The latest scent of species on tile (i, j): { ageS, uid }, or null if none.
+// The latest scent of species on tile (i, j): { ageS, uid }, and for death scent meaty
+// (whether its carcass had meat on it when laid), or null if none.
 function scentAt(i, j, species) {
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return null;
   const m = scentMarks[species].get(i * gridHeightN + j);
-  return m ? { ageS: g_now - m[0], uid: m[1] } : null;
+  if (!m) return null;
+  return species === "death" ? { ageS: g_now - m[0], uid: m[1], meaty: m[2] !== false } : { ageS: g_now - m[0], uid: m[1] };
 }
 
 function shiftWind() {
@@ -3051,6 +3301,7 @@ function updateAllCritters() {
   if (g_tick % grassGrowEveryTicks === 0 && clock.sunUp) {
     growGrass(grassGrowEveryTicks * tempo / meanDaylightShare);
     growUndergrowth(grassGrowEveryTicks * tempo / meanDaylightShare);
+    growPines();
   }
 }
 
@@ -3425,7 +3676,8 @@ return {
   speedStep, // (species, speed in tiles a tick): the most it changes a tick (SPEED CHANGES)
   pivotCos,
   isBlockedTile, isLandTile, isWaterAt, canStepTo, mayEnterWater, obstacleHeightAt, sightHeightAt, centerHeightAt, isLiveCritter,
-  boulderRockAt, obstacleAcross, boulderRocks,
+  boulderRockAt, obstacleAcross, boulderRocks, levelsPerMetre, pineAt, pineOn, pineHeightM, pineCrownRadiusM, pineCrownRatio, pineClasses,
+  _pineZone(i, j) { const c = getTerrainAt(i, j); const [d, h] = pineDensityAt(i, j, c); return d === 0 ? 'none' : h >= 1 ? 'heart' : h > 0 ? 'forestEdge' : d > 0.005 ? 'stand' : 'lone'; },
   // scent and wind
   scentAt, get wind() { return { x: windX, y: windY }; },
   get scentHalfLifeS() { return SPEEDS.scentHalfLifeS; },
@@ -3438,7 +3690,7 @@ return {
   get swimMinStamina() { return SPEEDS.swimMinStaminaFrac; },
   // food
   grassFoodAt, grassHeightAt, grassMostAt, inGrassReach, grassChangesSince,
-  undergrowthFoodAt, undergrowthShownAt, plantFoodAt, plantMostAt, undergrowthKinds: undergrowthKinds.slice(1), carcassPieces, carcassPieceKg, carcassMeatKg, eatReachTiles,
+  undergrowthFoodAt, undergrowthShownAt, pineFoodAt, pineMostAt, plantFoodAt, plantMostAt, undergrowthKinds: undergrowthKinds.slice(1), carcassPieces, carcassPieceKg, carcassMeatKg, eatReachTiles,
   canCarry, legToTake, carcassLegs, tearLegS, // (CARRYING)
   get grassMaxKg() { return SPEEDS.grassMaxKg; },
   bodySharesBySpecies, biomassKg, energyMJ, waterInReach,
@@ -3455,7 +3707,7 @@ return {
 
   // For tests and debugging only; views and controllers must not use these.
   internals: {
-    tick, wolves, deer, allLandTiles, terrainMap, terrainBlocks, terrainBlocksKept, grassTouched, setTileCorners, setBoulder,
+    tick, wolves, deer, allLandTiles, terrainMap, terrainBlocks, terrainBlocksKept, grassTouched, setTileCorners, setBoulder, setPine,
     get scentMarks() { return scentMarks; },
     setCritterIdle, setCritterMoving, setCritterHeading, isInWater, getOccupiedTiles,
     forbidOverlapsOnStart, critterBoxRad, travelSpeedBySpeciesAndPose,
@@ -3470,6 +3722,7 @@ return {
     get loopHandle() { return loopHandle; },
     dropLeg, howlS,
     setUndergrowthKg, growUndergrowth, undergrowthMostKg, undergrowthShares, undergrowthTotalKg, flowersShownFrom,
+    setPineKg, growPines, pineTotalKg, pineShares, pineMostKgBySize, pineBiteShare, pineClasses, pineDensityAt, pineIn,
     groundCoverAt, regionAt, regionsNear, coverIn, undergrowthIn, coverThemes, regionTiles, provinceTiles, vnoise, hash01,
   },
 };

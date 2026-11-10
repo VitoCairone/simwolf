@@ -60,7 +60,7 @@ async function main(browser, r) {
     // a flat grass tile with grass all around it (so the deer has no reason to move off)
     const t = S.allLandTiles.find(([i, j]) => {
       for (let di = -2; di <= 2; di++) for (let dj = -2; dj <= 2; dj++)
-        if (sim.getTerrainAt(i + di, j + dj) !== "grass" || sim.isBlockedTile(i + di, j + dj) || sim.undergrowthAt(i + di, j + dj)) return false;
+        if (sim.getTerrainAt(i + di, j + dj) !== "grass" || sim.isBlockedTile(i + di, j + dj) || sim.pineAt(i + di, j + dj) || sim.undergrowthAt(i + di, j + dj)) return false;
       return true;
     });
     const [i, j] = t, k = i * sim.gridHeightN + j;
@@ -109,7 +109,7 @@ async function main(browser, r) {
     const d = sim.allCritters.find(c => c.species === "deer" && sim.isLiveCritter(c));
     const t = S.allLandTiles.find(([i, j]) => {
       for (let di = -6; di <= 6; di++) for (let dj = -6; dj <= 6; dj++)
-        if (sim.getTerrainAt(i + di, j + dj) !== "grass" || sim.isBlockedTile(i + di, j + dj) || sim.undergrowthAt(i + di, j + dj)) return false;
+        if (sim.getTerrainAt(i + di, j + dj) !== "grass" || sim.isBlockedTile(i + di, j + dj) || sim.pineAt(i + di, j + dj) || sim.undergrowthAt(i + di, j + dj)) return false;
       return true;
     });
     const [i, j] = t;
@@ -140,7 +140,7 @@ async function main(browser, r) {
     });
     const t = S.allLandTiles.find(([i, j]) => {
       for (let di = -14; di <= 14; di++) for (let dj = -3; dj <= 3; dj++)
-        if (sim.getTerrainAt(i + di, j + dj) !== "grass" || sim.isBlockedTile(i + di, j + dj) || sim.undergrowthAt(i + di, j + dj)) return false;
+        if (sim.getTerrainAt(i + di, j + dj) !== "grass" || sim.isBlockedTile(i + di, j + dj) || sim.pineAt(i + di, j + dj) || sim.undergrowthAt(i + di, j + dj)) return false;
       return true;
     });
     const [i, j] = t;

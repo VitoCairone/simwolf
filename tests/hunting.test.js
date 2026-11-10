@@ -12,6 +12,8 @@
 //    growing over 20 s from the death, renewed every 5 minutes, always stronger toward
 //    the carcass; never on water
 //  - a hungry wolf that knows of no carcass follows death scent to one, and eats
+//  - death scent tells whether its carcass has meat on it: once it is bare, it lays its
+//    scent afresh at once, telling so; a hungry wolf leaves bare death scent be
 // Runs sim.js, senses.js and mind.js in Node (no browser).
 
 const path = require("path");
@@ -159,6 +161,27 @@ async function main(browser, r) {
   })()`, c);
   r.check(scavenge && scavenge.ate && scavenge.modes.includes("track"),
     `a hungry wolf 14 tiles off, facing away, too far to smell the carcass, follows its death scent to it and eats (${scavenge && scavenge.s} s; ${scavenge && scavenge.modes})`);
+
+  // the carcass picked bare: its scent tells so at once; a hungry wolf leaves it be
+  const bare = vm.runInContext(`(() => {
+    const [ci, cj, dir] = ${JSON.stringify(death && death.carcass)};
+    const carcass = sim.allCorpses.find(k => k.uid === deer.uid);
+    if (!carcass) return null;
+    const meatyBefore = [0, 10, 18].every(d => sim.scentAt(ci + dir * d, cj, "death")?.meaty === true);
+    for (const piece of Object.values(carcass.carcass.pieces)) for (const k in piece) if (typeof piece[k] === "number") piece[k] = 0;
+    tick(0.5);
+    const bareAfter = [0, 10, 18].every(d => sim.scentAt(ci + dir * d, cj, "death")?.meaty === false);
+    put(wolf, ci + 0.5 - dir * 14, cj + 0.5, -dir, 0); S.setFood(wolf, 0.6);
+    mind.forget(wolf); mind.ignore(wolf, false);
+    const modes = new Set(); let nearest = Infinity;
+    for (let n = 0; n < 15 / sim.tempo; n++) { S.tick(); modes.add(mind.stateOf(wolf)?.mode); nearest = Math.min(nearest, Math.hypot(wolf.gx - ci - 0.5, wolf.gy - cj - 0.5)); }
+    mind.ignore(wolf);
+    return { meatyBefore, bareAfter, meat: sim.carcassMeatKg(carcass), tracked: modes.has("track"), nearest: +nearest.toFixed(1), modes: [...modes] };
+  })()`, c);
+  r.check(bare && bare.meatyBefore && bare.bareAfter && bare.meat === 0,
+    `death scent tells its carcass has meat on it, out to its edge; picked bare, the carcass lays its scent afresh at once, telling so (${JSON.stringify(bare && { before: bare.meatyBefore, after: bare.bareAfter })})`);
+  r.check(bare && !bare.tracked && bare.nearest > 5,
+    `a hungry wolf 14 tiles off leaves bare death scent be: it doesn't follow it (came within ${bare && bare.nearest} tiles; ${bare && bare.modes})`);
 }
 
 module.exports = { name: "hunting by scent", main };

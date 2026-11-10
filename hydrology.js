@@ -31,7 +31,7 @@
 //     - land, cut down into a valley around any river near it (so the river runs in it)
 //   A river's bed falls from each node's filled level to the next one's, never rising,
 //   so every river runs downhill to a lake or the sea.
-// Heights are in metres. Deterministic: integer hashes of the seed, no Math.random.
+// Heights are in levels (0.41 m: see TERRAIN HEIGHT in sim.js). Deterministic: integer hashes of the seed, no Math.random.
 
 const hydrology = (() => {
 "use strict";
@@ -76,17 +76,17 @@ const defaults = {
   continentTiles: 24000,       // the broad land's longest wavelength
   warpTiles: 4000,             // how far the broad land is pushed about (coastlines bend)
   edgeSeaShare: 0.12,          // the map's edges sink into the sea over this share of it
-  edgeSinkM: 1500,             // ...by this much at the edge (more than any land rises)
-  plainM: 120,                 // the broad land's height scale...
-  mountainM: 900,              // ...and its mountain ranges'
-  seaShiftM: 30,               // raises the land (more land than sea)
-  detailM: 8,                  // fine detail's height, at most
+  edgeSinkLevels: 1500,        // ...by this much at the edge (more than any land rises)
+  plainLevels: 120,            // the broad land's height scale...
+  mountainLevels: 900,         // ...and its mountain ranges'
+  seaShiftLevels: 30,          // raises the land (more land than sea)
+  detailLevels: 8,             // fine detail's height, at most
   detailTiles: 300,            // its longest wavelength
   riverMinNodes: 150,          // land draining through a node to make a river (in nodes)
   riverWidthPerRoot: 0.35,     // a river's width: this times the root of its flow (tiles)
   riverMinWidth: 2,
-  riverBankDepthM: 1.5,        // its bed below the land at its edge
-  valleySlope: 0.04,           // the valley's sides rise this many metres a tile...
+  riverBankDepthLevels: 1.5,   // its bed below the land at its edge
+  valleySlope: 0.04,           // the valley's sides rise this many levels a tile...
   valleyTiles: 220,            // ...and reach no further than this from the river
   meanderShare: 0.22,          // midpoint displacement: share of a reach's length
   meanderLevels: 4,            // halvings: 2^levels pieces a reach
@@ -96,7 +96,7 @@ function makeMap(options = {}) {
   const P = { ...defaults, ...options };
   const { seed, width: W, height: H, nodeTiles: S } = P;
 
-  // THE BROAD LAND, in metres (sea level 0): a warped fractal, sunk at the map's edges,
+  // THE BROAD LAND, in levels (sea level 0): a warped fractal, sunk at the map's edges,
   // with ridged mountain ranges on the higher ground.
   function broadHeight(x, y) {
     const wx = x + P.warpTiles * fbm(x, y, 3, P.continentTiles, seed + 11);
@@ -105,11 +105,11 @@ function makeMap(options = {}) {
     const edge = smooth(0, P.edgeSeaShare, Math.min(x, y, W - x, H - y) / Math.min(W, H));
     const ridge = 1 - Math.abs(fbm(wx, wy, 4, P.continentTiles / 3, seed + 53));
     const highland = smooth(0.05, 0.45, c);
-    return P.plainM * 2.5 * c + P.seaShiftM + P.mountainM * highland * ridge * ridge * ridge
-      - P.edgeSinkM * (1 - edge);
+    return P.plainLevels * 2.5 * c + P.seaShiftLevels + P.mountainLevels * highland * ridge * ridge * ridge
+      - P.edgeSinkLevels * (1 - edge);
   }
   function detailHeight(x, y) {
-    return P.detailM * fbm(x, y, 4, P.detailTiles, seed + 71);
+    return P.detailLevels * fbm(x, y, 4, P.detailTiles, seed + 71);
   }
 
   // GRAPH: nodes
@@ -320,7 +320,7 @@ function makeMap(options = {}) {
       }
       const bedHere = r.bed0 + (r.bed1 - r.bed0) * at;
       if (best <= half * half) {
-        return { kind: "river", salt: false, height: Math.max(0, bedHere), ground: Math.max(0, Math.min(raw, bedHere - P.riverBankDepthM)) };
+        return { kind: "river", salt: false, height: Math.max(0, bedHere), ground: Math.max(0, Math.min(raw, bedHere - P.riverBankDepthLevels)) };
       }
       const out = Math.sqrt(best) - half, f = out / P.valleyTiles;
       ground = Math.min(ground, bedHere + P.valleySlope * out + 2000 * f * f * f * f);

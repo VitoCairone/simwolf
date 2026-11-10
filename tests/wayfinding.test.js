@@ -33,13 +33,14 @@ async function main(browser, r) {
     const S = sim.internals;
     S.holdWater(true);
     sim.allCritters.forEach(a => { mind.ignore(a); a.lifespanS = 1e12; a.gx = a.nextGX = a.gy = a.nextGY = -900 - a.uid * 3; a.speed = 0; });
-    // open dry level land, 14 tiles each way
+    // open dry level land, 14 tiles each way, without boulders (its pines cleared)
     const [i0, j0] = S.allLandTiles.find(([i, j]) => {
       const lv = sim.tileCorners(i, j)[0];
       for (let di = -14; di <= 14; di++) for (let dj = -14; dj <= 14; dj++)
-        if (sim.getTerrainAt(i + di, j + dj) === "water" || sim.isBlockedTile(i + di, j + dj) || sim.tileCorners(i + di, j + dj).some(h => h !== lv)) return false;
+        if (sim.getTerrainAt(i + di, j + dj) === "water" || sim.obstacleAt(i + di, j + dj) === "boulder" || sim.tileCorners(i + di, j + dj).some(h => h !== lv)) return false;
       return true;
     });
+    for (let di = -14; di <= 14; di++) for (let dj = -14; dj <= 14; dj++) S.setBoulder(i0 + di, j0 + dj, false);
     const rocks = [];
     const rock = (i, j) => { S.setBoulder(i0 + i, j0 + j); rocks.push([i0 + i, j0 + j]); };
     const clear = () => { rocks.forEach(([i, j]) => S.setBoulder(i, j, false)); rocks.length = 0; };

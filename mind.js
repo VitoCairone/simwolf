@@ -1011,7 +1011,8 @@ function decideDeer(a, m, now) {
 // deerGrazeGutBelow) until full (or its stomach is): eat the plants (grass and
 // undergrowth: senses.plantsAround) on the tile underfoot if worth it (and crop it bare
 // once started), else walk to the nearest tile worth it, preferring ones at least half
-// full (sim.plantMostAt). Looks deerGrazeLookShare of its
+// full (sim.plantMostAt). Pine needles (sim.pineFoodAt), a poor food, it seeks out only
+// when no tile it sees is worth it without them. Looks deerGrazeLookShare of its
 // sight around, or as far as it sees when nothing there is worth it. Grass under a
 // boulder (less of it: sim.grassMostAt) it eats from the open tile beside the boulder
 // nearest it. Grass it gets no nearer to in grazeGiveUpS, or meets a dead end on the way
@@ -1023,9 +1024,11 @@ function graze(a, m, now) {
   if (!m.grazing && a.food < deerGrazeBelow && a.gut < deerGrazeGutBelow) m.grazing = true;
   if (!m.grazing) return null;
   const worth = deerBiteShare * sim.grassMaxKg * 0.999; // (grass is stored as 32-bit floats)
+  // (worth it without its needles)
+  const good = g => g.kg - sim.pineFoodAt(g.i, g.j) >= worth;
   let grass = senses.plantsAround(a, deerGrazeLookShare);
   const goingFar = m.grazeTo && !grass.some(g => g.i === m.grazeTo[0] && g.j === m.grazeTo[1]);
-  if (goingFar || !grass.some(g => g.kg >= worth)) grass = senses.plantsAround(a);
+  if (goingFar || !grass.some(good)) grass = senses.plantsAround(a);
   const i = Math.floor(a.gx), j = Math.floor(a.gy);
   const seen = (ti, tj) => grass.find(g => g.i === ti && g.j === tj);
   // cropping the grass under a boulder beside it, until bare
@@ -1034,9 +1037,10 @@ function graze(a, m, now) {
     m.grazeTo = null;
     return { gait: "eat", at: c };
   }
+  const needlesOnly = !grass.some(good);
   const here = seen(i, j);
   const onIt = c && c[0] === i && c[1] === j;
-  if (here && (here.kg >= worth || onIt)) { m.grazeTo = null; m.cropping = [i, j]; return EAT; }
+  if (here && (good(here) || onIt || needlesOnly && here.kg >= worth)) { m.grazeTo = null; m.cropping = [i, j]; return EAT; }
   m.cropping = null;
   let at = m.grazeTo && grass.find(g => g.i === m.grazeTo[0] && g.j === m.grazeTo[1] && g.kg >= worth);
   if (at && sim.inGrassReach(a, at.i, at.j)) { // grass under a boulder it is beside
@@ -1063,7 +1067,7 @@ function graze(a, m, now) {
     const options = [];
     for (const g of grass) {
       // (not where it couldn't get to, nor where another stands)
-      if (g.kg < worth || m.grazeAvoid.has(g.i * 100000 + g.j) || taken.has(g.i * 100000 + g.j)) continue;
+      if (g.kg < worth || !needlesOnly && !good(g) || m.grazeAvoid.has(g.i * 100000 + g.j) || taken.has(g.i * 100000 + g.j)) continue;
       const d2 = (g.i + 0.5 - a.gx) ** 2 + (g.j + 0.5 - a.gy) ** 2;
       options.push({ g, score: d2 + (g.kg >= sim.plantMostAt(g.i, g.j) / 2 ? 0 : 1e6) });
     }
@@ -1625,7 +1629,7 @@ function prowl(a, m, now) {
 // fresher about: the deer was killed there, say, or went into the water; the carcass is
 // gone), it gives up that one (by its maker: m.trailEnds, m.deathEnds) as far as that end,
 // and looks for another, and likewise one it knows no way nearer to; death scent of a
-// carcass it knows is bare it leaves be. Deer trails it follows at its PACE (gait: a
+// carcass it knows is bare, or that smells bare (laid when it had no meat), it leaves be. Deer trails it follows at its PACE (gait: a
 // function of the mark it goes to and the one underfoot; see HUNTING), death scent at a
 // trot. null if it smells none worth following. (Also for its prey's trail, keeping dry,
 // or a prospective mate's, rather dry: those `suits` accepts; see hunt, social.)
@@ -1633,7 +1637,7 @@ function track(a, m, now, species = "deer", gait = "trot", suits = null, ends = 
   const i = Math.floor(a.gx), j = Math.floor(a.gy), t0 = sim.now;
   for (const [uid, at] of ends) if (t0 - at > trailEndKeepS) ends.delete(uid);
   const bare = uid => { const k = m.known.get(uid); return k && !k.alive && k.meat === 0; };
-  const worth = t => !(t0 - t.ageS <= (ends.get(t.uid) ?? -Infinity)) && !(species === "death" && bare(t.uid)) && (!suits || suits(t));
+  const worth = t => !(t0 - t.ageS <= (ends.get(t.uid) ?? -Infinity)) && !(species === "death" && (bare(t.uid) || t.meaty === false)) && (!suits || suits(t));
   const trails = senses.trailsAround(a, species).filter(worth);
   const here = trails.find(t => t.i === i && t.j === j);
   let best = null;

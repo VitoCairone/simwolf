@@ -1,6 +1,7 @@
 // The scent view (see SCENT VIEW in animat.js): in the player's wolf's sight view, every
 // tile it can smell on the ground (a nearly round patch: 7 x 7, with rows of 5 and of 3 on
-// each side) has a round mark: death scent black, deer's brown, other wolves' blue for
+// each side) has a round mark: death scent red (its carcass with meat on it when laid) or
+// black (with none), deer's brown, other wolves' blue for
 // males and pink for females, its own scent thin rings in its sex's colour. Trail by
 // trail (one critter's marks):
 //  - within a trail the newest mark is the largest, each older one smaller, the oldest a
@@ -36,7 +37,7 @@ async function main(browser, r) {
   const p = await openGame(browser, { viewport: { width: 900, height: 650 } });
   const outDir = ensureOutputDir("scentview");
   await p.evaluate(() => sim.pause());
-  await moveToOpenLand(p, { radius: 6, clearOthers: true });
+  await moveToOpenLand(p, { radius: 6, clearOthers: true, clearTrees: 50 });
 
   // a deer walks past (+i, 2.5 tiles off the wolf's line), then is taken away; then the
   // wolf walks 2 tiles along +i
@@ -85,18 +86,20 @@ async function main(browser, r) {
     S.scentMarks.wolf.set((wi + 2) * H + wj, [sim.now - 30, he.uid]);
     S.scentMarks.wolf.set((wi - 2) * H + wj, [sim.now - 30, she.uid]);
     animat.render();
-    S.scentMarks.death.set(wi * H + wj + 2, [sim.now - 30, he.uid]);
+    S.scentMarks.death.set(wi * H + wj + 2, [sim.now - 30, he.uid, true]);
+    S.scentMarks.death.set(wi * H + wj - 2, [sim.now - 30, she.uid, false]);
     animat.render();
     const at = (i, j, sp = "wolf") => animat.scentShown.find(m => m.species === sp && m.i === i && m.j === j)?.colour;
     const out = { male: at(wi + 2, wj), female: at(wi - 2, wj), own: animat.scentShown.find(m => m.kind === "own")?.colour, ownMale: w.isMale,
-      death: at(wi, wj + 2, "death") };
-    S.scentMarks.wolf.delete((wi + 2) * H + wj); S.scentMarks.wolf.delete((wi - 2) * H + wj); S.scentMarks.death.delete(wi * H + wj + 2);
+      death: at(wi, wj + 2, "death"), bare: at(wi, wj - 2, "death") };
+    S.scentMarks.wolf.delete((wi + 2) * H + wj); S.scentMarks.wolf.delete((wi - 2) * H + wj); S.scentMarks.death.delete(wi * H + wj + 2); S.scentMarks.death.delete(wi * H + wj - 2);
     return out;
   });
   const blue = "rgba(40, 90, 210, 0.85)", pink = "rgba(225, 95, 170, 0.85)";
   r.check(colours.male === blue && colours.female === pink && colours.own === (colours.ownMale ? blue : pink),
     `wolves' marks by sex: a male's blue, a female's pink; its own rings ${colours.ownMale ? "blue (male)" : "pink (female)"}`);
-  r.check(colours.death === "rgba(0, 0, 0, 0.85)", `death scent is drawn black (${colours.death})`);
+  r.check(colours.death === "rgba(200, 30, 30, 0.85)" && colours.bare === "rgba(0, 0, 0, 0.85)",
+    `death scent is drawn red while its carcass has meat on it (${colours.death}), black once bare (${colours.bare})`);
 
   // once mated, its partner's trail as thin rings, like its own; another's as before
   const mate = await p.evaluate(() => {

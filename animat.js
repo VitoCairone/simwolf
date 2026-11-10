@@ -239,12 +239,13 @@ function frameColumn(a, fd, sinceTick = a.poseTick ?? 0) {
 //   2. land tiles, and swimmers among them: land in front of a swimmer covers it. Depth
 //      order (z): a land tile 1000 + 100 * depth of its center (i + j + 1), a swimmer
 //      1000 + 100 * (depth + 0.5), so only land clearly in front of it covers it
-//   3. land critters and corpses (100000 + 100 * depth), boulders (100000 + 100 * their
-//      tile center's depth) and undergrowth (100000 + 100 * its tile's back corner's depth,
+//   3. land critters and corpses (100000 + 100 * depth), boulders and pines (100000 + 100
+//      * their tile center's depth) and undergrowth (100000 + 100 * its tile's back corner's depth,
 //      so a critter standing on its tile is drawn after it), in depth order; on a tie a
 //      boulder or undergrowth first; a heart over its pair. A critter or corpse on a tile
 //      with undergrowth has the undergrowth's foreground half drawn again over it.
-//   4. the debug outline
+//   4. the crown layer: the see-through pine crowns, over everything (see PINES)
+//   5. the debug outline
 // In the SIGHT VIEW each chunk's mask of unseen ground goes right after its terrain; the
 // scent marks (SCENT VIEW) go among the land critters, at their tile's back corner's depth
 // like undergrowth (over its own tile's undergrowth, under a critter standing there).
@@ -358,6 +359,8 @@ const shoreInnerImage = IMG + "shore-inner.png";
 const heartImage = IMG + "heart.png";
 const debugTileImage = IMG + "debug-tile.png";
 const undergrowthImage = IMG + "undergrowth.png";
+const pinesImage = IMG + "pines.png";
+const pineTrunksImage = IMG + "pine-trunks.png";
 const waterCell = [192, 288]; // plain water in tiles.png
 const terrainImages = [tilesImage, groundImage, shoreOuterImage, shoreInnerImage, undergrowthImage];
 
@@ -764,6 +767,136 @@ function paintBoulder(target, b) {
   drawCell(target, image(tilesImage), b.col * tileSize, b.row * tileSize, tileSize, tileSize, b.left, b.top);
 }
 
+// PINES (sim.pineOn): drawn at their real size, from images/pines.png and
+// images/pine-trunks.png, as images/pines.js (pineSheet) lays them out (all made by
+// spritecraft/make_pines.py: placeholders). A sprite's foot goes on its tile's center; a
+// pine is drawn among the critters at that depth, as a boulder. A sapling is one sprite
+// (the nearest of 1, 2 and 3 m). A tree, the sprite of its diameter class, grown in a
+// forest or the open: its shadow (its crown's footprint), its trunk, then its crown. Its
+// trunk is as wide as it blocks sight (sim.pineOn's halfM: a metre across is
+// pineSheet.pxPerMAcross, a tile's diagonal), drawn trunkPX up into the crown but not
+// where its own crown covers it (clippedTrunk). Which of two sprites: a hash of the tile.
+// A crown is see-through if its tree is taller than pineSeeThroughAboveM, or if it covers a
+// critter (or a corpse) drawn before it, so that none is lost among the trees: drawn into
+// the CROWN LAYER. (Only the drawing: what blocks sight is the sim's.)
+const pineSeeThroughAboveM = 8;
+const pineTrees = new Map(pineSheet.trees.map(t => [t.size * 4 + t.open * 2 + t.variant, t]));
+// how far up a pine reaches above its foot, px, at the most
+const pineReachPY = Math.max(...pineSheet.trees.map(t => t.crown[5]), ...pineSheet.saplings.map(t => t.rect[5]));
+
+// What the pine on tile (i, j) is drawn as, or null: { i, j, z, fx, fy (its foot),
+// crown, shadow (rects as pineSheet's, or null), trunk: { col, px } or null, box: the
+// screen rect it covers [left, top, w, h], tall: its crown always see-through }.
+function describePine(i, j) {
+  const p = sim.pineOn(i, j);
+  if (!p) return null;
+  const corners = sim.tileCorners(i, j), base = Math.min(...corners);
+  const [px, py] = isoProject(i, j);
+  const fy = py - base * levelHeightPY + isoProject(0.5, 0.5)[1] - ((corners[0] + corners[1] + corners[2] + corners[3]) / 4 - base) * levelHeightPY;
+  const v = tileHash(i, j, 4) % 2;
+  const out = { i, j, z: boulderZIndex(i, j), fx: px, fy, crown: null, shadow: null, trunk: null, box: null, tall: p.heightM > pineSeeThroughAboveM };
+  if (p.size === 1) {
+    const h = boundVal(Math.round(p.heightM), 1, 3);
+    out.crown = pineSheet.saplings.find(t => t.heightM === h && t.variant === v).rect;
+  } else {
+    const t = pineTrees.get(p.size * 4 + p.open * 2 + v), tr = pineSheet.trunks;
+    out.crown = t.crown; out.shadow = t.shadow;
+    const w = boundVal(Math.round(2 * p.halfM * pineSheet.pxPerMAcross), tr.widths[0], tr.widths[tr.widths.length - 1]);
+    out.trunk = { col: tr.widths.indexOf(w), px: t.trunkPX };
+  }
+  const c = out.crown, sh = out.shadow || c;
+  const left = Math.min(px - c[4], px - sh[4]), top = fy - c[5];
+  out.box = [left, top, Math.max(px - c[4] + c[2], px - sh[4] + sh[2]) - left, Math.max(fy - c[5] + c[3], fy - sh[5] + sh[3]) - top];
+  return out;
+}
+
+// Draws rect r (as pineSheet's) of sheet img with its foot at (fx, fy).
+function drawPineRect(target, img, r, fx, fy) {
+  drawCell(target, img, r[0], r[1], r[2], r[3], fx - r[4], fy - r[5]);
+}
+
+// Paints pine p from sheets img (pinesImage, or a sight sheet of it) and trunks
+// (pineTrunksImage, or one of it); its crown into the crown layer if `thin`.
+function paintPine(target, img, trunks, p, thin = false) {
+  if (p.shadow) drawPineRect(target, img, p.shadow, p.fx, p.fy);
+  if (p.trunk && trunks) {
+    const t = clippedTrunk(trunks, img, p), tr = pineSheet.trunks;
+    if (t) drawCell(target, t, 0, 0, t.width, t.height, p.fx - tr.footX, p.fy - p.trunk.px);
+  }
+  drawPineRect(thin ? crownLayerFor(target) : target, img, p.crown, p.fx, p.fy);
+}
+
+// Pine p's trunk from sheet trunks as drawn: up trunkPX from its foot, but not where its
+// crown (from sheet img) covers it; a canvas, its foot at (footX, trunkPX), kept by sheet,
+// trunk and crown (null until both sheets have loaded).
+const clippedTrunks = new WeakMap();
+function clippedTrunk(trunks, img, p) {
+  const ready = im => !(im instanceof HTMLImageElement) || (im.complete && im.naturalWidth > 0);
+  if (!ready(trunks) || !ready(img)) return null;
+  let kept = clippedTrunks.get(trunks);
+  if (!kept) clippedTrunks.set(trunks, kept = new Map());
+  const c = p.crown, key = p.trunk.col + ":" + p.trunk.px + ":" + c.join();
+  let cv = kept.get(key);
+  if (!cv) {
+    const tr = pineSheet.trunks, top = tr.footY - p.trunk.px;
+    cv = document.createElement("canvas"); cv.width = tr.cellW; cv.height = tr.cellH - top;
+    const g = cv.getContext("2d");
+    g.drawImage(trunks, p.trunk.col * tr.cellW, top, tr.cellW, cv.height, 0, 0, tr.cellW, cv.height);
+    g.globalCompositeOperation = "destination-out";
+    g.drawImage(img, c[0], c[1], c[2], c[3], tr.footX - c[4], p.trunk.px - c[5], c[2], c[3]);
+    kept.set(key, cv);
+  }
+  return cv;
+}
+
+// CROWN LAYER: the see-through crowns, drawn whole into a canvas the screen's size, in
+// depth order (a nearer one hiding a farther one), then laid over the whole frame at
+// crownLayerAlpha: where crowns overlap, no more opaque than one.
+const crownLayerAlpha = 0.65;
+let crownLayer = null; // { ctx, A, Bx, By, frame } (as screen; the frame it was cleared for)
+
+// The crown layer as a target over target (screen), cleared for this frame when first asked.
+function crownLayerFor(target) {
+  if (!crownLayer || crownLayer.frame !== frameCount) {
+    const cv = crownLayer ? crownLayer.ctx.canvas : document.createElement("canvas");
+    if (cv.width !== canvas.width || cv.height !== canvas.height) { cv.width = canvas.width; cv.height = canvas.height; }
+    const g = cv.getContext("2d");
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.clearRect(0, 0, cv.width, cv.height);
+    g.imageSmoothingEnabled = false;
+    crownLayer = { ctx: g, A: target.A, Bx: target.Bx, By: target.By, frame: frameCount };
+  }
+  return crownLayer;
+}
+
+// Lays this frame's crown layer, if any, over the screen.
+function paintCrownLayer() {
+  if (!crownLayer || crownLayer.frame !== frameCount) return;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = crownLayerAlpha;
+  ctx.drawImage(crownLayer.ctx.canvas, 0, 0);
+  ctx.globalAlpha = 1;
+}
+
+// Whether pine p's crown, drawn after sprite r, covers it.
+function pineCovers(p, r) {
+  if (!r || p.z <= r.z) return false;
+  const c = p.crown, left = p.fx - c[4], top = p.fy - c[5];
+  return r.left < left + c[2] && r.left + r.w > left && r.top < top + c[3] && r.top + r.h > top;
+}
+
+// The pines on chunk c's tiles (kept on it, until its land is painted again).
+function chunkPines(c) {
+  if (!c.pines) {
+    c.pines = [];
+    forEachChunkTile(c, (i, j) => {
+      const p = sim.getTerrainAt(i, j) !== "water" && describePine(i, j);
+      if (p) c.pines.push(p);
+    });
+  }
+  return c.pines;
+}
+
 // CHUNKS: the terrain is painted once into canvases of chunkTiles x chunkTiles tiles, two
 // a chunk (its water, its land), and those are painted each frame (with their masks in the
 // SIGHT VIEW). A chunk is painted afresh when its grass changes height (land), when the
@@ -801,7 +934,7 @@ function chunkAt(ci, cj) {
   const y0 = (i0 + j0) * qtrTile - hi * levelHeightPY - groundBaseY - tileRiserPY;
   const y1 = (i1 + j1) * qtrTile - (lo - 1) * levelHeightPY + groundCellH + tileRiserPY;
   c = { ci, cj, i0, j0, i1, j1, x0, y0, w: x1 - x0, h: y1 - y0, water: null, land: null,
-    hasWater: false, hasLand: false, shores: false, waterClock: -1, landDirty: true, boulders: [], plants: [], used: 0, scanned: false,
+    hasWater: false, hasLand: false, shores: false, waterClock: -1, landDirty: true, boulders: [], plants: [], pines: null, used: 0, scanned: false,
     waterMask: null, landMask: null, waterGrey: null, landGrey: null, maskDirty: true, greyDirty: true, maskScale: 0 };
   chunks.set(key, c);
   return c;
@@ -839,7 +972,7 @@ function paintChunk(c, clock) {
     if (!c.land) c.land = newLayer(c);
     const t = at(c.land);
     t.ctx.setTransform(1, 0, 0, 1, 0, 0); t.ctx.clearRect(0, 0, c.w, c.h);
-    c.boulders = []; c.plants = [];
+    c.boulders = []; c.plants = []; c.pines = null;
     forEachChunkTile(c, (i, j) => {
       if (sim.getTerrainAt(i, j) === "water") return;
       const d = describeTile(i, j, clock);
@@ -867,7 +1000,7 @@ function groundUnder(px, py, level = 0) {
 // the ground at the view's center (viewLevel), and as much further down-screen as ground
 // near it rises above that (it reaches up into view), and up-screen as it sinks below it.
 let viewLevel = 0;
-function chunksInView() {
+function chunksInView(reachPY = 0) {
   const cx = (view.x0 + view.x1) / 2, cy = (view.y0 + view.y1) / 2;
   const gc = groundUnder(cx, cy, viewLevel);
   viewLevel = sim.heightAt(boundVal(gc[0], 0, sim.gridWidthN - 1), boundVal(gc[1], 0, sim.gridHeightN - 1));
@@ -876,7 +1009,8 @@ function chunksInView() {
   const reliefTiles = 64;
   const [lo, hi] = sim.levelRangeIn(Math.floor(g[0][0]) - reliefTiles, Math.floor(g[1][1]) - reliefTiles,
     Math.ceil(g[3][0]) + reliefTiles, Math.ceil(g[2][1]) + reliefTiles);
-  const raised = Math.ceil(Math.max(0, hi - viewLevel) * levelHeightPY / qtrTile) + 2;
+  // (and, with reachPY, what stands below the view reaching up into it)
+  const raised = Math.ceil((Math.max(0, hi - viewLevel) * levelHeightPY + reachPY) / qtrTile) + 2;
   const sunk = Math.ceil(Math.max(0, viewLevel - lo) * levelHeightPY / qtrTile) + 2;
   const n = chunkTiles;
   const ciMin = Math.max(0, Math.floor((g[0][0] - sunk) / n)), ciMax = Math.min(Math.ceil(sim.gridWidthN / n) - 1, Math.floor((g[3][0] + raised) / n));
@@ -885,7 +1019,7 @@ function chunksInView() {
   for (let s = ciMin + cjMin; s <= ciMax + cjMax; s++)
     for (let ci = Math.max(ciMin, s - cjMax); ci <= Math.min(ciMax, s - cjMin); ci++) {
       const c = chunkAt(ci, s - ci);
-      if (inView(c.x0, c.y0, c.w, c.h)) out.push(c);
+      if (inView(c.x0, c.y0 - reachPY, c.w, c.h + reachPY)) out.push(c);
     }
   return out;
 }
@@ -1693,6 +1827,14 @@ function paintSpriteGreyed(target, r) {
     drawCell(target, img, col * r.w, r.row * r.h, r.w, r.h, r.left, r.top, r.mirror);
 }
 
+// Paints pine p as the sight view shows it (as a boulder: by whether the wolf sees its top).
+function paintPineSeen(p, thin) {
+  if (!tileByte(sight.seen, p.i, p.j)) return;
+  if (tileSightState(p.i, p.j) === SEEN || seesBoulder(p.i, p.j)) { paintPine(screen, image(pinesImage), image(pineTrunksImage), p, thin); return; }
+  const img = sightSheet(pinesImage, "greyed");
+  if (img) paintPine(screen, img, sightSheet(pineTrunksImage, "greyed"), p, thin);
+}
+
 function paintBoulderSeen(b) {
   if (!tileByte(sight.seen, b.i, b.j)) return;
   const st = tileSightState(b.i, b.j);
@@ -1855,7 +1997,8 @@ function paintDebugWolf() {
 // SCENT VIEW (in the SIGHT VIEW only): the scent on every tile the player's wolf can smell
 // on the ground (senses.trailsAround: deer's, wolves' and death scent), as a round mark on
 // the ground at the tile's center (an ellipse, seen isometrically; drawn over its own
-// tile's undergrowth: see DRAWING ORDER): black for death scent, brown for deer, blue for
+// tile's undergrowth: see DRAWING ORDER): red for death scent of a carcass with meat on it
+// (when laid), black for one with none, brown for deer, blue for
 // a male wolf's, pink for a female's, the wolf's own in its own sex's colour. This is
 // drawing only: what the wolf's mind makes of the scent is its own (see TRACKING in
 // mind.js).
@@ -1883,7 +2026,7 @@ const scentFreshS = 10;
 const scentStaleScale = 0.6;
 const scentThinPX = 1;              // world pixels
 const scentRingPX = 1;              // world pixels: 2 screen pixels at 2x zoom
-const scentColors = { death: "rgba(0, 0, 0, 0.85)", deer: "rgba(120, 72, 30, 0.85)", male: "rgba(40, 90, 210, 0.85)", female: "rgba(225, 95, 170, 0.85)" };
+const scentColors = { death: "rgba(200, 30, 30, 0.85)", bare: "rgba(0, 0, 0, 0.85)", deer: "rgba(120, 72, 30, 0.85)", male: "rgba(40, 90, 210, 0.85)", female: "rgba(225, 95, 170, 0.85)" };
 const scentSexes = new Map(); // uid -> isMale, for marks whose maker is gone
 // the marks last drawn (for tests): { i, j, species, uid, kind ("death", "deer", "wolf",
 // "mate", "own"), rank (its trail's among its kind), s, ageS, d (diameter, m), fill, colour }
@@ -1910,7 +2053,7 @@ function describeScent() {
     let trail = kinds[kind].get(m.uid);
     if (!trail) kinds[kind].set(m.uid, trail = []);
     trail.push({ i: m.i, j: m.j, species, uid: m.uid, kind, rank: 0, s: Math.pow(2, -m.ageS / half), ageS: m.ageS, d: 0, fill: 1,
-      colour: scentColors[species !== "wolf" ? species : scentMakerIsMale(m.uid) ? "male" : "female"] });
+      colour: scentColors[species === "death" ? (m.meaty ? "death" : "bare") : species !== "wolf" ? species : scentMakerIsMale(m.uid) ? "male" : "female"] });
   }
   const shown = [];
   for (const kind of ["death", "deer", "wolf", "mate", "own"]) {
@@ -2047,6 +2190,10 @@ function render() {
   const boulderPaint = b => sightOn ? () => paintBoulderSeen(b) : () => paintBoulder(screen, b);
   const plantPaint = (u, row = 0) => sightOn ? () => paintUndergrowthSeen(u, row) : () => paintUndergrowth(screen, image(undergrowthImage), u, row);
   for (const c of inView2) for (const b of c.boulders) if (inView(b.left, b.top, tileSize, tileSize)) items.push([b.z, 0, items.length, boulderPaint(b)]);
+  for (const c of chunksInView(pineReachPY)) for (const p of (c.used = frameCount, chunkPines(c))) if (inView(...p.box)) {
+    const thin = p.tall || recs.some(r => pineCovers(p, r));
+    items.push([p.z, 0, items.length, sightOn ? () => paintPineSeen(p, thin) : () => paintPine(screen, image(pinesImage), image(pineTrunksImage), p, thin)]);
+  }
   for (const c of inView2) for (const u of c.plants)
     if (inView(u.left, u.top, tileSize, tileSize) && sim.undergrowthShownAt(u.i, u.j)) items.push([u.z, 0, items.length, plantPaint(u)]);
   const spriteItem = (r, gx, gy, paint) => {
@@ -2062,6 +2209,7 @@ function render() {
   if (!showOnlySet) for (const h of hearts.values()) if (heartShown(h)) items.push([h.z, 2, items.length, () => paintHeart(screen, h)]);
   items.sort((p, q) => p[0] - q[0] || p[1] - q[1] || p[2] - q[2]);
   for (const it of items) it[3]();
+  paintCrownLayer();
   if (showDebug && debugOn()) paintDebugWolf();
   ctx.setTransform(1, 0, 0, 1, 0, 0);
 
@@ -2246,6 +2394,7 @@ return {
   spriteOf: a => sprites.get(a.uid)?.rec, spriteRect,
   heartOf: a => hearts.get(Math.min(a.uid, a.matingWith ?? a.uid)),
   tileOf: (i, j) => describeTile(i, j), tilesInView, undergrowthOf: (i, j) => describeUndergrowth(i, j), undergrowthImage,
+  pineOf: (i, j) => describePine(i, j), pinesImage, pineTrunksImage,
   showOnly: list => { showOnlySet = list ? new Set(list) : null; render(); },
   showDebug: on => { showDebug = on; render(); },
   get scentShown() { return scentShown.map(m => ({ ...m })); },
