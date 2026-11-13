@@ -15,7 +15,7 @@ Usage (needs Python 3 with numpy and Pillow):
 THE SHEET (images/stag-land.png, the game's; 45 columns): rows 0 up-right (grid N), 1
 down-right (E), 2 down-left (S), 3 up-left (W): the artist's (images/deer-land.png, as
 extract_deer_gif.py takes them from the artist's preview); 4 up (NW), 5 right (NE), 6 down
-(SE): these.
+(SE): these, but the game's are now spritecraft/facings5/install.py's (run it after --sheet).
 Frames are FRAME (48 x 41): a deer in profile is about 1.2 times as long on screen as on a
 diagonal (the artist's wolf likewise), more than the artist's 32; the artist's frames are
 centred in the wider ones, unchanged.

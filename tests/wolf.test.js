@@ -4,7 +4,7 @@
 //    howl, death and bite for the 4 diagonals, the run shifted to the others' ground point
 //  - they play at the artist's timing (images_raw/5V5aC4.gif): the gallop 70 ms a frame,
 //    the idle 200, the death 100 (once, then the corpse holds its last frame)
-//  - the death faces the nearest diagonal, the next one clockwise between two
+//  - the death faces the wolf's direction (all 8: rows 4-6 from spritecraft/facings5)
 //  - every wolf dies to its death animation and a corpse, the player's too; the dead
 //    player's wolf stays the player's (the arrow toggle brings the camera to its corpse,
 //    and the arrows move nothing) until the next wolf is born, which becomes the
@@ -120,9 +120,9 @@ async function main(browser, r) {
   r.check(ds.slice(0, 11).map(([c]) => c).join() === "21,22,23,24,25,26,27,28,29,30,31" && ds.slice(0, 11).every(([, t]) => t === 6)
     && ds[11][0] === 32 && ds.length === 12,
     `a wolf dying plays the death's 11 frames, 100 ms each, then its corpse holds the last (${ds.map(([c, t]) => c + ":" + t).join(" ")})`);
-  const rows = [1, 1, 2, 2, 3, 3, 0, 0];
-  r.check(death.out.map(o => o.dir).join() === "0,1,2,3,4,5,6,7" && death.out.every(o => o.kind === "corpse" && o.pose === "dead" && o.col === 32 && o.row === rows[o.dir] && !o.mirror),
-    `every wolf dies to a corpse facing its nearest diagonal (rows by direction E..NE: ${death.out.map(o => o.row).join(" ")})`);
+  const rows = [1, 6, 2, 5, 3, 4, 0, 5];
+  r.check(death.out.map(o => o.dir).join() === "0,1,2,3,4,5,6,7" && death.out.every(o => o.kind === "corpse" && o.pose === "dead" && o.col === 32 && o.row === rows[o.dir] && o.mirror === (o.dir === 3)),
+    `every wolf dies to a corpse facing its own direction, ← the → row mirrored (rows by direction E..NE: ${death.out.map(o => o.row).join(" ")})`);
 
   // the player's wolf dies, and the next wolf born is the player's
   const player = await p.evaluate(() => {

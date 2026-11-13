@@ -30,7 +30,8 @@ for three things:
 
 THE SHEET (wolf-land.png): 64 x 64 frames; rows 0 facing up-right, 1 down-right, 2
 down-left, 3 up-left (as our old sheet), then 4 up, 5 right, 6 down, which the artist didn't
-draw: those rows have only the run and idle, from images/wolf-run-stand.png. Columns:
+draw: those rows have only the run and idle, from images/wolf-run-stand.png (run
+spritecraft/facings5/install.py after this: it replaces rows 4-6). Columns:
     0-7 run, 8-11 idle, 12-20 howl, 21-32 death (32 the corpse), 33-47 bite, 48-49 sleep
 SLEEP (ours, rows 0-3 only; a placeholder, not canonical: admin/design_notes.md): the corpse lying on its side, its mouth and eye closed (the
 red of tongue and eye painted over in its coat's colour), then the same breathing in: the

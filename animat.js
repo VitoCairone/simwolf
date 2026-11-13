@@ -91,8 +91,8 @@ function holdsFromMs(ms) {
   return ms.map(t => { sum += t; const end = Math.round(sum / tickMs), h = end - done; done = end; return h; });
 }
 
-// The wolf's diagonal-only sheet columns (death, howl, bite): its rows 0-3 are the
-// diagonals; the in-between directions use the next diagonal clockwise.
+// The wolf's diagonal-only sheet columns (sleep): its rows 0-3 are the diagonals; the
+// in-between directions use the next diagonal clockwise.
 //                    E(↘) SE(↓) S(↙) SW(←) W(↖) NW(↑) N(↗) NE(→)
 const wolfDiagonalFacing = {
   rowByDir:          [1,   1,    2,   2,    3,   3,    0,   0],
@@ -129,9 +129,9 @@ const frameDataBySpeciesAndPose = {
     // Plays exactly once in the simulation's death pose (attach checks this); the corpse
     // holds the last frame.
     death: {sheet: "wolf", nFrames: 11, colZero: 21, frameW: 64, frameH: 64,
-      holdTks: 6, topToShadow: 39, ...wolfDiagonalFacing},
+      holdTks: 6, topToShadow: 39},
     dead: {sheet: "wolf", nFrames: 1, colZero: 32, frameW: 64, frameH: 64,
-      holdTks: Infinity, topToShadow: 39, ...wolfDiagonalFacing},
+      holdTks: Infinity, topToShadow: 39},
     // asleep: lying on its side, breathing (made from the corpse: extract_wolf_sheet.py);
     // not used while sleep is off
     // TODO: placeholder art, not canonical (admin/design_notes.md): real sleeping frames
@@ -139,10 +139,10 @@ const frameDataBySpeciesAndPose = {
       topToShadow: 39, ...wolfDiagonalFacing},
     // signalling (sim.js: HOWLING): plays exactly once in sim's howl (attach checks this)
     howl: {sheet: "wolf", cols: colsFrom(12, 9), holds: holdsFromMs([100, 100, 100, 100, 100, 150, 500, 100, 100]),
-      frameW: 64, frameH: 64, topToShadow: 39, ...wolfDiagonalFacing},
+      frameW: 64, frameH: 64, topToShadow: 39},
     bite: {sheet: "wolf", cols: colsFrom(33, 15),
       holds: holdsFromMs([100, 40, 40, 40, 40, 40, 40, 40, 40, 100, 100, 100, 100, 100, 20]),
-      frameW: 64, frameH: 64, topToShadow: 39, ...wolfDiagonalFacing},
+      frameW: 64, frameH: 64, topToShadow: 39},
   },
   deer: {
     // (columns 10 and 44 are the preview's start and stop of a run, in no cycle)
@@ -201,8 +201,8 @@ function hasAntlers(a) {
 // Sheet row and mirroring by direction (DIR_*), for species with a row per direction:
 //            E(↘) SE(↓) S(↙) SW(←) W(↖) NW(↑) N(↗) NE(→)
 // The wolf's and the deer's rows: 0 ↗, 1 ↘, 2 ↙, 3 ↖, 4 ↑, 5 →, 6 ↓; ← is → mirrored.
-// (The deer's rows 4-6 are drawn by spritecraft/deer_facings.py: placeholder art, not
-// canonical, admin/design_notes.md.)
+// (Rows 4-6, every pose but the wolf's sleep, are made by spritecraft/facings5/install.py:
+// placeholder art, not canonical, admin/design_notes.md.)
 const spriteRowByDir = {
   wolf: [1, 6, 2, 5, 3, 4, 0, 5],
   deer: [1, 6, 2, 5, 3, 4, 0, 5],

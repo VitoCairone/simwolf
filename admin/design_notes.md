@@ -94,13 +94,13 @@ art from them.
   `spritecraft/make_shore_tiles.py`, so they join the straight ones seamlessly. The
   artist's own corner sprites (columns 2-5) are not used: they don't match the straight
   ones.
-- **Deer facing up, right and down.** The artist drew the stag on the 4 diagonals only
-  (`images/deer-land.png`). Rows 4 (↑), 5 (→) and 6 (↓) of the game's sheet
-  `images/stag-land.png` (← is → mirrored) are drawn by `spritecraft/deer_facings.py`:
-  a skeleton fitted to the artist's frames, posed and drawn by pixel rules fitted to them
-  (`deer_pose.py`, `deer_pixels.py`). Its head is the artist's block for its view, pasted
-  at the poll; but seen side-on (the artist drew no profile head) it is drawn from a 3D
-  head (`deer_pose.HEAD`: skull, muzzle, jaw, throat, ears, eyes on the sides of the skull),
-  only the antlers the artist's.
-  The same rows of `hind-land.png`, `stag-swim.png`, `hind-swim.png` and the young sheets
-  are made from them. Rows 0-3 are the artist's, unchanged (centred in wider frames).
+- **Five-facing sheets, and the game's up, right and down.** `images/wolf-5dir.png` and
+  `images/stag-5dir.png` hold every sprite of the artist's two GIFs plus the facings the
+  artist didn't draw: rows U (up) and D (down) are AI-generated (a 3D puppet fitted to the
+  artist's views), and R (right) is the artist's down-right sprite with its slope taken
+  out (`spritecraft/facings5/`, see its README). Rows 4 (↑), 5 (→) and 6 (↓) of the game's
+  sheets `images/wolf-land.png` and `images/stag-land.png` (← is → mirrored) are copied
+  from them by `spritecraft/facings5/install.py`: every wolf pose but sleep (which has the
+  diagonals only), and every stag pose. The same rows of `hind-land.png`, the
+  swim, stalk and carried-leg sheets and the young sheets are made from them. Rows 0-3
+  are the artist's, unchanged.
