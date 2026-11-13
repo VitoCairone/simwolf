@@ -2309,7 +2309,7 @@ function drink(a) {
 }
 
 // Its body takes in d, a biomass from its stomach (see BODY: DIGESTION and GROWTH).
-function absorb(a, d) {
+function absorb(a, d, dtS = tempo) {
   const t = a.tissues, s = bodySharesBySpecies[a.species];
   const fibre = isInfant(a) ? 0 : d.carbsKg * (1 - carbsDigestedBySpecies[a.species]);
   d.carbsKg -= fibre;
@@ -2317,7 +2317,7 @@ function absorb(a, d) {
   const refill = Math.max(0, Math.min(d.mineralKg, w * s.mineralKg - t.mineralKg));
   t.mineralKg += refill;
   d.mineralKg -= refill;
-  const grow = Math.max(0, Math.min(a.adultKg - w, growFastestRatio * growthKgPerS(a) * tempo,
+  const grow = Math.max(0, Math.min(a.adultKg - w, growFastestRatio * growthKgPerS(a) * dtS,
     d.mineralKg / s.mineralKg, (t.proteinKg + d.proteinKg) / s.proteinKg - w));
   const minerals = grow * s.mineralKg;
   t.mineralKg += minerals;
@@ -2334,23 +2334,32 @@ function absorb(a, d) {
 
 // One tick of a's body: it burns, loses water, eats and drinks, digests, and its womb
 // grows. What it died of ("starvation", "dehydration"), or null.
-function updateFood(a) {
+// Its eating, drinking and tugging, a tick's worth; and its body (burning, digesting,
+// growing, its womb and meters) dtS seconds' worth, none if 0 (BODY TURNS). Returns the
+// cause if that kills it.
+function updateFood(a, dtS = tempo) {
   if (!isLiveCritter(a)) return null;
-  const t = a.tissues, mj = rangeMJ(a) * tempo / foodLastsS(a);
-  metabolize(t, mj);
-  const lose = Math.min(t.waterKg, waterLossKgPerMJ(a.species) * mj);
-  t.waterKg -= lose;
-  biomassLedger.excretedKg += lose;
+  const t = a.tissues;
+  if (dtS > 0) {
+    const mj = rangeMJ(a) * dtS / foodLastsS(a);
+    metabolize(t, mj);
+    const lose = Math.min(t.waterKg, waterLossKgPerMJ(a.species) * mj);
+    t.waterKg -= lose;
+    biomassLedger.excretedKg += lose;
+  }
+  // (its stomach passing food on before it eats, so that eating tops it up)
+  const kg = dtS > 0 ? biomassKg(a.stomach) : 0;
+  if (kg > 0) {
+    const drip = biomass();
+    // (a.dripKg a tick's worth)
+    a.dripKg = moveShare(a.stomach, drip, Math.min(1, Math.max(kg, stomachDripLeastShare * stomachKg(a)) * dtS / stomachTS(a) / kg)) * tempo / dtS;
+    absorb(a, drip, dtS);
+  } else if (dtS > 0) a.dripKg = 0;
   if (!a.eating) a.meal = null;
   a.nursingOn = a.eating && isInfant(a) ? nurse(a) : null;
   if (a.eating && a.nursingOn === null && _can(a, "eat")) { eat(a); drink(a); }
   if (a.taking) tugLeg(a); else a.tugS = 0;
-  const kg = biomassKg(a.stomach);
-  if (kg > 0) {
-    const drip = biomass();
-    a.dripKg = moveShare(a.stomach, drip, Math.min(1, Math.max(kg, stomachDripLeastShare * stomachKg(a)) * tempo / stomachTS(a) / kg));
-    absorb(a, drip);
-  } else a.dripKg = 0;
+  if (dtS === 0) return null;
   if (waterHeld) {
     const short = t.proteinKg * leanWaterPerKg[a.species] - t.waterKg;
     if (short > 0) { t.waterKg += short; biomassLedger.drunkKg += short; }
@@ -2849,6 +2858,8 @@ function birthSpots(f, n) {
 }
 
 function giveBirth(f) {
+  updateWomb(f); // (filled to the end, since her last body turn)
+  if (!f.pregnancy) return; // (lost)
   const pregnancy = f.pregnancy, { fatherUid, litter } = pregnancy;
   f.pregnancy = null;
   const parents = [f.uid];
@@ -3347,13 +3358,27 @@ function canStepTo(a, gx, gy) {
   return true;
 }
 
+// BODY TURNS: a critter's body (burning its food, digesting, growing, its womb, and its
+// meters: updateFood) is worked out every bodyEveryTicks, for the time since; its eating,
+// drinking and tugging every tick. Critters take their body turns on different ticks (by
+// uid), so each tick works out about as many.
+let bodyEveryTicks = 6;
+
 // THE TICK'S WORLD UPDATE: food and age; then every critter's reserves, speed and next
 // position; then all moves at once (moveAllTogether), deaths, births, and (every second)
 // growth of grass and of critters.
 function updateAllCritters() {
   const pastLifespan = allCritters.filter(isPastLifespan);
   const dying = []; // of hunger or thirst
-  allCritters.forEach(a => { const cause = updateFood(a); if (cause) dying.push([a, cause]); });
+  for (const a of allCritters) {
+    let dtS = 0;
+    if ((g_tick + a.uid) % bodyEveryTicks === 0) { // (its body turn)
+      dtS = (a.bodyTick === undefined ? bodyEveryTicks : Math.min(g_tick - a.bodyTick, 2 * bodyEveryTicks)) * tempo;
+      a.bodyTick = g_tick;
+    }
+    const cause = updateFood(a, dtS);
+    if (cause) dying.push([a, cause]);
+  }
 
   allCritters.forEach(a => {
     // done scrambling up a bank: back to the gait it was asked for
@@ -3819,6 +3844,7 @@ return {
 
   // For tests and debugging only; views and controllers must not use these.
   internals: {
+    get bodyEveryTicks() { return bodyEveryTicks; }, set bodyEveryTicks(n) { bodyEveryTicks = n; }, // (a test may take a body turn every tick)
     tick, wolves, deer, allLandTiles, terrainMap, terrainBlocks, terrainBlocksKept, grassTouched, setTileCorners, setBoulder, setPine,
     get scentMarks() { return scentMarks; },
     setCritterIdle, setCritterMoving, setCritterHeading, isInWater, getOccupiedTiles,

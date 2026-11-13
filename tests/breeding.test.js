@@ -317,6 +317,8 @@ async function main(browser, r) {
     runUntil(() => false, 0.5);
     nursing.apart = { on: pup.nursingOn, food: pup.food, gut: pup.gut, mother: f.food, motherOwn: 1 - 0.5 / S.SPEEDS.foodFullS.wolf };
     // one tick touching her: the milk, from her body into its stomach, making no biomass
+    // (its body and hers, too, worked out that tick: BODY TURNS in sim.js)
+    const bodyEvery = S.bodyEveryTicks; S.bodyEveryTicks = 1;
     place(0.05); S.setFood(pup, 0.5); S.setFood(f, 1); sim.setIntent(pup, { gait: "eat" });
     S.tick(); // (it stops on the first)
     const pupMJ = () => sim.energyMJ(pup.tissues) + sim.energyMJ(pup.stomach);
@@ -325,6 +327,7 @@ async function main(browser, r) {
     S.tick();
     nursing.tick = { on: pup.nursingOn === f.uid, astray: Math.abs(S.worldBiomassKg() - W0 - (net() - n0)),
       milkMJ: pupMJ() - p0 + pBurn, motherMJ: fMJ - sim.energyMJ(f.tissues) - fBurn };
+    S.bodyEveryTicks = bodyEvery;
     // a suckle: its stomach full over feedingMinS at least
     place(0.05); S.setFood(pup, 0.2); S.setFood(f, 1); sim.setIntent(pup, { gait: "eat" });
     const t0 = sim.now, half = [], room0 = S.stomachKg(pup);
@@ -378,7 +381,7 @@ async function main(browser, r) {
     t.fatKg = 0; t.carbsKg = 0; t.proteinKg = lethal + (t.proteinKg - lethal) * 0.05; t.waterKg = t.proteinKg * sh.waterKg / sh.proteinKg;
     S.updateBody(f3);
     const foodS = f3.food, tissuesS = sim.biomassKg(f3.tissues);
-    S.tick();
+    for (let n = 0; n < S.bodyEveryTicks; n++) S.tick(); // (to her body turn)
     womb.lost = { food: +foodS.toFixed(3), pregnant: !!f3.pregnancy, womb: sim.biomassKg(f3.womb), inWomb: +inWomb.toFixed(3),
       tissuesGain: +(sim.biomassKg(f3.tissues) - tissuesS).toFixed(3), alive: sim.isLiveCritter(f3) };
     return { nursing, womb, milkEfficiency: S.milkEfficiency, nurseMinFood: sim.nurseMotherMinFood, ownUseS: 1 / S.SPEEDS.foodFullS.wolf, dueMin: Math.min(...dues), dueMax: Math.max(...dues), g: B.gestationS, wolf: stats(litters.wolf),

@@ -16,7 +16,11 @@
 // TURNS: a critter decides every decideEveryS of game time (so at most once a tick) and
 // carries on with its last intent in between. Each critter gets a slot, a tick within
 // every decideEveryS, spread so every slot has about as many wolves, deer, and critters
-// in all as any other.
+// in all as any other. A critter at rest (restful: calm, grazing, resting, brooding, at its
+// den or by its kill, and at its last turn perceiving no other species alive and hearing
+// nothing, not bumped, blocked or touched since) takes only every other turn: those of
+// its half (m.half), the halves spread over the slots as evenly, so each tick still has
+// about as many turns.
 //
 // DECISIONS, in order of priority:
 //   a tired swimmer heads for land (toShore)
@@ -200,6 +204,7 @@ function ticks(seconds) { return seconds / sim.tempo; }
 
 let turnTicks = 1;   // ticks between a critter's turns
 let slotLoad = null; // { all, wolf, deer }: how many critters have each slot
+let halfLoad = null; // { wolf, deer }: by slot, how many critters have each half [0, 1]
 
 function takeSlot(a) {
   const mine = slotLoad[a.species] || (slotLoad[a.species] = new Array(turnTicks).fill(0));
@@ -211,10 +216,18 @@ function takeSlot(a) {
   return best;
 }
 
+function takeHalf(a, slot) {
+  const by = halfLoad[a.species] || (halfLoad[a.species] = Array.from({ length: turnTicks }, () => [0, 0]));
+  const h = by[slot][1] < by[slot][0] ? 1 : 0;
+  by[slot][h]++;
+  return h;
+}
+
 function dropMemory(a) {
   const m = memories.get(a);
   if (!m) return;
   slotLoad[a.species][m.slot]--; slotLoad.all[m.slot]--;
+  halfLoad[a.species][m.slot][m.half]--;
   memories.delete(a);
 }
 
@@ -287,8 +300,12 @@ function memoryOf(a) {
       lastTurn: -Infinity,
       intent: null,           // its last decision
       slot: takeSlot(a),      // its turns: ticks where tickCount % turnTicks === slot
+      half: 0,                // ...and at rest, those of its half (TURNS)
+      stirred: true,          // perceived another species alive, or a bark, at its last turn
+      restful: false,         // at rest at its last turn (TURNS)
       playerTick: -Infinity   // the last tick the player steered it
     };
+    m.half = takeHalf(a, m.slot);
     memories.set(a, m);
   }
   return m;
@@ -307,7 +324,9 @@ function memoryOf(a) {
 // start population (4 wolves: THE START in sim.js), so that their young find mates.
 function remember(a, m, now) {
   const selfInfant = sim.isInfant(a);
+  m.stirred = false;
   for (const o of senses.perceive(a)) {
+    if (o.signal || o.alive && o.species !== a.species) m.stirred = true;
     const before = m.known.get(o.uid);
     // what only sight tells is kept from the last time it was seen (the entry updated in place)
     const seen = o.by === "sight", k = before || {};
@@ -845,7 +864,7 @@ function toward(a, m, dx, dy, gait, now, c) {
     let clear = false;
     for (const g of gait === "gallop" ? ["gallop", "trot", "walk"] : gait === "trot" ? ["trot", "walk"] : gait === "stalk" ? ["stalk", "walk"] : [gait]) {
       gait = g;
-      const reach = Math.max(v0, sim.gaitSpeed(a.species, g)) * turnTicks * 1.5 + 0.3;
+      const reach = Math.max(v0, sim.gaitSpeed(a.species, g)) * (m.restful ? 2 : 1) * turnTicks * 1.5 + 0.3;
       if ((clear = wayClear(c, a.gx + vx / span * reach, a.gy + vy / span * reach) && (!pts || sweepClear(c, pts, g)))) break;
     }
     if (pts && !clear) return { dx: vx, dy: vy, gait: "walk" };
@@ -928,14 +947,14 @@ function visitsAt(m, x, y) {
 
 // Notes where the critter is (each turn), and whether it is trapped (every trapLookS).
 function noteWhere(a, m, now) {
-  const key = visitKey(a.gx, a.gy), dt = turnTicks * sim.tempo;
+  const gap = sinceTurn(m, now), key = visitKey(a.gx, a.gy), dt = gap * sim.tempo;
   const v = m.visits.get(key);
   if (v) { v.s = v.s * Math.pow(0.5, (sim.now - v.at) / visitHalfLifeS) + dt; v.at = sim.now; }
   else {
     m.visits.set(key, { s: dt, at: sim.now });
     if (m.visits.size > visitsKept) for (const [k2, w] of m.visits) { if (w.s * Math.pow(0.5, (sim.now - w.at) / visitHalfLifeS) < 1) m.visits.delete(k2); }
   }
-  m.trapPath += a.speed * turnTicks;
+  m.trapPath += a.speed * gap;
   if (now - m.trapLook < ticks(trapLookS)) return;
   m.trapLook = now;
   const s = m.trapSeen;
@@ -1051,6 +1070,34 @@ function decideDeer(a, m, now) {
 // Below deerForageBelow, seeing no grass worth it, or only grass grazed down below half
 // (and not only needles), for forageLookS, it goes looking for better (FORAGING, as
 // PROWLING). An intent, or null if not grazing or no grass worth it is in sight.
+// GRASS IN SIGHT (senses.plantsAround: deerGrazeLookShare of its sight, "near", or all of
+// it, "far") a deer looks over again only when it has moved to another tile, turned, its
+// sight changed (the light), or every plantsLookTurns of its turns (the first of them at
+// a turn of its own, by uid, so few deer look on any one turn). In between it goes by what
+// it saw then (another deer may have grazed it since), but for the tiles that matter
+// most: the one underfoot, the one it goes to and the one it crops, looked at again.
+const plantsLookTurns = 4;
+function plantsSeen(a, m, now, which, i, j) {
+  const kept = m.plants && m.plants[which], share = senses.sightShare(a);
+  const n = m.plantTurns = (m.plantTurns ?? a.uid) + (which === "near" ? 1 : 0);
+  let list;
+  if (kept && kept.i === i && kept.j === j && kept.hx === a.hx && kept.hy === a.hy && kept.share === share
+    && n % plantsLookTurns !== 0 && now - kept.tick <= plantsLookTurns * turnTicks * 2) {
+    const fresh = (ti, tj) => ti === i && tj === j || m.grazeTo && ti === m.grazeTo[0] && tj === m.grazeTo[1]
+      || m.cropping && ti === m.cropping[0] && tj === m.cropping[1];
+    list = [];
+    for (const g of kept.list) {
+      if (!fresh(g.i, g.j)) { list.push(g); continue; }
+      const kg = sim.plantFoodAt(g.i, g.j);
+      if (kg > 0) list.push({ i: g.i, j: g.j, kg });
+    }
+  } else {
+    list = senses.plantsAround(a, which === "near" ? deerGrazeLookShare : 1);
+    (m.plants || (m.plants = {}))[which] = { list, i, j, hx: a.hx, hy: a.hy, share, tick: now };
+  }
+  return list;
+}
+
 function graze(a, m, now) {
   m.foraging = false;
   if (a.pose === "swim" || !sim.can(a, "eat")) return null;
@@ -1060,10 +1107,10 @@ function graze(a, m, now) {
   const worth = deerBiteShare * sim.grassMaxKg * 0.999; // (grass is stored as 32-bit floats)
   // (worth it without its needles)
   const good = g => g.kg - sim.pineFoodAt(g.i, g.j) >= worth;
-  let grass = senses.plantsAround(a, deerGrazeLookShare);
-  const goingFar = m.grazeTo && !grass.some(g => g.i === m.grazeTo[0] && g.j === m.grazeTo[1]);
-  if (goingFar || !grass.some(good)) grass = senses.plantsAround(a);
   const i = Math.floor(a.gx), j = Math.floor(a.gy);
+  let grass = plantsSeen(a, m, now, "near", i, j);
+  const goingFar = m.grazeTo && !grass.some(g => g.i === m.grazeTo[0] && g.j === m.grazeTo[1]);
+  if (goingFar || !grass.some(good)) grass = plantsSeen(a, m, now, "far", i, j);
   const seen = (ti, tj) => grass.find(g => g.i === ti && g.j === tj);
   // cropping the grass under a boulder beside it, until bare
   const c = m.cropping;
@@ -2315,7 +2362,7 @@ function giveWay(a, m, intent, now) {
     || m.mode === "calm" || m.mode === "rest" || m.mode === "family" || m.mode === "yield");
   if (m.yield && now < m.yield.until && atEase) return m.yield.intent;
   m.yield = null;
-  if (!atEase || a.pose === "swim" || !(sim.tickCount - a.bumpedTick <= turnTicks)) return intent;
+  if (!atEase || a.pose === "swim" || !(sim.tickCount - a.bumpedTick <= Math.max(turnTicks, sinceTurn(m, now)))) return intent;
   // across the bumper's way, to the side of it it is on (so it draws apart from it), else
   // the other
   const dx = a.bumpedDx, dy = a.bumpedDy;
@@ -2332,6 +2379,16 @@ function giveWay(a, m, intent, now) {
 }
 
 // Every tick: the critters whose turn it is perceive, remember and decide.
+// Whether critter a is at rest (TURNS).
+const restModes = new Set(["calm", "graze", "rest", "brood", "den", "guard", "kill"]);
+function restful(a, m) {
+  return restModes.has(m.mode) && !m.stirred && a.pose !== "swim" && !m.escape
+    && !(a.bumpedTick > m.lastTurn) && !(a.blockedTick > m.lastTurn) && !(a.touchedTick > m.lastTurn);
+}
+
+// Ticks since its last turn (a turn's worth, at its first).
+function sinceTurn(m, now) { return m.lastTurn === -Infinity ? turnTicks : now - m.lastTurn; }
+
 function think() {
   const now = sim.tickCount;
   senses.regrid();
@@ -2346,6 +2403,7 @@ function think() {
       continue;
     }
     if (now % turnTicks !== m.slot) continue;
+    if (m.restful && restful(a, m) && Math.floor(now / turnTicks) % 2 !== m.half) continue;
     remember(a, m, now);
     noteBump(a, m, now);
     noteShores(a, m, now);
@@ -2360,6 +2418,7 @@ function think() {
     intent = giveWay(a, m, intent, now);
     m.intent = intent;
     m.lastTurn = now;
+    m.restful = restful(a, m);
     sim.setIntent(a, intent);
   }
   // the memories of critters no longer in play
@@ -2490,6 +2549,7 @@ function attach(theSim, theSenses) {
   senses = theSenses;
   turnTicks = Math.max(1, Math.round(ticks(decideEveryS)));
   slotLoad = { all: new Array(turnTicks).fill(0) };
+  halfLoad = {};
   sim.onTick(think);
 }
 

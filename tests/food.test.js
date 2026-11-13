@@ -175,7 +175,7 @@ async function main(browser, r) {
     for (let n = 0; n < 60; n++) S.tick();
     const fell = (d0 - d.food) / (sim.now - t0), expect = 1 / S.SPEEDS.foodFullS.deer;
     S.setFood(d, 1e-6); S.setFood(w, 1e-6);
-    for (let n = 0; n < 5; n++) S.tick();
+    for (let n = 0; n < S.bodyEveryTicks; n++) S.tick(); // (to their body turns)
     return { fell, expect, deerPose: d.pose, deerLive: sim.isLiveCritter(d),
       wolfPose: w.pose, wolfLive: sim.isLiveCritter(w) };
   });
@@ -261,8 +261,10 @@ async function main(browser, r) {
       widths: [fill("food-meter-fill").parentElement, fill("gut-meter-fill").parentElement].map(e => e.getBoundingClientRect().width) };
     // ...a full stomach takes no more...
     for (let k = 0; k < 5; k++) S.tick(); // (topped right up)
-    const before = sim.carcassMeatKg(d); S.tick();
-    const ateWhenFull = before - sim.carcassMeatKg(d);
+    // (over a body turn's ticks: BODY TURNS in sim.js)
+    const before = sim.carcassMeatKg(d);
+    for (let k = 0; k < S.bodyEveryTicks; k++) S.tick();
+    const ateWhenFull = (before - sim.carcassMeatKg(d)) / S.bodyEveryTicks;
     const dripATick = S.stomachKg(w) * sim.tempo / S.stomachTS(w);
     // ...and eating on, it tops its stomach up as it drips through, meal after meal
     // (setFood keeps it hungry; the stomach as it was)
@@ -301,7 +303,7 @@ async function main(browser, r) {
     `the player's wolf, hungry and standing still beside it, eats until its stomach is full in ${F.s.toFixed(1)} s (at least ${F.minS} s, though it could gorge faster): ` +
     `${F.ateKg.toFixed(1)} kg (its stomach holds ${F.stomachKg.toFixed(1)}, and passed some on meanwhile)`);
   r.check(eat.ateWhenFull <= eat.dripATick + 1e-9,
-    `a full stomach takes no more than drips out of it (${(eat.ateWhenFull * 1000).toFixed(1)} g in a tick; ${(eat.dripATick * 1000).toFixed(1)} g drips out)`);
+    `a full stomach takes no more than drips out of it (${(eat.ateWhenFull * 1000).toFixed(1)} g a tick, over a body turn's; ${(eat.dripATick * 1000).toFixed(1)} g drips out)`);
   r.check(eat.lowestGut > 0.9,
     `eating on, it keeps its stomach topped up as it passes food on (10 s: never below ${(eat.lowestGut * 100).toFixed(0)}% full)`);
   r.check(Math.abs(eat.digested.s / eat.digested.expectS - 1) < 0.1 && eat.digested.food > 0.2,
