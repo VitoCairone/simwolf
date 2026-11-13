@@ -154,6 +154,7 @@ async function main(browser, r) {
     // DENS; SUPPORT FEEDING and FAMILY ROLES
     {
       for (const sp of ["deer", "wolf", "death"]) S.scentMarks[sp].clear();
+      for (const k of sim.allCorpses) k.gx = k.gy = -600 - k.uid * 3; // (the carcasses before, out of the way)
       // cover: a nook of boulders 6 tiles north of where she stands
       for (const [i, j] of [[-1, -7], [0, -7], [1, -7], [-1, -6], [1, -6], [-1, -5], [1, -5]]) S.setBoulder(i0 + i, j0 + j);
       const he = grown("wolf", true, 1), she = grown("wolf", false, 1);
@@ -174,8 +175,11 @@ async function main(browser, r) {
       const d = grown("deer", false, 1);
       kill(d, 25.5, 0.5);
       // (she gets hungry once he has gone: S.setFood below)
-      put(he, 3.5, 0.5); he.hx = 1; he.hy = 0; S.setFood(he, 0.6); S.setFood(she, 0.95);
+      // (he looks her way first: forgetting all, he sees her, and her at the den, again)
+      put(he, 3.5, 0.5); he.hx = -1; he.hy = 0; S.setFood(he, 1); S.setFood(she, 0.95);
       he.signal = she.signal = he.role = she.role = null; mind.forget(he);
+      for (let n = 0; n < 1 / sim.tempo; n++) S.tick();
+      put(he, 3.5, 0.5); he.hx = 1; he.hy = 0; S.setFood(he, 0.6); S.setFood(she, 0.95); he.signal = he.role = null;
       const log = { heHowls: [], sheModes: new Set(), dropAt: null, sheAte: false, stay: null };
       let n = 0;
       const pups = she.youngUids.map(uid => S.critterByUid.get(uid)), old = new Set(sim.allCorpses.filter(c => c.morsel));

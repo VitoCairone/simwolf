@@ -17,7 +17,7 @@ async function main(browser, r) {
   await makeStags(p); // (the stag's sheets)
   const outDir = ensureOutputDir("death");
 
-  // a wolf walks into a standing deer on open ground (as in bugfixes.test.js)
+  // a wolf trots into a standing deer on open ground, biting it (as in bugfixes.test.js)
   const setup = await p.evaluate(() => {
     sim.pause();
     const w = sim.internals.wolves[1], d = sim.internals.deer[0];
@@ -31,8 +31,9 @@ async function main(browser, r) {
     w.gx = t[0] + 0.5; w.gy = t[1] + 0.5; d.gx = t[0] + 1.6; d.gy = t[1] + 0.5;
     w.stunnedUntil = d.stunnedUntil = 0; // not stunned from before they were moved
     sim.internals.setCritterIdle(d); mind.ignore(d); mind.ignore(w);
+    w.stomach = sim.internals.biomass(); sim.internals.updateBody(w); // (room to eat: it bites)
     d.currentDirection = sim.DIR_E;
-    sim.internals.setCritterMoving(w, sim.DIR_E, "walk");
+    sim.internals.setCritterMoving(w, sim.DIR_E, "trot");
     for (let n = 0; n < 120 && d.pose !== "death"; n++) sim.internals.tick();
     // the wolf steps back out of the picture
     w.gx = w.gy = w.nextGX = w.nextGY = -90; sim.internals.setCritterIdle(w);

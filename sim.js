@@ -46,8 +46,8 @@ const terrainSeed = 1;
 //   stunMinS, stunMaxS     how long a blocked move stuns a critter (see INTENTS)
 //   deathDurationSBySpecies   the death pose's length (animat.js fits its animation to it)
 //   corpseLastsS           how long after its death a corpse is gone (two weeks)
-//   lifeStageAgesS         ages a young critter can see, hear, walk, eat, run, is weaned
-//                          and can mate
+//   lifeStageAgesS         ages a young critter can see, hear, walk, eat, run, is weaned,
+//                          hunts (a wolf) and can mate
 //   growthAgesS            ages at which a well-fed young critter's frame has grown
 //                          growthSharesBySpecies of the way to an adult's (see BODY)
 //   breeding               gestation, how often a female can conceive, the oldest a
@@ -81,6 +81,9 @@ const realLifeStageAgesS = {
     run:    { min: 25 * dayS, avg: 28 * dayS,  max: 35 * dayS },
     // weaned at 5-9 weeks, nursing on for a few more (San Diego Zoo Wildlife Alliance)
     wean:   { min: 5 * 7 * dayS, avg: 8 * 7 * dayS, max: 10 * 7 * dayS },
+    // fed by the pack after weaning; travels and hunts with it from about 6 months
+    // (Mech & Boitani 2003, Wolves: a range of estimates)
+    hunt:   { min: 5 * monthS, avg: 6 * monthS, max: 8 * monthS },
     mate:   { min: 18 * monthS, avg: 24 * monthS,  max: 36 * monthS },
   },
   deer: {
@@ -90,6 +93,7 @@ const realLifeStageAgesS = {
     eat:    { min: 10 * dayS, avg: 20 * dayS, max: 30 * dayS },
     run:    { min: 1 * dayS, avg: 2 * dayS, max: 3 * dayS },
     wean:   { min: 4 * monthS, avg: 5 * monthS, max: 8 * monthS }, // ~156 days (Add-my-Pet)
+    hunt:   { min: 4 * monthS, avg: 5 * monthS, max: 8 * monthS }, // (deer don't: as weaned)
     mate:   { min: 16 * monthS, avg: 24 * monthS,  max: 36 * monthS },
   }
 };
@@ -844,6 +848,14 @@ function isBlockedTile(gx, gy) {
   return obstacleAt(gx, gy) !== null;
 }
 
+// Tile (i, j) for telling shores: 1 water (or off the map), 0 land with an obstacle on it,
+// 2 open land.
+function shoreKindAt(i, j) {
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 1;
+  const b = terrainBlock(i, j), k = (i - b.i0) * terrainBlockTiles + j - b.j0;
+  return b.kind[k] === 3 ? 1 : b.boulder[k] || (b.pine[k] & pineSizeBits) > 1 ? 0 : 2;
+}
+
 // How high a boulder stands above the ground at its tile's center, in levels (see TERRAIN
 // HEIGHT). The boulders' rocks are drawn 1.5 to 3 levels tall (12-25 px: 0.6-1.2 m); taken
 // as 3, above a wolf's or a deer's eye, so a boulder hides what is behind it. (A pine's is
@@ -1045,6 +1057,7 @@ function terrainBlock(i, j) {
     b = terrainBlocks.get(key);
     if (!b) {
       b = makeTerrainBlock(bi, bj);
+      b.grassE = grassByBlock.get(key) || null;
       terrainBlocks.set(key, b);
       if (terrainBlocks.size > terrainBlocksKept) dropOldTerrainBlocks();
     }
@@ -1199,8 +1212,12 @@ function isLandTile(i, j) {
 // Each is a plain object. Directions are indices into
 // moveVecByDir, clockwise from grid E.
 // The start's numbers, and the side of the deer's start square (THE START). A test may set
-// others (simStart, before this loads), to run faster.
-const startSetup = { wolves: 14, deer: 200, deerSideTiles: 512, ...globalThis.simStart };
+// others (simStart, before this loads), to run faster. Four wolves, two pairs (half
+// male: init), to the 400 deer: a wolf lives off about 25 deer a year, and the deer can
+// make up a quarter of their number a year at most (estimates), so about 100 deer to a wolf (real wolves
+// live at about this ratio: Mech & Boitani 2003, Wolves); two pairs, so their young can
+// find mates not of their family.
+const startSetup = { wolves: 4, deer: 400, deerSideTiles: 724, ...globalThis.simStart };
 const nWolves = startSetup.wolves;
 const wolves = Array.from({length: nWolves}, () => ({}));
 // THE PLAYER'S WOLF: wolves[0] at first. It lives and dies like any wolf; dying, and then
@@ -1305,8 +1322,8 @@ function initCritter(a, species, tissues = null) {
 
 // THE START: every wolf starts on a random land tile's center (allLandTiles) in one
 // square, startTiles a side (startArea: { i0, j0, i1, j1 }, i1 and j1 just past it), and
-// every deer on a random one in the square deerSideTiles a side (startSetup: twice as
-// wide) about the same center (deerArea, within the map). The start square is the first,
+// every deer on a random one in the square deerSideTiles a side (startSetup: about 2.8
+// times as wide, twice the area of a 512-tile square) about the same center (deerArea, within the map). The start square is the first,
 // spiralling out from the map's center by startSearchStepTiles, that is mostly land
 // (startLandShare of startSamples^2 points in it) with a lake near (at startWaterMin of
 // startSamples^2 points in the square startNearTiles a side about it), for swimming and
@@ -1557,13 +1574,12 @@ function energyMJ(b) { return b.fatKg * fatMJPerKg + b.carbsKg * carbsMJPerKg + 
 // Moves `share` (0 to 1) of every part of `from` into `to` (null: out of the world, into
 // the ledger's `left`). The kg moved.
 function moveShare(from, to, share, left = null) {
-  let kg = 0;
-  for (const k of NUTRIENTS) {
-    const v = from[k] * share;
-    from[k] -= v;
-    if (to) to[k] += v;
-    kg += v;
-  }
+  // (each of NUTRIENTS, in their order)
+  const fat = from.fatKg * share, carbs = from.carbsKg * share, protein = from.proteinKg * share,
+    water = from.waterKg * share, mineral = from.mineralKg * share;
+  from.fatKg -= fat; from.carbsKg -= carbs; from.proteinKg -= protein; from.waterKg -= water; from.mineralKg -= mineral;
+  if (to) { to.fatKg += fat; to.carbsKg += carbs; to.proteinKg += protein; to.waterKg += water; to.mineralKg += mineral; }
+  const kg = 0 + fat + carbs + protein + water + mineral;
   if (left) biomassLedger[left] += kg;
   return kg;
 }
@@ -1710,6 +1726,11 @@ function carcassMeatKg(c) {
 // from untouched grass (grassTotalKg): grazing takes from that, and the ledger's grownKg
 // is what grazed tiles regrow beyond what untouched grass does meanwhile.
 const grassTouched = new Map();
+// (the same by terrain block, for looking one up fast: block key -> { n: its grazed tiles,
+// v: for the tile at index k in the block, v[3k] its kg, v[3k + 1] as of when (NaN: not
+// grazed), v[3k + 2] its most }; a block in play has its own as b.grassE)
+const grassByBlock = new Map();
+const grassSpan = 3;
 let grassGrownKg = 0;
 const grassChanges = [];   // tile indices whose height changed, oldest first
 let grassChangesBase = 0;  // the serial number of grassChanges[0]
@@ -1729,6 +1750,8 @@ function grassNow(e) {
 
 function initGrass() {
   grassTouched.clear();
+  grassByBlock.clear();
+  for (const b of terrainBlocks.values()) b.grassE = null;
   undergrowthTouched.clear();
   pineTouched.clear();
   plantClockS = 0;
@@ -1757,8 +1780,17 @@ function setGrassKg(k, kg) {
   let e = grassTouched.get(k);
   const most = grassMostAt(i, j);
   const before = e ? grassNow(e) : untouchedGrassKg(most);
-  if (!e) grassTouched.set(k, e = { kg, at: grassGrownKg, most, h: heightOfGrass(before) });
+  if (!e) {
+    grassTouched.set(k, e = { kg, at: grassGrownKg, most, h: heightOfGrass(before) });
+    const b = terrainBlock(i, j);
+    if (!b.grassE) grassByBlock.set(b.bi * 100000 + b.bj, b.grassE = { n: 0, v: new Float64Array(grassSpan * terrainBlockTiles * terrainBlockTiles).fill(NaN) });
+    b.grassE.n++;
+  }
   e.kg = Math.min(most, kg); e.at = grassGrownKg;
+  {
+    const b = terrainBlock(i, j), v = b.grassE.v, at = grassSpan * ((i - b.i0) * terrainBlockTiles + j - b.j0);
+    v[at] = e.kg; v[at + 1] = e.at; v[at + 2] = e.most;
+  }
   const h = heightOfGrass(e.kg);
   if (h !== e.h) { e.h = h; logGrassChange(k); }
   return e.kg - before;
@@ -1775,7 +1807,17 @@ function growGrass(dtS) {
     grown += (now - untouchedNow) - (was - untouchedGrassKg(e.most, g0));
     const h = heightOfGrass(now);
     if (h !== e.h) { e.h = h; logGrassChange(k); }
-    if (now >= e.most && untouchedNow >= e.most) grassTouched.delete(k);
+    if (now >= e.most && untouchedNow >= e.most) {
+      grassTouched.delete(k);
+      const i = Math.floor(k / gridHeightN), j = k % gridHeightN, B = terrainBlockTiles;
+      const key = Math.floor(i / B) * 100000 + Math.floor(j / B), g = grassByBlock.get(key);
+      g.v[grassSpan * ((i % B) * B + j % B) + 1] = NaN;
+      if (--g.n === 0) { // (none left in its block)
+        grassByBlock.delete(key);
+        const b = terrainBlocks.get(key);
+        if (b) b.grassE = null;
+      }
+    }
   }
   biomassLedger.grownKg += grown;
   // untouched grass taller: everywhere at once
@@ -1800,10 +1842,19 @@ function inGrassReach(a, i, j) {
 // The grass on tile (i, j), in kg; 0 where it isn't grass.
 function grassFoodAt(i, j) {
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 0;
-  const e = grassTouched.get(i * gridHeightN + j);
-  if (e) return grassNow(e);
-  const most = grassMostAt(i, j);
-  return most ? untouchedGrassKg(most) : 0;
+  const b = terrainBlock(i, j), k = (i - b.i0) * terrainBlockTiles + j - b.j0;
+  return grassInBlock(b, k);
+}
+
+// The same, for the tile at index k of terrain block b.
+function grassInBlock(b, k) {
+  if (b.grassE !== null) {
+    const v = b.grassE.v, at = v[grassSpan * k + 1];
+    if (at === at) return Math.min(v[grassSpan * k + 2], v[grassSpan * k] + grassGrownKg - at); // (grazed: as grassNow)
+  }
+  if (b.kind[k] !== 0) return 0; // (not grass)
+  const blocked = b.boulder[k] || (b.pine[k] & pineSizeBits) > 1;
+  return untouchedGrassKg(SPEEDS.grassMaxKg * (blocked ? rockGrassShare : 1));
 }
 
 // The height of the grass on tile (i, j): 0 bare, 1 short, 2 medium, 3 tall; -1 if not grass.
@@ -1877,8 +1928,9 @@ const pineBiteShare = grassDryShare / pineDryShare;
 
 // The most pine browse tile (i, j) can hold, fresh kg.
 function pineMostAt(i, j) {
-  const p = pineOn(i, j);
-  return p ? pineMostKgBySize[p.size] : 0;
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 0;
+  const b = terrainBlock(i, j), p = b.pine[(i - b.i0) * terrainBlockTiles + j - b.j0];
+  return p ? pineMostKgBySize[p & pineSizeBits] : 0;
 }
 
 // The pine browse on tile (i, j), fresh kg.
@@ -1925,7 +1977,11 @@ function undergrowthShownAt(i, j) {
 
 // PLANT FOOD on tile (i, j): its grass, undergrowth and pine browse, fresh kg.
 function plantFoodAt(i, j) {
-  return grassFoodAt(i, j) + undergrowthFoodAt(i, j) + pineFoodAt(i, j);
+  if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return 0;
+  const b = terrainBlock(i, j), k = (i - b.i0) * terrainBlockTiles + j - b.j0;
+  let kg = grassInBlock(b, k);
+  kg += b.plant[k] ? undergrowthFoodAt(i, j) : 0;
+  return kg + (b.pine[k] ? pineFoodAt(i, j) : 0);
 }
 
 // The most plant food tile (i, j) can hold, fresh kg.
@@ -1934,11 +1990,11 @@ function plantMostAt(i, j) {
   return grassMostAt(i, j) + (u ? undergrowthMostKg[u] : 0) + pineMostAt(i, j);
 }
 
-// The nearest corpse within a's reach with meat left, or null.
-function carcassInReach(a) {
+// The nearest corpse within a's reach with meat left (withLeg: and a leg to tear off), or null.
+function carcassInReach(a, withLeg = false) {
   let best = null, bestL2 = eatReachTiles * eatReachTiles;
   for (const c of allCorpses) {
-    if (!c.carcass) continue;
+    if (!c.carcass || withLeg && !legToTake(c)) continue;
     const l2 = (c.gx - a.gx) ** 2 + (c.gy - a.gy) ** 2;
     if (l2 <= bestL2 && carcassMeatKg(c) > 0) { best = c; bestL2 = l2; }
   }
@@ -2063,7 +2119,7 @@ function legToTake(c) {
 
 // One tick of a's tugging at a leg of the carcass in its reach: torn off after tearLegS.
 function tugLeg(a) {
-  const c = canCarry(a) && !a.carrying ? carcassInReach(a) : null, piece = legToTake(c);
+  const c = canCarry(a) && !a.carrying ? carcassInReach(a, true) : null, piece = legToTake(c);
   if (!piece) { a.tugS = 0; return; }
   a.tugS = (a.tugS || 0) + tempo;
   if (a.tugS < tearLegS - 1e-9) return;
@@ -2381,7 +2437,8 @@ function updateClock() {
 // marks over a mark of a parent's, so its parents' trails stay whole for it to find them
 // by. Water holds no scent, the shore's included (a critter half on land marks nothing
 // over water). Only marked tiles are kept, until scentKeepHalfLives half-lives old
-// (fainter than anything can smell).
+// (fainter than anything can smell): a mark older than scentOldest counts as gone
+// (ScentMarks; swept every scentSweepTicks).
 // DEATH SCENT: a carcass spreads death scent (its own kind, scentMarks.death, by the
 // carcass's uid) over the land within deathScentTiles of it: out to a circle that grows
 // over deathScentGrowS from the death (each tile as the circle reaches it, once its death
@@ -2410,13 +2467,66 @@ const deathScentDisk = (() => {
 })();
 const windTurnMaxRad = Math.PI / 6;
 const scentKeepHalfLives = 4; // (senses.js: the faintest smelled is 1/8, 3 half-lives)
-let scentMarks = null; // by species: tile index -> [game time, uid] of the last mark
+let scentMarks = null; // by species: a ScentMarks, each tile's last mark
+let scentOldest = -Infinity; // marks older are gone (as of the last tick's marking)
+const scentSweepTicks = 3600;
+
+// One kind of scent's marks: each tile's last, its game time, maker's uid and (death
+// scent) whether meaty, kept by blocks of terrainBlockTiles a side (a block with none
+// left that count is dropped at the sweep). For tests it also reads and writes as a Map
+// of tile index (i * gridHeightN + j) -> [game time, uid, meaty].
+class ScentMarks {
+  constructor() { this.blocks = new Map(); this.last = null; }
+  // The block of tile (i, j), made if `make`; else null.
+  block(i, j, make) {
+    const B = terrainBlockTiles, bi = Math.floor(i / B), bj = Math.floor(j / B);
+    let b = this.last;
+    if (b !== null && b.bi === bi && b.bj === bj) return b;
+    const key = bi * 100000 + bj;
+    b = this.blocks.get(key);
+    if (!b) {
+      if (!make) return null;
+      b = { bi, bj, i0: bi * B, j0: bj * B, latest: -Infinity,
+        at: new Float64Array(B * B).fill(-Infinity), uid: new Int32Array(B * B), meaty: new Uint8Array(B * B) };
+      this.blocks.set(key, b);
+    }
+    return this.last = b;
+  }
+  mark(i, j, at, uid, meaty = true) {
+    const b = this.block(i, j, true), k = (i - b.i0) * terrainBlockTiles + j - b.j0;
+    b.at[k] = at; b.uid[k] = uid; b.meaty[k] = meaty === false ? 0 : 1;
+    if (at > b.latest) b.latest = at;
+  }
+  // Drops the blocks whose marks are all older than `oldest`.
+  sweep(oldest) {
+    for (const [key, b] of this.blocks) if (b.latest < oldest) this.blocks.delete(key);
+    this.last = null;
+  }
+  clear() { this.blocks.clear(); this.last = null; }
+  set(key, m) { this.mark(Math.floor(key / gridHeightN), key % gridHeightN, m[0], m[1], m[2]); return this; }
+  get(key) {
+    const i = Math.floor(key / gridHeightN), j = key % gridHeightN, b = this.block(i, j, false);
+    if (b === null) return undefined;
+    const k = (i - b.i0) * terrainBlockTiles + j - b.j0;
+    return b.at[k] === -Infinity ? undefined : [b.at[k], b.uid[k], b.meaty[k] === 1];
+  }
+  delete(key) {
+    const i = Math.floor(key / gridHeightN), j = key % gridHeightN, b = this.block(i, j, false);
+    if (b !== null) b.at[(i - b.i0) * terrainBlockTiles + j - b.j0] = -Infinity;
+  }
+  get size() {
+    let n = 0;
+    for (const b of this.blocks.values()) for (let k = 0; k < b.at.length; k++) if (b.at[k] >= scentOldest) n++;
+    return n;
+  }
+}
 let windAngle = Math.random() * 2 * Math.PI;
 let windX = Math.cos(windAngle), windY = Math.sin(windAngle);
 
 function initScent() {
   scentMarks = {};
-  for (const sp of scentSpecies) scentMarks[sp] = new Map();
+  scentOldest = -Infinity;
+  for (const sp of scentSpecies) scentMarks[sp] = new ScentMarks();
 }
 
 function markScent() {
@@ -2425,18 +2535,14 @@ function markScent() {
     const i = Math.floor(a.gx), j = Math.floor(a.gy);
     if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) continue;
     if (getTerrainAt(i, j) === "water") continue; // (a critter on land, its middle over the shore's water)
-    const k = i * gridHeightN + j, marks = scentMarks[a.species];
+    const marks = scentMarks[a.species], b = marks.block(i, j, true), k = (i - b.i0) * terrainBlockTiles + j - b.j0;
     // (a young wolf never covers a parent's mark: it can always find their trail)
-    if (a.species === "wolf" && !isGrown(a) && a.parentUids.includes(marks.get(k)?.[1])) continue;
-    marks.delete(k); // (so the map stays in order of marking, oldest first)
-    marks.set(k, [g_now, a.uid]);
+    if (a.species === "wolf" && b.at[k] !== -Infinity && b.at[k] >= scentOldest && !isGrown(a) && a.parentUids.includes(b.uid[k])) continue;
+    b.at[k] = g_now; b.uid[k] = a.uid; b.latest = g_now;
   }
-  // the marks too old to matter, oldest first
-  const oldest = g_now - scentKeepHalfLives * SPEEDS.scentHalfLifeS;
-  for (const sp of scentSpecies) for (const [k, m] of scentMarks[sp]) {
-    if (m[0] >= oldest) break;
-    scentMarks[sp].delete(k);
-  }
+  // the marks too old to matter
+  scentOldest = g_now - scentKeepHalfLives * SPEEDS.scentHalfLifeS;
+  if (g_tick % scentSweepTicks === 0) for (const marks of Object.values(scentMarks)) marks.sweep(scentOldest);
 }
 
 // Death scent from every carcass (see DEATH SCENT), each tick: its growing circle, and its
@@ -2451,10 +2557,9 @@ function spreadDeathScent() {
     const lay = (di, dj, d) => {
       const i = ci + di, j = cj + dj;
       if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN || getTerrainAt(i, j) === "water") return;
-      const k = i * gridHeightN + j, at = g_now - d * deathScentAgeSPerTile, old = scentMarks.death.get(k);
-      if (old && old[0] >= at) return;
-      scentMarks.death.delete(k); // (in order of marking: see markScent)
-      scentMarks.death.set(k, [at, c.uid, meaty]);
+      const at = g_now - d * deathScentAgeSPerTile, b = scentMarks.death.block(i, j, true);
+      if (b.at[(i - b.i0) * terrainBlockTiles + j - b.j0] >= at) return;
+      scentMarks.death.mark(i, j, at, c.uid, meaty);
     };
     const r = deathScentTiles * Math.min(1, (g_now - ds.since) / deathScentGrowS);
     while (ds.next < deathScentDisk.length && deathScentDisk[ds.next][2] <= r) lay(...deathScentDisk[ds.next++]);
@@ -2469,9 +2574,11 @@ function spreadDeathScent() {
 // (whether its carcass had meat on it when laid), or null if none.
 function scentAt(i, j, species) {
   if (i < 0 || j < 0 || i >= gridWidthN || j >= gridHeightN) return null;
-  const m = scentMarks[species].get(i * gridHeightN + j);
-  if (!m) return null;
-  return species === "death" ? { ageS: g_now - m[0], uid: m[1], meaty: m[2] !== false } : { ageS: g_now - m[0], uid: m[1] };
+  const b = scentMarks[species].block(i, j, false);
+  if (b === null) return null;
+  const k = (i - b.i0) * terrainBlockTiles + j - b.j0, at = b.at[k];
+  if (at < scentOldest || at === -Infinity) return null;
+  return species === "death" ? { ageS: g_now - at, uid: b.uid[k], meaty: b.meaty[k] === 1 } : { ageS: g_now - at, uid: b.uid[k] };
 }
 
 function shiftWind() {
@@ -2540,6 +2647,8 @@ const critterByUid = new Map(); // every critter in play (not corpses)
 function ageS(a) { return (a.deathTime ?? g_now) - a.birthTime; }
 function isGrown(a) { return _can(a, "mate"); }
 function isInfant(a) { return !_can(a, "wean"); }
+// Fed by its family still: a wolf too young to hunt (a deer, once weaned, feeds itself).
+function isDependent(a) { return !_can(a, "hunt"); }
 function isMating(a) { return a.pose === "mate"; }
 
 function isFertile(a) {
@@ -2872,8 +2981,9 @@ function startHowl(a) {
 // BARKING: a wolf gives a soft bark (an intent's bark: whatever else it does), a signal to
 // those near (a.signal: { kind, tick }), barkS long, heard like any other sound (senses.js
 // BARKS). Kinds: "hunt" (it is going hunting) and "stay" (it is staying put), its role,
-// kept in a.role too; "come" (come to me: a call); and "whimper" (a hungry infant's,
-// quieter). The same signal again within barkAgainS, it doesn't bark. TODO: no bark frames yet (it
+// kept in a.role too; "come" (come to me: a call); "follow" (follow me: LEADING in
+// mind.js); and "whimper" (a hungry infant's, quieter). (Kinds are what is meant: when
+// barks are drawn and given sounds, some may share one.) The same signal again within barkAgainS, it doesn't bark. TODO: no bark frames yet (it
 // is heard, not seen).
 const barkS = 0.3, barkAgainS = 5;
 function startBark(a, kind) {
@@ -3138,7 +3248,9 @@ function isInWater(a) {
 
 // Whether a critter at (gx, gy), with a box boxRad, would be in water.
 function isWaterAt(gx, gy, boxRad = critterBoxRad) {
-  return getOccupiedTiles(gx, gy, boxRad).every(tile => getTerrainAt(...tile.split("_").map(Number)) === "water");
+  const x1 = Math.floor(gx + boxRad), y0 = Math.floor(gy - boxRad), y1 = Math.floor(gy + boxRad);
+  for (let x = Math.floor(gx - boxRad); x <= x1; x++) for (let y = y0; y <= y1; y++) if (getTerrainAt(x, y) !== "water") return false;
+  return true;
 }
 
 function mayEnterWater(a) {
@@ -3316,7 +3428,15 @@ function updateAllCritters() {
 // stunned where it is, but of two critters, one whose own move would be clear of the
 // other where it stands goes on (a critter bumped from behind, or stepping away from the
 // one that bumped it) while the other is stunned. This is the only place positions change.
-// TODO: kill only when the wolf bites, front-on.
+// BITING: a wolf kills a deer it touches only biting it: facing it (the deer ahead of its
+// shoulders), going at it (stalking, trotting or galloping), with room in its stomach, and
+// old enough to hunt (sim: _can "hunt"). Otherwise they only bump.
+const bitingPoses = new Set(["stalk", "trot", "gallop"]);
+function bites(w, d) {
+  return bitingPoses.has(w.pose) && !w.stomachFull && _can(w, "hunt")
+    && w.hx * (d.gx - w.gx) + w.hy * (d.gy - w.gy) > 0;
+}
+
 function moveAllTogether(movers) {
   const allColliders = movers;
   // (a mother and her young too young to walk don't collide: she steps among them, and
@@ -3353,11 +3473,8 @@ function moveAllTogether(movers) {
     if (!isLiveCritter(c0) || !isLiveCritter(c1) || c0.species === c1.species) return;
     // no kills in the water: a wolf couldn't eat the carcass there, or drag it ashore
     if (isInWater(c0.species === "deer" ? c0 : c1)) return;
-    if (allColliders[pair[1]].species === "deer") {
-      wasKilledBy[pair[1]] = pair[0];
-    } else {
-      wasKilledBy[pair[0]] = pair[1];
-    }
+    const [w, d] = c0.species === "wolf" ? [pair[0], pair[1]] : [pair[1], pair[0]];
+    if (bites(allColliders[w], allColliders[d])) wasKilledBy[d] = w;
   });
 
   allColliders.forEach((thing, idx) => {
@@ -3419,46 +3536,39 @@ function doNextMovesCollide(a, b) {
 // compared. Also records each thing's nextAllWater, since its tiles' terrain is at hand.
 // TODO: keep occupancy between ticks and update it only for things that move.
 function findCollidingPairs(creatures) {
-  const tileMap = new Map();         // "x_y" -> indexes of things on that tile
-  const potentialPairs = new Set();  // "i|j", i < j
-  const terrainByTile = new Map();
-  const blockedByTile = new Map();
+  const tileMap = new Map();         // tile key (x * gridHeightN + y) -> indexes of things on that tile
+  const potentialPairs = new Set();  // (i + 1) * n + j, i < j (i -1: a blocked tile)
+  const n = creatures.length, B = terrainBlockTiles;
 
-  for (let i = 0; i < creatures.length; i++) {
-    const creature = creatures[i];
-    const tiles = getOccupiedTiles(creature.nextGX, creature.nextGY, creature.boxRad);
+  for (let i = 0; i < n; i++) {
+    const creature = creatures[i], r = creature.boxRad;
+    const left = Math.floor(creature.nextGX - r), right = Math.floor(creature.nextGX + r);
+    const top = Math.floor(creature.nextGY - r), bottom = Math.floor(creature.nextGY + r);
     let allWater = true;
-
-    for (const tile of tiles) {
-      let terrain = terrainByTile.get(tile);
-      if (terrain === undefined) {
-        const [tileX, tileY] = tile.split("_").map(Number);
-        terrain = getTerrainAt(tileX, tileY);
-        terrainByTile.set(tile, terrain);
-        blockedByTile.set(tile, isBlockedTile(tileX, tileY));
+    for (let x = left; x <= right; x++) for (let y = top; y <= bottom; y++) {
+      const tile = x * gridHeightN + y;
+      // (off the map: water, nothing on it)
+      let water = true, blocked = false;
+      if (x >= 0 && y >= 0 && x < gridWidthN && y < gridHeightN) {
+        const b = terrainBlock(x, y), k = (x - b.i0) * B + y - b.j0;
+        water = b.kind[k] === 3; blocked = b.boulder[k] !== 0 || (b.pine[k] & pineSizeBits) > 1;
       }
-      if (terrain !== "water") allWater = false;
-
-      if (!tileMap.has(tile)) {
-        if (blockedByTile.get(tile)) {
-          potentialPairs.add(`-1|${i}`);
-        } else {
-          tileMap.set(tile, [i]);
-        }
+      if (!water) allWater = false;
+      const on = tileMap.get(tile);
+      if (!on) {
+        if (blocked) potentialPairs.add(i);
+        else tileMap.set(tile, [i]);
       } else {
-        for (const j of tileMap.get(tile)) {
-          const pairKey = i < j ? `${i}|${j}` : `${j}|${i}`;
-          potentialPairs.add(pairKey);
-        }
-        tileMap.get(tile).push(i);
+        for (const j of on) potentialPairs.add(j < i ? (j + 1) * n + i : (i + 1) * n + j);
+        on.push(i);
       }
     }
     creature.nextAllWater = allWater;
   }
 
   const collisions = [];
-  for (const pairKey of potentialPairs) {
-    const [i, j] = pairKey.split('|').map(Number);
+  for (const key of potentialPairs) {
+    const i = Math.floor(key / n) - 1, j = key % n;
     if (i === -1 || doNextMovesCollide(creatures[i], creatures[j])) {
       collisions.push([i, j]);
     }
@@ -3621,9 +3731,11 @@ function init() {
   initScent();
   wolves.forEach(wolf => { allCritters.push(initCritter(wolf, "wolf")); });
   deer.forEach(aDeer => { allCritters.push(initCritter(aDeer, "deer")); });
-  // half of each species male, at random (but the player's wolf, either)
+  // half of each species male, at random (the player's wolf either, the other wolves
+  // making up the half with it)
   for (const list of [wolves.slice(1), deer]) {
-    const sexes = list.map((_, k) => k % 2 === 0);
+    const first = list === deer || !wolves[0].isMale;
+    const sexes = list.map((_, k) => (k % 2 === 0) === first);
     for (let k = sexes.length - 1; k > 0; k--) {
       const r = Math.floor(Math.random() * (k + 1));
       [sexes[k], sexes[r]] = [sexes[r], sexes[k]];
@@ -3679,7 +3791,7 @@ return {
   boulderRockAt, obstacleAcross, boulderRocks, levelsPerMetre, pineAt, pineOn, pineHeightM, pineCrownRadiusM, pineCrownRatio, pineClasses,
   _pineZone(i, j) { const c = getTerrainAt(i, j); const [d, h] = pineDensityAt(i, j, c); return d === 0 ? 'none' : h >= 1 ? 'heart' : h > 0 ? 'forestEdge' : d > 0.005 ? 'stand' : 'lone'; },
   // scent and wind
-  scentAt, get wind() { return { x: windX, y: windY }; },
+  scentAt, shoreKindAt, get wind() { return { x: windX, y: windY }; },
   get scentHalfLifeS() { return SPEEDS.scentHalfLifeS; },
   // day and night
   get clock() { return clock; }, daylightHoursAt, meanDaylightShare, latitudeDeg,
@@ -3695,7 +3807,7 @@ return {
   get grassMaxKg() { return SPEEDS.grassMaxKg; },
   bodySharesBySpecies, biomassKg, energyMJ, waterInReach,
   // ages and breeding
-  can: _can, isGrown, isInfant, isFertile, inHeat, mateReachTiles, youngStage, youngScales,
+  can: _can, isGrown, isInfant, isDependent, isFertile, inHeat, mateReachTiles, youngStage, youngScales,
   adultBoxRad: critterBoxRad, nurseContactTiles, nurseMotherMinFood,
   get nurseFullS() { return SPEEDS.nurseFullS; },
   get infantFoodFullS() { return SPEEDS.infantFoodFullS; },

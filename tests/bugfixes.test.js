@@ -46,7 +46,7 @@ async function main(browser, r) {
   });
   r.check(separated, "bug 2: forbidOverlapsOnStart separates a forced overlap");
 
-  // 3 + 4 + 5: a wolf walks into an idle deer
+  // 3 + 4 + 5: a wolf trots into an idle deer (biting it)
   const k = await page.evaluate(() => {
     const w = sim.internals.wolves[1], d = sim.internals.deer[0];
     // find open ground with room for both
@@ -60,7 +60,8 @@ async function main(browser, r) {
     w.gx = t[0] + 0.5; w.gy = t[1] + 0.5; d.gx = t[0] + 1.6; d.gy = t[1] + 0.5;
     w.stunnedUntil = d.stunnedUntil = 0; // not stunned from before they were moved
     sim.internals.setCritterIdle(d); mind.ignore(d); mind.ignore(w); w.wind = 1; w.stamina = 1;
-    sim.internals.setCritterMoving(w, sim.DIR_E, "walk");
+    w.stomach = sim.internals.biomass(); sim.internals.updateBody(w); // (room to eat: it bites)
+    sim.internals.setCritterMoving(w, sim.DIR_E, "trot");
     let diedAt = null; const poses = [], bgs = [];
     for (let n = 0; n < 120; n++) {
       sim.internals.tick(); animat.render();

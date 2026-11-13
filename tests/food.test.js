@@ -77,7 +77,7 @@ async function main(browser, r) {
     const before = { kg: sim.grassFoodAt(i, j), h: sim.grassHeightAt(i, j), row: rowOf(), food: d.food, gut: d.gut };
     const serial = sim.grassChangesSince(0).serial;
     const modes = new Set(); let eatingTicks = 0;
-    for (let n = 0; n < 8 * 60; n++) { // (a tile takes ~5 s to crop)
+    for (let n = 0; n < 12 * 60; n++) { // (a tile takes ~5 s to crop, once it starts)
       S.tick(); modes.add(mind.stateOf(d).mode); if (d.eating) eatingTicks++;
     }
     animat.render();

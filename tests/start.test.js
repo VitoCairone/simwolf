@@ -1,6 +1,6 @@
 // The start (see THE START in sim.js), at the game's own numbers (no simStart):
-// 14 wolves in the start square, 256 tiles a side, and 200 deer in the square twice as
-// wide about the same center, every one on dry, unblocked land.
+// 4 wolves, half of them male, in the start square, 256 tiles a side, and 400 deer in the square 724 tiles a
+// side about the same center, every one on dry, unblocked land.
 // Runs hydrology.js and sim.js in Node (no browser).
 
 const path = require("path");
@@ -21,12 +21,12 @@ async function main(browser, r) {
     const off = a => Math.max(Math.abs(a.gx - ci), Math.abs(a.gy - cj)); // from the center, along either axis
     const land = a => sim.getTerrainAt(Math.floor(a.gx), Math.floor(a.gy)) !== "water" && !sim.isBlockedTile(Math.floor(a.gx), Math.floor(a.gy));
     const w = of("wolf"), d = of("deer");
-    return { side: A.i1 - A.i0, wolves: w.length, deer: d.length, wolfOff: Math.max(...w.map(off)), deerOff: Math.max(...d.map(off)),
+    return { side: A.i1 - A.i0, wolves: w.length, males: w.filter(a => a.isMale).length, deer: d.length, wolfOff: Math.max(...w.map(off)), deerOff: Math.max(...d.map(off)),
       deerOut: d.filter(a => off(a) > 128).length, onLand: sim.allCritters.every(land) };
   })()`, context);
-  r.check(res.wolves === 14 && res.deer === 200, `14 wolves and 200 deer start (${res.wolves}, ${res.deer})`);
+  r.check(res.wolves === 4 && res.males === 2 && res.deer === 400, `4 wolves, 2 of them male, and 400 deer start (${res.wolves}, ${res.males}, ${res.deer})`);
   r.check(res.side === 256 && res.wolfOff <= 128, `the wolves start in the start square, ${res.side} tiles a side (farthest ${res.wolfOff.toFixed(1)} from its center)`);
-  r.check(res.deerOff <= 256 && res.deerOut > 100, `the deer in the square twice as wide about it (farthest ${res.deerOff.toFixed(1)}; ${res.deerOut} outside the start square, about 3/4 expected)`);
+  r.check(res.deerOff <= 362 && res.deerOut > 300, `the deer in the square 724 tiles a side about it (farthest ${res.deerOff.toFixed(1)}; ${res.deerOut} outside the start square, about 7/8 expected)`);
   r.check(res.onLand, "every critter starts on dry, unblocked land");
 }
 

@@ -7,7 +7,7 @@
 //    shrunk sheets by size, the grown from the adult's
 //  - two unpaired grown critters of opposite sexes court and mate: they stand facing each
 //    other while a heart rises between them, then are a pair, and the male keeps near her
-//  - Westermarck: those met while either was an infant never court
+//  - Westermarck: deer met while either was an infant never court (wolves: wolfpack.test.js)
 //  - pairs are faithful until death; the widowed pair again, and the new partner adopts
 //    the young
 //  - a female in heat mated by a fertile male conceives; gestation, litter size, the
@@ -230,7 +230,7 @@ async function main(browser, r) {
     const t = runUntil(() => f.mateUid === m2.uid, 30);
     return { familiar, mated, strangerPaired: f.mateUid === m2.uid, t };
   });
-  r.check(wester.familiar && !wester.mated, "critters that met while one was an infant remember it, and never mate once grown");
+  r.check(wester.familiar && !wester.mated, "deer that met while one was an infant remember it, and never mate once grown");
   r.check(wester.strangerPaired, `...while one she never met as an infant pairs with her (in ${wester.t.toFixed(1)} s)`);
 
   // fidelity, widowhood, adoption

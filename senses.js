@@ -232,11 +232,18 @@ function forgetSight(a) { lastSeen.delete(a); }
 function seesNow(a, b) {
   if (!sim.can(a, "see")) return false;
   const dx = b.gx - a.gx, dy = b.gy - a.gy;
+  return sees(a, b, dx, dy, dx * dx + dy * dy);
+}
+// The same, for one old enough to see, given b's offset and its distance squared. (A
+// sighting older than keepSightS counts as none, whenever it is dropped.)
+function sees(a, b, dx, dy, d2) {
+  if (d2 > detect2 || !inView(a, dx, dy)) return false;
   let mine = lastSeen.get(a);
-  const last = mine && mine.get(b.uid);
-  const kept = last !== undefined && sim.now - last <= keepSightS;
-  if (last !== undefined && !kept) mine.delete(b.uid);
-  if (!inView(a, dx, dy) || (kept ? dx * dx + dy * dy > detect2 : !inSight(dx, dy, sightShare(a)))) return false;
+  if (!inSight(dx, dy, sightShare(a))) {
+    const last = mine && mine.get(b.uid);
+    if (last === undefined) return false;
+    if (sim.now - last > keepSightS) { mine.delete(b.uid); return false; }
+  }
   if (!canSee(a, b)) return false;
   if (!mine) lastSeen.set(a, mine = new Map());
   mine.set(b.uid, sim.now);
@@ -339,7 +346,7 @@ function trailsAround(a, species) {
   const maker = uid => {
     let k = makers.get(uid);
     if (k === undefined) {
-      const c = sim.allCritters.find(c => c.uid === uid) || sim.allCorpses.find(c => c.uid === uid);
+      const c = sim.internals.critterByUid.get(uid) || sim.allCorpses.find(c => c.uid === uid);
       k = c ? { isMale: c.isMale, grown: sim.isGrown(c), paired: c.mateUid !== null } : null;
       makers.set(uid, k);
     }
@@ -358,29 +365,48 @@ function trailsAround(a, species) {
 
 // What critter a perceives now, one snapshot per creature it perceives (the dying and the
 // dead included), by the most telling sense:
-//   { uid, species, alive, gx, gy, vx, vy, swimming, meat, leg, by, littermate, signal,
+//   { uid, species, alive, gx, gy, vx, vy, swimming, meat, leg, by, littermate, sibling, signal,
 //     isMale, infant, grown, walks, eats, carrying, mateUid, inHeat }   (these last by sight only)
 //   signal:  barking, by sight or hearing, the signal it barks, { kind, tick } (BARKS)
 //   leg:     for a carcass seen or smelled, whether a leg is still on it with meat to carry off
 //   littermate: true for one born with it to its mother, by any sense (its scent tells)
+//   sibling: true for one with a parent of its own, by any sense (its scent tells)
 //   by:      "sight", "hearing" or "smell"
 //   vx, vy:  its velocity, tiles a tick (0 by smell)
 //   meat:    for a carcass, the share of its meat left (1 all, 0 only bones)
 //   mateUid: its partner's uid, or null
 function perceive(a) {
   const out = [];
-  const hears = use.hearing && sim.can(a, "hear"), smells = use.smell;
-  const near = nearby(a), all = grid.all;
+  const hears = use.hearing && sim.can(a, "hear"), smells = use.smell, canSeeYet = sim.can(a, "see");
+  const near = nearby(a), all = grid.all, tick = sim.tickCount;
+  // (sight, as seesNow: its sight circle now, and those it saw lately)
+  const share = sightShare(a), sight2 = share * share * sightRadius2;
+  let mine = lastSeen.get(a);
+  // beyond this, one standing silent that it hasn't seen lately can't be perceived
+  const close2 = Math.max(canSeeYet ? sight2 : 0, sniffTiles * sniffTiles);
+  const gxs = grid.gx, gys = grid.gy, uids = grid.uid, quiet = grid.quiet, ax = a.gx, ay = a.gy;
   for (let n = 0; n < near.length; n++) {
-    const b = all[near[n]];
+    const at = near[n], dx = gxs[at] - ax, dy = gys[at] - ay, d2 = dx * dx + dy * dy;
+    if (d2 > close2 && quiet[at] === 1 && (mine === undefined || mine.size === 0 || !mine.has(uids[at]))) continue;
+    const b = all[at];
     if (b === a) continue;
-    const dx = b.gx - a.gx, dy = b.gy - a.gy, d2 = dx * dx + dy * dy;
     if (d2 > detect2 && b.pose !== "howl") continue; // (beyond every sense but howls)
-    const barking = sim.tickCount < b.barkUntil;
+    const barking = tick < b.barkUntil;
     const alive = sim.isLiveCritter(b);
     let by = null;
-    if (seesNow(a, b)) by = "sight";
-    else {
+    if (canSeeYet && d2 <= detect2 && inView(a, dx, dy)) {
+      let inReach = d2 <= sight2;
+      if (!inReach && mine !== undefined) {
+        const last = mine.get(b.uid);
+        if (last !== undefined) { if (sim.now - last > keepSightS) mine.delete(b.uid); else inReach = true; }
+      }
+      if (inReach && canSee(a, b)) {
+        if (mine === undefined) lastSeen.set(a, mine = new Map());
+        mine.set(b.uid, sim.now);
+        by = "sight";
+      }
+    }
+    if (!by) {
       // the cheap tests first: distance, then what it costs to find out more
       if (hears && (b.pose === "howl" && d2 <= nowHeard(howlHeardTiles) ** 2 || barking && d2 <= nowHeard(signalHeardTiles(b.signal)) ** 2)) by = "hearing";
       else if (hears && b.speed > 0 && d2 <= loudestTiles * loudestTiles) {
@@ -403,8 +429,9 @@ function perceive(a) {
     if (suckling) o.nursingOnMe = true;
     if (sim.tickCount < b.barkUntil && (by === "sight" || by === "hearing")) o.signal = b.signal; // (barking now: BARKS)
     if (a.parentUids.length && b.parentUids && b.parentUids[0] === a.parentUids[0] && b.birthTime === a.birthTime) o.littermate = true;
+    if (b.parentUids && b.parentUids.some(uid => a.parentUids.includes(uid))) o.sibling = true;
     if (by === "sight") {
-      o.isMale = b.isMale; o.infant = sim.isInfant(b); o.grown = sim.isGrown(b); o.walks = sim.can(b, "walk");
+      o.isMale = b.isMale; o.infant = sim.isInfant(b); o.dependent = sim.isDependent(b); o.grown = sim.isGrown(b); o.walks = sim.can(b, "walk");
       o.eats = sim.can(b, "eat"); o.carrying = !!b.carrying;
       o.mateUid = b.mateUid; o.inHeat = alive && sim.inHeat(b);
     }
@@ -414,21 +441,31 @@ function perceive(a) {
 }
 
 // NEARBY: every creature (critters, then corpses) in a square grid, cellTiles a side,
-// built afresh at the first call in a tick (positions only change between ticks; a test
-// that moves creatures within one calls regrid). Cells 2 apart along either axis hold
+// built afresh at the first call in a tick, and whenever the minds take their turn
+// (creatures only move, or start moving or calling, between ticks; a test that changes
+// them within one calls regrid). Cells 2 apart along either axis hold
 // creatures more than cellTiles (at least detectTiles) apart, so a critter's candidates
 // are in the 3 x 3 cells about its own.
 const cellTiles = Math.ceil(detectTiles);
 if (!Number.isInteger(cellTiles) || cellTiles < 10) alert("senses: cellTiles must be an integer of 10 or more");
 const cellKey = (i, j) => i * 65536 + j; // (|j| under 32768 cells: unique)
-const grid = { tick: -1, all: [], cells: new Map(), howlers: [] };
+// (and each one's place, uid and whether it is `quiet`: standing, not suckling, and no
+// wolf (a wolf may bark or howl, even as the minds take their turn): so beyond sight and
+// smell, perceived by none that hasn't seen it lately)
+const grid = { tick: -1, all: [], cells: new Map(), near: new Map(), howlers: [], gx: new Float64Array(256), gy: new Float64Array(256), uid: new Int32Array(256), quiet: new Uint8Array(256) };
 function regrid() { grid.tick = -1; }
 function buildGrid() {
   const all = grid.all, cells = grid.cells, howlers = grid.howlers;
-  all.length = 0; howlers.length = 0; cells.clear();
+  all.length = 0; howlers.length = 0; cells.clear(); grid.near.clear();
   for (const list of [sim.allCritters, sim.allCorpses]) for (const b of list) all.push(b);
+  if (grid.gx.length < all.length) {
+    const size = all.length * 2;
+    grid.gx = new Float64Array(size); grid.gy = new Float64Array(size); grid.uid = new Int32Array(size); grid.quiet = new Uint8Array(size);
+  }
   for (let n = 0; n < all.length; n++) {
     const b = all[n], k = cellKey(Math.floor(b.gx / cellTiles), Math.floor(b.gy / cellTiles));
+    grid.gx[n] = b.gx; grid.gy[n] = b.gy; grid.uid[n] = b.uid;
+    grid.quiet[n] = b.species !== "wolf" && !(b.speed > 0) && (b.nursingOn === null || b.nursingOn === undefined) ? 1 : 0;
     const cell = cells.get(k);
     if (cell) cell.push(n); else cells.set(k, [n]);
     if (b.pose === "howl") howlers.push(n);
@@ -437,10 +474,13 @@ function buildGrid() {
 }
 // Indices into grid.all of the creatures that may be within detectTiles of critter a (a
 // itself among them), and of those howling, in grid.all's order.
-let nearBuf = new Int32Array(256);
+// (Each cell's answer is kept for the tick: grid.near.)
+let nearBuf = new Int32Array(256), nearMark = new Uint8Array(256);
 function nearby(a) {
   if (grid.tick !== sim.tickCount) buildGrid();
   const ci = Math.floor(a.gx / cellTiles), cj = Math.floor(a.gy / cellTiles), cells = grid.cells;
+  const kept = grid.near.get(cellKey(ci, cj));
+  if (kept !== undefined) return kept;
   let m = 0;
   const add = n => {
     if (m === nearBuf.length) { const b = new Int32Array(m * 2); b.set(nearBuf); nearBuf = b; }
@@ -454,7 +494,19 @@ function nearby(a) {
     const b = grid.all[n], di = Math.floor(b.gx / cellTiles) - ci, dj = Math.floor(b.gy / cellTiles) - cj;
     if (di < -1 || di > 1 || dj < -1 || dj > 1) add(n);
   }
-  return nearBuf.subarray(0, m).sort();
+  // in grid.all's order: few, sorted; many, marked and listed
+  let out;
+  const N = grid.all.length;
+  if (m * 8 < N) out = nearBuf.slice(0, m).sort();
+  else {
+    if (nearMark.length < N) nearMark = new Uint8Array(N * 2);
+    for (let k = 0; k < m; k++) nearMark[nearBuf[k]] = 1;
+    out = new Int32Array(m);
+    let c = 0;
+    for (let n = 0; n < N; n++) if (nearMark[n] === 1) { nearMark[n] = 0; out[c++] = n; }
+  }
+  grid.near.set(cellKey(ci, cj), out);
+  return out;
 }
 
 // The tiles with plant food on them (grass, undergrowth: sim.plantFoodAt) whose centers
@@ -465,10 +517,15 @@ function plantsAround(a, k = 1) {
   k *= sightShare(a);
   const out = [], ci = Math.floor(a.gx), cj = Math.floor(a.gy);
   const r = Math.ceil(k * sightRadiusTiles) + 1;
-  for (let i = ci - r; i <= ci + r; i++) for (let j = cj - r; j <= cj + r; j++) {
-    if (!inSight(i + 0.5 - a.gx, j + 0.5 - a.gy, k) || !inView(a, i + 0.5 - a.gx, j + 0.5 - a.gy)) continue;
-    const kg = sim.plantFoodAt(i, j);
-    if (kg > 0) out.push({ i, j, kg });
+  const r2 = k * k * sightRadius2, plantFoodAt = sim.plantFoodAt;
+  for (let i = ci - r; i <= ci + r; i++) {
+    const dx = i + 0.5 - a.gx, dx2 = dx * dx;
+    for (let j = cj - r; j <= cj + r; j++) {
+      const dy = j + 0.5 - a.gy;
+      if (dx2 + dy * dy > r2 || !inView(a, dx, dy)) continue;
+      const kg = plantFoodAt(i, j);
+      if (kg > 0) out.push({ i, j, kg });
+    }
   }
   return out;
 }
@@ -482,7 +539,7 @@ function shoresAround(a) {
   const wet = new Uint8Array(n * n); // 1 water, 2 open land
   for (let x = 0; x < n; x++) for (let y = 0; y < n; y++) {
     const i = ci - r + x, j = cj - r + y;
-    wet[x * n + y] = sim.getTerrainAt(i, j) === "water" ? 1 : sim.isBlockedTile(i, j) ? 0 : 2;
+    wet[x * n + y] = sim.shoreKindAt(i, j);
   }
   const out = [];
   for (let x = 1; x < n - 1; x++) for (let y = 1; y < n - 1; y++) {

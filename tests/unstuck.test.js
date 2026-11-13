@@ -1,7 +1,8 @@
 // No critter stuck in place (see WAYFINDING, KEEPING DRY, TIRED SWIMMERS and CALM in mind.js):
 //  - over 20 minutes of play, from two starts, no critter stays within a tile and a half for
 //    a minute while not eating, mating, nursing, resting, waiting ashore for swimming prey,
-//    brooding, keeping to its den or staying with its young (all by choice) for most of it;
+//    brooding, keeping to its den, staying with its young or by its kill, or standing by one it courts
+//    (all by choice) for most of it;
 //    none stands (out of its swimming pose) on a water tile for long
 //  - a deer too tired to swim, standing in the shallows with land beside it, walks out
 //  - a wolf penned in by boulders, its mate outside, doesn't stand waiting: it wanders
@@ -43,7 +44,7 @@ async function main(browser, r) {
           else wetSince.delete(a);
           let h = hist.get(a);
           if (!h) hist.set(a, h = []);
-          h.push([a.gx, a.gy, a.eating || !!a.matingWith || a.nursingOn !== null || ["rest", "wait", "brood", "den", "guard"].includes(mind.stateOf(a)?.mode)]);
+          h.push([a.gx, a.gy, a.eating || !!a.matingWith || a.nursingOn !== null || ["rest", "wait", "brood", "den", "guard", "kill", "court"].includes(mind.stateOf(a)?.mode)]);
           if (h.length > W) h.shift();
           if (h.length < W) continue;
           const xs = h.map(q => q[0]), ys = h.map(q => q[1]), busy = h.filter(q => q[2]).length;
