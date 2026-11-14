@@ -12,7 +12,9 @@ Required systems
     (2) allow for free movement limited in MVP by simple cooldowns/timers on abilities
     (3) all creatures should be blocking to one another and overlaps forbidden
   species
-    (1) MVP has exactly 3 animal species: wolf (predator), deer (prey), rabbit (prey) 
+    (1) MVP has exactly 2 animal species: wolf (predator), deer (prey)
+    (2) rabbit (prey) moved to post-MVP, if ever: the sim's cost grows with every critter
+        (measured with deer), and rabbits would be many
   build
     (1) creature has a width, height, and length.
     (2) creature has a color

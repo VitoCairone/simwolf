@@ -1,3 +1,42 @@
+## MVP: STILL NEEDED
+
+[ ] (1) Smooth all visuals, including scent markers
+[ ] (2) Acceptable sprites for all key poses, including death and sleeping
+[ ] (3) Bring back sleep as the means of restoring stamina
+[ ] (4) Allow wolves to fight and kill one another
+[ ] (5) Add sound
+[ ] (6) Add visualization of critters detected by sound for player
+[ ] (7) Improve controls
+[ ] (8) Distinguish mobile vs desktop interface and test both
+[ ] (9) Add seasons
+[ ] (10) Improve tree visuals to match quality of other art
+[ ] (11) Final performance pass with all MVP features implemented
+[ ] (12) Afterlife: what the player does and sees once the player's wolf has died (no goal,
+         no ending: it is a sim)
+[ ] (13) Start screen, pause and restart (icons, no text)
+[x] (14) Show the player's wolf's own state: done by the meters (wind, stamina, body food,
+         gut, water; unlabelled). To add with their features: sleepiness (3), injury (4)
+[ ] (15) Teach a new player the controls and what the senses' overlays mean, without text
+[ ] (16) Long-run ecology check: wolves and deer reach Gen 2+ over several game days, with
+         every MVP feature on, at play speed (tools/ecorun.js, on a local machine)
+[ ] (17) Rival packs and territory: scent-marked borders, more than one pack at the start
+         (gives fighting, 4, its purpose)
+[ ] (18) Seasons' effects beyond visuals: birthing season, plant growth, winter hardship
+         (with 9; check with 16)
+[ ] (19) Replace the placeholder art listed in admin/design_notes.md
+[ ] (20) Sound settings: mute and volume; decide on ambient sound (wind, water)
+[ ] (21) Art credit and licence: confirm Scrabling's licence allows the release; show
+         ART_CREDIT.txt where players can find it
+[ ] (22) Hosting and a release build (debug panel and test hooks hidden)
+[ ] (23) Browser support: decide which, test with 8
+[ ] (24) Saving between sessions (even autosave on close), or declare it out of scope
+[ ] (25) Fast test suite back under its 2-minute budget (126 s on Nov 13), after 11
+[x] (26) Hearing vs the spec (sensing 2, 4): met. Moving critters are heard by range set by
+         species, gait, ground and day or night; howls, barks and whimpers farther; standing
+         still is silent; no blocking; heard critters are known exactly. Beyond the spec,
+         not yet: listeners all hear alike (no ears by species), and only movement and calls
+         make sound (not feeding, a struggle or a kill)
+
 ## TASKS
 
 [1] Generate 9 required tile shapes at scale of existing tileset
